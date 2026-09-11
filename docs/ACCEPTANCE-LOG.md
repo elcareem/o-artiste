@@ -473,12 +473,66 @@ The health check runs from a **client** component deliberately. A server-side
 fetch would succeed even with CORS misconfigured, and would prove nothing about
 the path the real application uses.
 
-### `[!]` Deployed and reachable at a live Vercel URL
+### `[x]` Deployed and reachable at a live Vercel URL, calling the deployed backend
 
-**BLOCKED — Vercel project not yet created.** Needs root directory `apps/web`
-and `NEXT_PUBLIC_API_URL` set to the Render backend. `WEB_ORIGIN` on Render then
-moves off the localhost placeholder to the Vercel URL. Tracked in
-`DEPLOYMENT-CHECKLIST.md` § #3.
+Live at **https://o-artiste-web.vercel.app**, root directory `apps/web`.
+
+```
+$ curl https://o-artiste-web.vercel.app
+vercel page: http=200 total=0.447471s
+page money : ₦0 ₦200,000
+
+$ curl -H "Origin: https://o-artiste-web.vercel.app" \
+       https://o-artiste-api.onrender.com/health
+HTTP/2 200
+access-control-allow-origin: https://o-artiste-web.vercel.app
+{"status":"ok"}
+
+$ curl -X OPTIONS -H "Origin: https://o-artiste-web.vercel.app" \
+       -H "Access-Control-Request-Method: GET" ...
+HTTP/2 204
+access-control-allow-origin: https://o-artiste-web.vercel.app
+vary: Origin, Access-Control-Request-Headers
+```
+
+The preflight is checked as well as the simple request, because a browser issues
+`OPTIONS` first for anything non-trivial and a backend can pass one while
+failing the other.
+
+Still correctly restricted rather than wildcarded — a request from
+`https://evil.example.com` is answered with the Vercel origin, not its own, so
+that browser blocks the response:
+
+```
+$ curl -H "Origin: https://evil.example.com" .../health
+access-control-allow-origin: https://o-artiste-web.vercel.app
+```
+
+**Full chain proven:** browser → Vercel page → Render API → `{"status":"ok"}`,
+with money rendered through `formatNaira` at both ends of the deploy.
+
+**Vercel configuration differs from Render's, deliberately.** Vercel takes root
+directory `apps/web` and handles npm workspace hoisting itself, installing from
+the repository root via `npm install --prefix=../..`. Render takes a *blank*
+root directory, because pointing it at `apps/backend` would install from there
+alone and discard the root lockfile and the `qs` override. Same monorepo,
+opposite settings, for the same underlying reason: the install must happen at
+the root.
+
+**Two deploys were misdirected first, both instructive.** The Vercel import
+initially targeted `apps/backend` with the Express preset — that would have put
+a second copy of the API behind a second public URL, and at #17 exactly one URL
+gets registered with EscrowPay as the webhook endpoint. A webhook reaching the
+wrong instance is the duplicate-processing scenario `docs/03-ESCROW-FLOW.md` §6
+calls the highest-severity bug class in this system. The backend is on Render
+alone, and must stay that way; Vercel is serverless and cannot run the BullMQ
+workers #25 depends on.
+
+Then Vercel showed no Next.js detection for `apps/web`, because at that moment
+`main` held only the placeholder `package.json` from #1 — no `next` dependency,
+no source. Same shape as the earlier Render failure, which deployed a commit
+predating the `start` script. **Every deployment reads `main`, so `main` must
+contain the thing being deployed before the platform can see it.**
 
 ### Rule refined — and re-verified for teeth
 
