@@ -42,7 +42,7 @@ exists. Recorded in `docs/ACCEPTANCE-LOG.md` as a deliberate deviation.
 - [x] Health Check Path `/health`
 - [x] Auto-Deploy: On Commit
 - [ ] `NODE_VERSION` = `22` — first deploy used Node 20.8.2
-- [ ] `WEB_ORIGIN` currently `http://localhost:3000`; update to the Vercel URL at #3
+- [x] `WEB_ORIGIN` = `https://o-artiste-web.vercel.app` (set at #3)
 
 **Root Directory must stay blank.** This is an npm workspaces monorepo: the
 lockfile and the `overrides` block that pins `qs` to a non-vulnerable version
@@ -116,13 +116,33 @@ reference (`docs/03-ESCROW-FLOW.md` §3) makes the retry safe.
 
 ## #3 — Web host (Vercel)
 
-**Status:** ☐
+**Status:** ☑ live at **https://o-artiste-web.vercel.app**
 
-- [ ] Project created with **root directory `apps/web`**
-- [ ] `NEXT_PUBLIC_API_URL` set to the Render backend URL
-- [ ] Deployed URL reachable, and successfully calling the backend's `/health` cross-origin
+- [x] Project `o-artiste-web` created with **root directory `apps/web`**
+- [x] Preset Next.js, all build/output/install overrides left OFF
+- [x] `NEXT_PUBLIC_API_URL` = `https://o-artiste-api.onrender.com`
+- [x] Deployed and calling the backend cross-origin successfully
 
-**Gates:** #3 — "Deployed and reachable at a live Vercel URL, successfully calling the deployed backend's `/health`".
+**Root directory is the opposite of Render's, on purpose.** Vercel takes
+`apps/web` and hoists the workspace itself, installing from the repository root
+(`npm install --prefix=../..`). Render takes a **blank** root directory, because
+pointing it at `apps/backend` would install from there alone and discard the
+root lockfile and the `qs` override. Same monorepo, opposite settings, same
+underlying requirement: install at the root.
+
+**Never deploy the backend to Vercel.** It is serverless and cannot run the
+BullMQ workers #25 depends on, and a second public API URL is a webhook hazard —
+at #17 exactly one URL is registered with EscrowPay, and a webhook reaching the
+wrong instance is the duplicate-processing case `docs/03-ESCROW-FLOW.md` §6
+calls the highest-severity bug class in the system.
+
+`NEXT_PUBLIC_` values are embedded in the browser bundle at build time. They are
+not secret and cannot be, so do not mark them sensitive on Vercel — that only
+prevents reading the value back when debugging. Real secrets (`JWT_SECRET`,
+`ESCROWPAY_API_KEY`, the webhook signing secret) live on Render and never carry
+a `NEXT_PUBLIC_` prefix.
+
+**Gates:** #3 — satisfied.
 
 ---
 
