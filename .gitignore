@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+.next/
+dist/
+.DS_Store
+*.log
+
+# Local agent settings
+.claude/settings.local.json
+
+# Local planning material — not part of the published repository
+PROJECT_GUIDE.md
+ISSUES-PART-1-FOUNDATION.md
+ISSUES-PART-2-BOOKING.md
+ISSUES-PART-3-DISPUTES.md
+ISSUES-PART-4-LAUNCH.md

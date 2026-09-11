@@ -1,0 +1,14 @@
+{
+  "name": "@artist-escrow/backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Express + Prisma REST API server",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
