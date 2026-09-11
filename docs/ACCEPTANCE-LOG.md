@@ -762,3 +762,134 @@ confirmed with `git check-ignore`.
 - `NODE_ENV` documented in `.env.example`. Cross-checked that every variable the
   app reads — including `DATABASE_URL`, which Prisma reads from the schema
   rather than through `process.env` — is documented.
+
+---
+
+## #9 — feat(backend): authentication, roles, and permission middleware
+
+Branch `feat/9-auth-roles-middleware`. Verified 2026-09-11.
+
+Built before #6, #7 and #8 per the corrected order in `docs/08-BUILD-PLAN.md` §2:
+both config endpoints are `SUPER_ADMIN`-restricted and cannot close without this
+middleware, and #6's seed hashes passwords with the utility this issue adds.
+
+```
+$ npm run test:backend
+# tests 22  # pass 22  # fail 0  # skipped 0
+```
+
+### `[x]` A registered user can log in and call `GET /me`
+
+Verified in-process and against a live server:
+
+```
+$ curl -X POST localhost:4000/auth/register -d '{...,"role":"CLIENT"}'
+http=201
+
+$ curl localhost:4000/me -H "Authorization: Bearer <token>"
+{"user":{"id":"cmtxh1xli...","role":"CLIENT","verificationStatus":"UNVERIFIED",
+ "accountStanding":"GOOD",...},"profile":{"displayName":"..."}}
+```
+
+The `Client` or `Artist` profile row is created **in the same transaction** as
+the `User`. A user without their profile is a half-registered account every
+later query has to defend against.
+
+### `[x]` An expired or malformed token returns 401
+
+Five distinct failure modes, each asserted, each returning `401` in the unified
+error shape: genuinely expired (signed with `expiresIn: '-1s'`, not merely
+invalid), valid structure with the **wrong signing key**, malformed, empty, and
+nonsense. A valid token is checked immediately afterwards, so the suite cannot
+pass by rejecting everything.
+
+All five return the **same message**. Distinguishing "expired" from "bad
+signature" tells an attacker which part of a forged token to fix next.
+
+**A token belonging to a deleted user is also rejected.** `requireAuth` loads
+the live database row rather than trusting the token payload — the token says
+what the role *was* when issued, and tokens last days while account standing
+changes in seconds. A user suspended or demoted five minutes ago still holds a
+cryptographically perfect token.
+
+### `[x]` Each role is blocked from at least one endpoint above its level
+
+| Caller | `/admin/ping` | `/admin/config/ping` |
+|---|---|---|
+| no token | `401` | `401` |
+| `CLIENT` | **`403`** | `403` |
+| `ADMIN` | `200` | **`403`** |
+| `SUPER_ADMIN` | `200` | `200` |
+
+The `ADMIN` → `403` row is the one that matters. **Roles are matched exactly,
+with no implicit hierarchy** — `SUPER_ADMIN` is not "`ADMIN` plus more" in code.
+An admin resolving a dispute affects one booking; a super-admin changing the
+commission rate affects every booking created afterwards (`docs/07` §1). Implicit
+rank is how a permission ends up somewhere nobody intended, so if an endpoint
+should accept both roles it lists both.
+
+These two endpoints exist so the guarantee is testable now; #7 and #8 mount the
+real configuration endpoints behind the same guard.
+
+### `[x]` There is no public route by which an account can self-assign `ADMIN` or `SUPER_ADMIN`
+
+Four separate attempts, all refused:
+
+1. `POST /auth/register` with `"role": "ADMIN"` → **`403`**, and no row created
+2. `POST /auth/register` with `"role": "SUPER_ADMIN"` → **`403`**, and no row created
+3. `"role": ["CLIENT","SUPER_ADMIN"]` — smuggling it in a different shape → `403`
+4. A self-minted JWT claiming `SUPER_ADMIN`, signed with a guessed key → `401`
+
+The database is queried after each attempt to confirm **no account was created
+at all**, rather than trusting the status code.
+
+**Rejected outright, never silently downgraded.** Quietly creating a `CLIENT`
+when someone asked for `SUPER_ADMIN` would hide an attempt worth seeing.
+
+### `[x]` Passwords are hashed, never plaintext, never reversible
+
+```
+stored.passwordHash  →  $2a$12$...   (bcrypt, cost factor 12)
+```
+
+Asserted to differ from the plaintext, to match the bcrypt format, and to carry
+cost factor **12** — roughly 250ms, slow enough that offline cracking is
+expensive and fast enough that login does not feel broken. Raising it later is
+safe: bcrypt encodes the cost in the hash, so existing hashes keep verifying
+against their original factor.
+
+`GET /me` is asserted to contain **no `passwordHash`, no bcrypt string anywhere
+in the payload, and no `verificationReference`**. The serialiser is an explicit
+**allowlist**, not a delete-list, so a column added later is private by default
+rather than exposed until someone notices.
+
+### `[x]` Enumeration is not possible through registration or login
+
+Two paths that commonly leak who holds an account, both closed and both asserted
+by comparing the response bodies are **identical**:
+
+- Duplicate email and duplicate phone return the same `409` and the same message
+- Wrong password and no-such-user return the same `401` and the same message
+
+A suspended account gets a distinct `403` with clear, non-technical wording
+(`docs/06` §5) — that one is deliberately different, because it is shown only to
+someone who has already proven they hold the password.
+
+### Added outside the issue's stated scope
+
+- `requireVerified` in `src/middleware/auth.js` — written here because it
+  belongs beside the other guards, but not yet mounted anywhere. Its acceptance
+  criterion (#10: an unverified client receives `403` on `POST /bookings`) is
+  verified at #15, where that endpoint exists. Recorded as deferred, not ticked.
+- `/admin/ping` and `/admin/config/ping` — the endpoints the role matrix above
+  is verified against. #7 and #8 replace them with the real configuration
+  routes behind the same guards.
+- `JWT_SECRET` and `JWT_EXPIRES_IN` documented in `.env.example`. The app
+  **refuses to sign or verify tokens when `JWT_SECRET` is unset** rather than
+  falling back to a default — a predictable signing key means anyone can mint a
+  `SUPER_ADMIN` token, which is the whole permission system defeated by one
+  missing environment variable.
+
+### Out of scope, per the issue
+
+No social login. No password reset flow.
