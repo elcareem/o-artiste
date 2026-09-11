@@ -34,27 +34,83 @@ exists. Recorded in `docs/ACCEPTANCE-LOG.md` as a deliberate deviation.
 
 ## #2 — Backend host (Render)
 
-**Status:** ☐
+**Status:** ☑ live at **https://o-artiste-api.onrender.com**
 
-- [ ] Web service created, root directory `apps/backend`, Node 22
-- [ ] Build `npm install`, start `npm start`
-- [ ] `WEB_ORIGIN` set to the Vercel URL
-- [ ] `/health` answers at the live URL
+- [x] Web service created — `o-artiste-api`, region Ohio (US East)
+- [x] **Root Directory blank** (repository root)
+- [x] Build `npm install`, start `npm run start --workspace apps/backend`
+- [x] Health Check Path `/health`
+- [x] Auto-Deploy: On Commit
+- [ ] `NODE_VERSION` = `22` — first deploy used Node 20.8.2
+- [ ] `WEB_ORIGIN` currently `http://localhost:3000`; update to the Vercel URL at #3
 
-The service is ready to deploy as of #2 — `npm start` runs `node src/index.js`,
-binds `PORT` (default 4000), and serves `GET /health`. It has no database or
-Redis dependency yet, so it will start cleanly with only `WEB_ORIGIN` set.
+**Root Directory must stay blank.** This is an npm workspaces monorepo: the
+lockfile and the `overrides` block that pins `qs` to a non-vulnerable version
+both live at the repository root. Setting Root Directory to `apps/backend` makes
+Render install from that folder alone, silently discarding the override and
+reinstating the advisories closed in #2.
 
-### Two values to record here when it is live
+Verified live:
 
-| Value | Why it matters | Recorded |
-|---|---|---|
-| **Default request timeout** | #17 sets the EscrowPay client timeout *below* this. A provider call that outlives the request can create an escrow we have no record of (`docs/03` §7) | _pending_ |
-| **Does the instance sleep when idle?** | Determines whether #5's BullMQ workers need a separate always-on process | _pending_ |
+```
+$ curl -sS -i https://o-artiste-api.onrender.com/health
+HTTP/2 200
+content-type: application/json; charset=utf-8
+access-control-allow-origin: http://localhost:3000
+x-render-origin-server: Render
 
-Render's free tier sleeps idle instances, so a **separate worker process** is built from the outset regardless of which plan is chosen.
+{"status":"ok"}
+```
 
-**Gates:** #2 — "The deployed backend's `/health` route responds at a live URL". Also feeds #5 and #17.
+### The two values #2 requires recording
+
+| Value | Answer |
+|---|---|
+| **Does the instance sleep when idle?** | **Yes** — free plan. Render's own banner: *"Your free instance will spin down with inactivity, which can delay requests by 50 seconds or more."* |
+| **Default request timeout** | **Not established.** See below. |
+
+**Idle behaviour — consequence for #5 and #25.** A sleeping instance cannot run
+BullMQ workers. Auto-release fires 48–72h after an event, precisely when nobody
+is making requests and therefore precisely when a free instance is asleep — an
+artist would not be paid until someone happened to wake the service. #5's
+criteria ("executes at approximately the right time... on the deployed host",
+"scheduled jobs survive a process restart") cannot pass on this plan.
+
+**Resolved for the build, by an external keepalive.** A cron-job.org job pings
+`/health` every 10 minutes, which keeps the instance from ever spinning down.
+Ten minutes rather than fifteen, because Render's idle window is ~15 minutes and
+a ping at exactly that interval races the thing it exists to prevent.
+
+`/health` is the right target for it: no database or Redis dependency, so it
+stays cheap and answers even when a dependency is down.
+
+That removes the blocker for #5 and #25 rather than deferring it — the worker
+process stays alive, so scheduled jobs fire on time. **This is a testing
+arrangement**, accepted deliberately:
+
+- The free tier allows 750 instance-hours a month; one service kept awake
+  around the clock uses roughly 730, leaving no room for a second free service.
+- A production deployment should use a paid instance, and should run the worker
+  as its own always-on service. The separate worker entry point is being built
+  either way, so that move is configuration, not a rewrite.
+- Revisit at #41, which asks for every launch risk to be closed or explicitly
+  accepted in writing. This one is accepted for testing and **not** carried into
+  production.
+
+**Request timeout — designed around rather than measured.** Render does not
+document a single figure, and community reports range from 15s to 100s across
+different years. Measuring it would mean deploying a deliberately slow endpoint,
+which is not worth doing.
+
+Resolution: at #17 the EscrowPay client timeout is set to **15 seconds or less**,
+which sits below the *lowest* figure Render has ever been reported to use. That
+removes the dependency on knowing the exact number, and satisfies #17's
+criterion by construction rather than by measurement. A simple REST call to
+create or release an escrow has no business taking longer than that; if it does,
+our own timeout firing first is what we want, because the self-generated
+reference (`docs/03-ESCROW-FLOW.md` §3) makes the retry safe.
+
+**Gates:** #2 — satisfied. Feeds #5 (worker hosting) and #17 (client timeout).
 
 ---
 
@@ -74,6 +130,12 @@ Render's free tier sleeps idle instances, so a **separate worker process** is bu
 
 **Status:** ☐ *(local development is unblocked — a local PostgreSQL instance is already running)*
 
+> **Free-tier testing caveat.** Render deletes free PostgreSQL instances after
+> 30 days. If the build runs past a month the database disappears along with its
+> seed data. Not fatal by design — migrations are version-controlled and #6's
+> seed script is idempotent, so the state is reproducible with two commands. Do
+> not put anything in it that cannot be regenerated.
+
 - [ ] Instance provisioned
 - [ ] `DATABASE_URL` set on the Render service
 - [ ] `npx prisma migrate deploy` run **against the deployed database**, not only locally
@@ -85,6 +147,13 @@ Render's free tier sleeps idle instances, so a **separate worker process** is bu
 ## #5 — Managed Redis
 
 **Status:** ☐ *(local development is unblocked — a local Redis instance is already running)*
+
+> **Free-tier testing caveat.** Render's free Key Value instances hold data in
+> memory with no disk persistence. This does not affect #5's criterion as
+> written — *"scheduled jobs survive a process restart"* means the **application**
+> process restarting while Redis stays up, which works. It only matters if Redis
+> itself restarts, which that criterion does not test. A production deployment
+> needs a persistent instance.
 
 - [ ] Instance provisioned
 - [ ] `REDIS_URL` set on the Render service and on the worker process

@@ -259,21 +259,78 @@ passed 3   failed 0   skipped 3
 
 Three rules flipped from SKIP to PASS now that backend source exists.
 
-### `[!]` The deployed backend's `/health` route responds at a live URL
+### `[x]` The deployed backend's `/health` route responds at a live URL
 
-**BLOCKED — no Render service yet.** Needs a Render account and a web service
-with root directory `apps/backend`, build `npm install`, start `npm start`,
-Node 22, and `WEB_ORIGIN` set. Tracked in `DEPLOYMENT-CHECKLIST.md` § #2.
+Live at **https://o-artiste-api.onrender.com**.
 
-Two values must be recorded at the same time, because later issues depend on
-them and both are properties of the host, not of our code:
+```
+$ curl -sS -i https://o-artiste-api.onrender.com/health
+HTTP/2 200
+content-type: application/json; charset=utf-8
+access-control-allow-origin: http://localhost:3000
+x-render-origin-server: Render
 
-- **Default request timeout** — #17 sets the EscrowPay client timeout *below*
-  it. A provider call that outlives the request can create an escrow we have no
-  record of (`docs/03-ESCROW-FLOW.md` §7).
-- **Whether the instance sleeps when idle** — decides whether #5's BullMQ
-  workers need a separate always-on process. Render's free tier does sleep, so
-  a separate worker entry point is being built regardless.
+{"status":"ok"}
+
+$ curl -w 'http=%{http_code} total=%{time_total}s'
+http=200  total=0.602708s
+```
+
+`WEB_ORIGIN` is still the `http://localhost:3000` placeholder — updated to the
+Vercel URL at #3.
+
+Two deploys failed first, both configuration rather than code, and both worth
+recording because they are the monorepo traps:
+
+1. `npm install` had been entered into the **Root Directory** field rather than
+   Build Command. Render tried to enter a directory of that name and exited in
+   4.5s.
+2. With that fixed the build succeeded but start failed with
+   `Missing script: "start"` — Render was deploying `b994b93`, the #1 scaffold,
+   which predates the server existing. The log gave it away twice: *"added 2
+   packages, audited 5"* is the #1 tree, and #2's `start` script had not yet
+   been merged.
+
+**Root Directory must remain blank.** The lockfile and the `overrides` block
+pinning `qs` both live at the repository root; pointing Render at
+`apps/backend` would install from there alone, silently discarding the override
+and reinstating the advisories this issue closed.
+
+### The two host values #2 requires recording
+
+**Does the instance sleep when idle? Yes.** Free plan — Render's own banner
+reads *"Your free instance will spin down with inactivity, which can delay
+requests by 50 seconds or more."*
+
+Left alone this would block #5 and #25. Auto-release fires 48–72h after an
+event, exactly when nobody is making requests and therefore exactly when a free
+instance is asleep.
+
+**Resolved for the build by an external keepalive**: a cron-job.org job pings
+`/health` every 10 minutes, so the instance never spins down and the worker
+process stays alive. Ten minutes rather than fifteen, because Render's idle
+window is ~15 minutes and a ping at that exact interval races the thing it
+exists to prevent. `/health` suits the job precisely because it has no database
+or Redis dependency.
+
+Accepted deliberately as a **testing** arrangement, to be revisited at #41:
+production should use a paid instance with the worker as its own always-on
+service. The separate worker entry point is being built either way, so that is
+configuration rather than a rewrite. Recorded in `DEPLOYMENT-CHECKLIST.md` § #2.
+
+**Default request timeout: not established, and designed around instead.**
+Render publishes no single figure and community reports range from 15s to 100s
+across different years. Measuring it would mean deploying a deliberately slow
+endpoint.
+
+Resolution: #17 sets the EscrowPay client timeout to **15 seconds or less** —
+below the lowest figure Render has ever been reported to use. That satisfies
+#17's criterion by construction rather than by measurement, and removes the
+dependency on a number we cannot pin down. A REST call to create or release an
+escrow has no business taking longer; if it does, our own timeout firing first
+is the outcome we want, because the self-generated reference
+(`docs/03-ESCROW-FLOW.md` §3) makes the retry safe.
+
 
 ### Security finding fixed in this issue
 
