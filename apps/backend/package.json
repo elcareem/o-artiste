@@ -9,6 +9,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/"
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   }
 }
