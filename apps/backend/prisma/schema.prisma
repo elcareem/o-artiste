@@ -1,0 +1,629 @@
+// Artist Escrow — database schema.
+//
+// Authoritative specification: docs/01-DATA-MODEL.md.
+//
+// THE RULE THAT GOVERNS THIS FILE:
+//   Every monetary field is `Int`, in kobo. 1 NGN = 100 kobo.
+//   There is no `Float` and no `Decimal` anywhere — not on money, not on
+//   rates, not "just for this one field". Floating-point drift on money is
+//   invisible in testing and irreconcilable in production, and this system's
+//   whole value proposition is that both parties can trust the numbers.
+//   Enforced mechanically by `npm run check:rules`.
+//
+// Money-bearing field names end in `Kobo` so a violation is visible at a glance.
+// Percentages are `Int` basis points: 500 = 5%, 10000 = 100%.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  CLIENT
+  ARTIST
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum AccountStanding {
+  GOOD
+  WARNED
+  RESTRICTED
+  SUSPENDED
+  REMOVED
+}
+
+/// PENDING and RETRYABLE_FAILURE are distinct from REJECTED on purpose. A
+/// provider timeout is not a failed identity check, and collapsing the two
+/// would lock a legitimate user out of the platform over a network blip.
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  RETRYABLE_FAILURE
+  REJECTED
+}
+
+enum VerificationMethod {
+  NIN
+  BVN
+}
+
+/// Allowed transitions are enforced in bookingService.js against an explicit
+/// map — docs/01-DATA-MODEL.md §4. An illegal transition throws; it does not
+/// log a warning and proceed.
+enum BookingState {
+  PENDING_PAYMENT
+  FUNDED_HELD
+  CHECKED_IN
+  AWAITING_CONFIRMATION
+  RELEASED
+  REFUNDED
+  CANCELLED
+  DISPUTED
+  RESOLVED
+}
+
+enum DisputeState {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED_RELEASE
+  RESOLVED_REFUND
+  RESOLVED_SPLIT
+}
+
+enum CancellationInitiator {
+  CLIENT
+  ARTIST
+  ADMIN
+}
+
+enum FeeBearer {
+  CLIENT
+  ARTIST
+  PLATFORM
+}
+
+enum FeeLiabilityStatus {
+  OUTSTANDING
+  SETTLED
+  WRITTEN_OFF
+}
+
+enum LedgerParty {
+  CLIENT
+  ARTIST
+  PLATFORM
+  PROVIDER
+}
+
+enum LedgerEntryType {
+  FUNDED
+  RELEASED
+  REFUNDED
+  COMMISSION
+  ESCROW_FEE_IN
+  ESCROW_FEE_OUT
+  ARTIST_COMPENSATION
+  FEE_LIABILITY_ACCRUED
+  FEE_LIABILITY_SETTLED
+  CORRECTION
+}
+
+enum StrikeTrigger {
+  ARTIST_CANCEL_3_6_DAYS
+  ARTIST_CANCEL_1_2_DAYS
+  ARTIST_CANCEL_DAY_OF
+  CLIENT_CANCEL_1_2_DAYS
+  CLIENT_CANCEL_DAY_OF
+  DISPUTE_RULED_AGAINST
+  DISPUTE_FALSE_NO_SHOW_CLAIM
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String @id @default(cuid())
+  email        String @unique
+  phone        String @unique // E.164. Required — SMS is load-bearing (docs/04, docs/06).
+  passwordHash String
+
+  role Role
+
+  verificationStatus    VerificationStatus  @default(UNVERIFIED)
+  verificationMethod    VerificationMethod?
+  verifiedAt            DateTime?
+  /// The provider's reference for the check. NEVER the raw NIN or BVN —
+  /// retaining the identifier is NDPR exposure with no operational benefit.
+  verificationReference String?
+
+  accountStanding       AccountStanding @default(GOOD)
+  /// Set when standing is RESTRICTED: the minimum lead time, in days, inside
+  /// which this client may not book (docs/06 §5).
+  restrictedMinLeadDays Int?
+
+  artist Artist?
+  client Client?
+
+  strikes        Strike[]
+  feeLiabilities FeeLiability[]
+  auditLogs      AuditLog[]     @relation("AuditActor")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([accountStanding])
+}
+
+model Artist {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  stageName String
+  bio       String?
+  category  String?
+  location  String?
+  media     Json?
+
+  /// Validated against ₦20,000–₦3,000,000 at the application layer rather than
+  /// by a database constraint, so the error message can name the limit. The
+  /// bound is EscrowPay's transaction range, not product policy — a booking
+  /// outside it cannot be funded at all (docs/00 §4).
+  baseRateKobo Int?
+
+  profileComplete Boolean @default(false)
+
+  bookings Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([location])
+}
+
+model Client {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  displayName String
+
+  bookings Booking[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Transaction
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id String @id @default(cuid())
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+  artistId String
+  artist   Artist @relation(fields: [artistId], references: [id])
+
+  amountKobo Int
+
+  eventDate     DateTime
+  /// Gates confirmation: neither party may confirm before this (docs/04 §3).
+  eventEndAt    DateTime
+  eventLocation String?
+
+  state BookingState @default(PENDING_PAYMENT)
+
+  /// Self-generated by us, never the provider's identifier. This is what makes
+  /// a timed-out create call safely retryable: the retry is the same request,
+  /// so the provider recognises it rather than creating a second escrow
+  /// (docs/03 §3).
+  escrowReference String  @unique
+  /// The provider's id, recorded only once create succeeds.
+  escrowId        String?
+
+  // --- Configuration snapshot (docs/07 §4) ---------------------------------
+  // Frozen at creation. ALL later payout and cancellation math reads these,
+  // never live configuration. This is what makes the versioning in #7 and #8
+  // mean anything: it guarantees the terms the client acknowledged and the
+  // artist accepted are the terms that execute.
+  commissionRateBpsSnapshot Int
+  /// The FULL tier set, stored as JSON because it is read as a unit and never
+  /// queried by individual row.
+  cancellationTiersSnapshot Json
+
+  // --- Check-in code (docs/04 §1) ------------------------------------------
+  // Issued to the CLIENT; the artist must obtain it in person. There is no API
+  // path by which an artist can retrieve it — serialisation is role-aware at
+  // the boundary, asserted by test in #22.
+  checkInCode          String?
+  checkInCodeValidFrom DateTime?
+  checkInCodeValidTo   DateTime?
+
+  fundedAt    DateTime?
+  releasedAt  DateTime?
+  refundedAt  DateTime?
+  cancelledAt DateTime?
+
+  checkIn              CheckIn?
+  cancellation         Cancellation?
+  termsAcknowledgement TermsAcknowledgement?
+  disputes             Dispute[]
+  ledgerEntries        LedgerEntry[]
+  strikes              Strike[]
+  feeLiabilities       FeeLiability[]        @relation("LiabilityOrigin")
+  settledLiabilities   FeeLiability[]        @relation("LiabilitySettlement")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([state])
+  @@index([clientId])
+  @@index([artistId])
+  @@index([eventDate])
+}
+
+/// The redemption record — the primary evidence in every subsequent dispute.
+///
+/// There is deliberately NO client-writable timestamp field on this model. Its
+/// entire value rests on the timestamp being ours: a client-supplied time is an
+/// assertion, not evidence, and would return the dispute to exactly the
+/// competing-recollection problem the check-in code was built to eliminate
+/// (docs/04 §2).
+model CheckIn {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  /// Server-side, always. Never accepted from a request body.
+  redeemedAt     DateTime @default(now())
+  redeemedByUser String
+
+  /// Supporting metadata only — NEVER a gating condition. An artist in a
+  /// basement venue with no GPS lock has still arrived, and turning a signal
+  /// problem into a payment failure would be a worse error than the one it
+  /// prevents. Stored as text so no Float enters the schema (docs/01 §1).
+  latitude       String?
+  longitude      String?
+  accuracyMeters String?
+
+  disputes Dispute[]
+
+  createdAt DateTime @default(now())
+}
+
+model Cancellation {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  initiatedBy       CancellationInitiator
+  initiatedByUserId String
+
+  /// Whole days, floored, computed in Africa/Lagos from the cancellation
+  /// timestamp to the event start. Day 0 means cancelling on the event day.
+  daysBeforeEvent Int
+
+  /// A JSON copy of the tier that was applied, resolved from the booking's
+  /// snapshot — not a pointer to a configuration version.
+  appliedTier Json
+
+  clientRefundKobo       Int
+  artistCompensationKobo Int
+  escrowFeesKobo         Int
+  feeBearer              FeeBearer
+
+  // --- Artist-fault reclassification (#29) ---------------------------------
+  // The reversal is written as offsetting ledger entries, never as edits.
+  reclassifiedAsArtistFault Boolean   @default(false)
+  reclassifiedByUserId      String?
+  reclassificationReason    String?
+  reclassifiedAt            DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([initiatedBy])
+}
+
+model Dispute {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  openedByUserId String
+  openedReason   String
+
+  state DisputeState @default(OPEN)
+
+  /// Attached automatically where one exists, and surfaced above the fold in
+  /// the admin view — it reduces the common dispute to a binary fact.
+  checkInId String?
+  checkIn   CheckIn? @relation(fields: [checkInId], references: [id])
+
+  resolvedByUserId String?
+  /// Mandatory at resolution. A money movement without a recorded
+  /// justification is indefensible later.
+  resolutionReason String?
+  resolvedAt       DateTime?
+
+  /// Populated only for RESOLVED_SPLIT.
+  splitClientKobo Int?
+  splitArtistKobo Int?
+
+  /// Informational ONLY. Nothing executes from this field — the verdict
+  /// returns to us and we issue the instruction (docs/04 §6).
+  externalMediatorOpinion String?
+
+  evidence DisputeEvidence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([state])
+  @@index([bookingId])
+}
+
+/// Not named in #4's model list. Added because #31 requires both parties to
+/// attach evidence to the same dispute, and modelling that as a JSON blob on
+/// Dispute would make "who submitted what, when" unqueryable — precisely the
+/// question a dispute review asks. Flagged in docs/01-DATA-MODEL.md §3.
+model DisputeEvidence {
+  id        String  @id @default(cuid())
+  disputeId String
+  dispute   Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  submittedByUserId String
+  statement         String?
+  fileUrl           String?
+
+  createdAt DateTime @default(now())
+
+  @@index([disputeId])
+}
+
+/// The FCCPA defence (docs/05 §8).
+///
+/// Stores the tier percentages AS DISPLAYED — literal values, not a foreign key
+/// to a configuration version. A pointer requires reconstructing what the
+/// client saw; a copy IS what they saw. A deduction we cannot prove was
+/// disclosed is a deduction we may not be able to defend.
+model TermsAcknowledgement {
+  id        String  @id @default(cuid())
+  bookingId String  @unique
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  clientUserId String
+
+  tiersAsDisplayed             Json
+  commissionRateBpsAsDisplayed Int
+
+  ipAddress String?
+  userAgent String?
+
+  acknowledgedAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Money
+// ---------------------------------------------------------------------------
+
+/// APPEND-ONLY. This is a convention the database cannot enforce, so it is
+/// enforced by grep in `npm run check:rules`: no `ledgerEntry.update` or
+/// `.delete` call exists anywhere in the codebase.
+///
+/// Corrections are written as NEW offsetting entries of type CORRECTION,
+/// referencing the entry they offset. The original stays visible, because the
+/// sequence — charged, then reversed, and why — is the record that matters.
+///
+/// `amountKobo` is SIGNED from the party's perspective: positive means the
+/// party received value, negative means they parted with it. The entries for
+/// any settled booking sum to exactly zero, which is the widest-catching
+/// financial check in the system (docs/01 §5).
+///
+/// Every entry is written INSIDE the same database transaction as the state
+/// change it accompanies.
+model LedgerEntry {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  entryType  LedgerEntryType
+  party      LedgerParty
+  amountKobo Int
+
+  description String?
+
+  /// Set on a CORRECTION, naming the entry it offsets.
+  offsetsEntryId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([bookingId])
+  @@index([entryType])
+}
+
+/// An artist's unpaid fee obligation from a cancellation where there was no
+/// artist money to deduct from — the client's payment is the only money in the
+/// transaction and all of it is going back to the client (docs/05 §6).
+///
+/// The platform fronts the cost and settles it against the artist's next
+/// payout, which is the only moment they have money in the system to settle
+/// against. Written off if the account closes: pursuing a ₦2,000 debt through
+/// collections costs more than the debt.
+model FeeLiability {
+  id           String @id @default(cuid())
+  artistUserId String
+  artistUser   User   @relation(fields: [artistUserId], references: [id])
+
+  originBookingId String
+  originBooking   Booking @relation("LiabilityOrigin", fields: [originBookingId], references: [id])
+
+  amountKobo Int
+  status     FeeLiabilityStatus @default(OUTSTANDING)
+
+  settledAgainstBookingId String?
+  settledAgainstBooking   Booking?  @relation("LiabilitySettlement", fields: [settledAgainstBookingId], references: [id])
+  settledAt               DateTime?
+
+  writtenOffAt   DateTime?
+  writeOffReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([artistUserId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Configuration — versioned, never mutable (docs/07 §3)
+// ---------------------------------------------------------------------------
+
+/// APPEND-ONLY. A rate change writes a NEW row and never touches the old one.
+///
+/// A rate change must never reach backwards: a booking made at 5% that is still
+/// awaiting payout when the rate moves to 7% must still pay out at 5%, because
+/// that is the deal the artist accepted. The snapshot on Booking is what
+/// guarantees it; this history is what makes the change auditable.
+model CommissionRate {
+  id String @id @default(cuid())
+
+  /// Basis points, integer. Never a float percentage — that is how `0.05` gets
+  /// into a money calculation.
+  rateBasisPoints Int
+  effectiveFrom   DateTime
+  setByUserId     String
+
+  createdAt DateTime @default(now())
+
+  @@index([effectiveFrom])
+}
+
+/// One row per band. Rows sharing a `versionId` form one tier set.
+///
+/// Rows are addable and deletable, not merely editable, because the band
+/// structure itself will change. Validation rejects overlaps, gaps, a set not
+/// covering day 0, and any row where the two percentages do not sum to 10000
+/// bps — a gap means a booking cancelled in that window has no applicable rule,
+/// and there is no safe default (docs/05 §5).
+model CancellationTier {
+  id        String @id @default(cuid())
+  versionId String
+
+  minDaysBefore Int
+  /// Null means the open-ended top band.
+  maxDaysBefore Int?
+
+  clientRefundBps       Int
+  artistCompensationBps Int
+
+  effectiveFrom DateTime
+  setByUserId   String
+
+  createdAt DateTime @default(now())
+
+  @@index([versionId])
+  @@index([effectiveFrom])
+}
+
+// ---------------------------------------------------------------------------
+// Reputation, audit, webhooks
+// ---------------------------------------------------------------------------
+
+model Strike {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  trigger StrikeTrigger
+  /// Read from configuration, never hardcoded. The right numbers are not
+  /// knowable until there is real data on how often each trigger fires.
+  weight  Int
+  reason  String
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id])
+
+  active    Boolean   @default(true)
+  expiresAt DateTime?
+
+  overriddenByUserId String?
+  overrideReason     String?
+  overriddenAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, active])
+}
+
+/// Written for every configuration change, dispute resolution, manual money
+/// movement, strike override and reclassification. Each requires a written
+/// reason — a money movement without a recorded justification is indefensible
+/// later, and "later" means a regulator or a user asking months afterwards.
+model AuditLog {
+  id          String @id @default(cuid())
+  actorUserId String
+  actor       User   @relation("AuditActor", fields: [actorUserId], references: [id])
+
+  action     String
+  entityType String
+  entityId   String
+  reason     String?
+
+  before Json?
+  after  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+}
+
+/// The idempotency guarantee for the highest-severity path in the system.
+///
+/// `providerEventId` is UNIQUE, and the row is written BEFORE any processing
+/// begins. Recording afterwards leaves a window where a crash mid-processing
+/// means the event is retried and reprocessed from scratch, with whatever
+/// partial work the first attempt committed already done.
+///
+/// An invalid signature writes NO row: recording unverified events would let
+/// anyone who can reach the endpoint pre-poison this table with ids that would
+/// then be ignored when they legitimately arrive (docs/03 §6).
+model WebhookEvent {
+  id              String @id @default(cuid())
+  providerEventId String @unique
+
+  eventType String
+  /// The exact bytes received, retained for signature re-verification and
+  /// replay.
+  rawBody   String
+
+  processingStatus WebhookProcessingStatus @default(RECEIVED)
+  attempts         Int                     @default(0)
+  lastError        String?
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([processingStatus])
+  @@index([eventType])
+}

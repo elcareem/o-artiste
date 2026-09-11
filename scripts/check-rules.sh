@@ -46,13 +46,18 @@ echo
 # ── Money precision — docs/01 §1, issue #4 ──────────────────────────────────
 SCHEMA="apps/backend/prisma/schema.prisma"
 if [ ! -f "$SCHEMA" ]; then
-  skip "No Float or Decimal in the Prisma schema" "$SCHEMA not present yet"
+  skip "No Float or Decimal field type in the Prisma schema" "$SCHEMA not present yet"
 else
-  hits="$(grep -nE '(^|[^A-Za-z])(Float|Decimal)([^A-Za-z]|$)' "$SCHEMA" | grep -v '^\s*[0-9]*:\s*//' || true)"
+  # Matches a FIELD DECLARATION whose type is Float or Decimal — an indented
+  # identifier followed by the type — rather than the bare word anywhere in the
+  # file. The rule forbids the types, not the words: the schema documents the
+  # rule in its own comments, and a check that cannot tell a violation from its
+  # own documentation is a check nobody trusts.
+  hits="$(grep -nE '^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+(Float|Decimal)\b' "$SCHEMA" || true)"
   if [ -z "$hits" ]; then
-    pass "No Float or Decimal in the Prisma schema"
+    pass "No Float or Decimal field type in the Prisma schema"
   else
-    fail "No Float or Decimal in the Prisma schema" \
+    fail "No Float or Decimal field type in the Prisma schema" \
          "All monetary fields are Int kobo. See docs/01-DATA-MODEL.md §1." "$hits"
   fi
 fi

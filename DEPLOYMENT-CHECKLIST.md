@@ -156,9 +156,31 @@ a `NEXT_PUBLIC_` prefix.
 > seed script is idempotent, so the state is reproducible with two commands. Do
 > not put anything in it that cannot be regenerated.
 
-- [ ] Instance provisioned
-- [ ] `DATABASE_URL` set on the Render service
+- [ ] Instance provisioned (Render → New → PostgreSQL, **same region as the web
+      service**, Ohio)
+- [ ] `DATABASE_URL` set on the `o-artiste-api` service — use the **Internal**
+      connection string, not the external one
 - [ ] `npx prisma migrate deploy` run **against the deployed database**, not only locally
+
+### How to apply the migration
+
+The migration is committed at `apps/backend/prisma/migrations/`. Point
+`DATABASE_URL` at the managed instance and run **`migrate deploy`**, never
+`migrate dev`:
+
+```bash
+DATABASE_URL="<render external connection string>" \
+  npx prisma migrate deploy --schema apps/backend/prisma/schema.prisma
+```
+
+`migrate dev` is a development command — it can reset the database and it
+generates new migrations. `migrate deploy` only applies what is already
+committed, which is the only thing that should ever touch an instance holding
+real data.
+
+Use the **external** connection string when running this from a laptop, and set
+the **internal** one on the service itself — internal is faster and stays off
+the public network, but is only reachable from inside Render.
 
 **Gates:** #4 — "Managed Postgres provisioned, with `DATABASE_URL` set on the deployed backend", "Migration applied successfully against the deployed database".
 
