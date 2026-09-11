@@ -367,3 +367,181 @@ tree until someone noticed it at #41.
 - SIGTERM/SIGINT handling in `src/index.js`, so in-flight requests finish on
   deploy rather than being cut mid-response. On this system a request cut
   mid-flight can be one that has already instructed a money movement.
+
+---
+
+## #3 — chore(web): bootstrap Next.js client and deploy
+
+Branch `chore/3-web-bootstrap`. Verified 2026-09-11.
+
+### `[x]` `npm run dev:web` starts the dev server; `localhost:3000` loads
+
+```
+▲ Next.js 16.3.3 (Turbopack)
+- Local:  http://localhost:3000
+✓ Ready in 365ms
+
+$ curl -w 'http=%{http_code} total=%{time_total}s' http://localhost:3000
+http=200 total=0.026824s
+```
+
+Server-rendered output contains `₦200,000`, `₦0`, and the configured API base.
+
+### `[x]` `formatNaira(20000000)` returns `₦200,000`
+
+### `[x]` `formatNaira(0)` returns `₦0`, not an empty string or `₦NaN`
+
+```
+$ npm run test --workspace apps/web
+# tests 7  # pass 7  # fail 0
+```
+
+`Intl.NumberFormat` with `style: 'currency'` emits `₦200,000.00`, so the symbol
+is prefixed manually over a plain grouping formatter. That keeps the output
+exactly what the criterion specifies and leaves control over the decimal rule:
+whole Naira render without decimals, an amount carrying kobo renders to two
+places, so a figure is never silently rounded away from what the ledger holds.
+
+| Input (kobo) | Output |
+|---|---|
+| `20000000` | `₦200,000` |
+| `0` | `₦0` |
+| `2000000` | `₦20,000` (EscrowPay floor) |
+| `300000000` | `₦3,000,000` (EscrowPay ceiling) |
+| `123456` | `₦1,234.56` |
+| `1` | `₦0.01` |
+| `-50000` | `-₦500` |
+
+A property test sweeps integers and asserts no output is ever empty, contains
+`NaN`, or loses the symbol.
+
+**`formatNaira` throws on a non-integer, `NaN` or `Infinity`.** Every amount
+reaching it comes from our own API, which guarantees kobo integers, so a float
+arriving is a contract violation upstream. Rendering `₦0` or `₦NaN` for a real
+amount would hide a money bug behind something that looks fine. This follows the
+same posture as the booking state machine, where an impossible transition throws
+rather than proceeding (`docs/01-DATA-MODEL.md` §4).
+
+No reverse `naira → kobo` helper exists, and none may be added — parsing a
+user-entered amount is a backend concern, and a second place where money changes
+representation is a second place a rounding bug can live.
+
+### `[x]` `npm run lint` passes
+
+```
+$ npm run lint
+> eslint
+lint exit=0
+```
+
+`eslint-config-next` 16 ships **native flat config**, so it is imported and
+spread directly. The initial `FlatCompat` bridge — the documented approach for
+older versions — crashed with `TypeError: Converting circular structure to JSON`
+when asked to normalise a config that is already flat. `@eslint/eslintrc` was
+dropped from devDependencies as a result.
+
+### `[x]` Production build succeeds
+
+```
+$ npx next build
+▲ Next.js 16.3.3 (Turbopack)
+✓ Compiled successfully in 308ms
+  Finished TypeScript in 1454ms
+✓ Generating static pages (3/3)
+```
+
+`allowImportingTsExtensions` was enabled. Node's type stripping requires the
+`.ts` extension on relative imports so tests can run without a build step, while
+TypeScript rejects that extension by default. The flag reconciles the two, and
+is valid because `noEmit` is set.
+
+### `[x]` Cross-origin path verified against the deployed backend
+
+```
+$ curl -H "Origin: http://localhost:3000" https://o-artiste-api.onrender.com/health
+access-control-allow-origin: http://localhost:3000
+
+$ curl -H "Origin: https://evil.example.com" https://o-artiste-api.onrender.com/health
+access-control-allow-origin: http://localhost:3000
+```
+
+The allowed origin is echoed regardless of who asks, so a browser on any other
+origin blocks the response. That is correct for a fixed allowlist, and confirms
+`WEB_ORIGIN` is doing its job rather than being permissive.
+
+The health check runs from a **client** component deliberately. A server-side
+fetch would succeed even with CORS misconfigured, and would prove nothing about
+the path the real application uses.
+
+### `[!]` Deployed and reachable at a live Vercel URL
+
+**BLOCKED — Vercel project not yet created.** Needs root directory `apps/web`
+and `NEXT_PUBLIC_API_URL` set to the Render backend. `WEB_ORIGIN` on Render then
+moves off the localhost placeholder to the Vercel URL. Tracked in
+`DEPLOYMENT-CHECKLIST.md` § #3.
+
+### Rule refined — and re-verified for teeth
+
+`check:rules` reported a **false positive**: the pattern matched
+`{state.status}`, the backend's health string `"ok"`, because it fired on any
+field literally named `status`. This codebase will have many legitimate ones.
+
+The pattern now matches only values rendered out of an error or response object
+— `{error.stack}`, `{err.status}`, `{response.status}` — which is what #39
+actually forbids. A rule that fires on correct code gets switched off within a
+week, so precision here is what keeps it alive.
+
+Confirmed it still catches the real thing, by injecting a violation and removing
+it again:
+
+```
+# with {error.stack} injected:
+  FAIL  No raw stack traces or HTTP status codes rendered in the web app
+        > apps/web/src/app/backend-status.tsx:47: ... {error.stack}</span>;
+passed 4   failed 1   skipped 1
+
+# restored:
+passed 5   failed 0   skipped 1
+```
+
+This is the same standard #40 sets for the webhook replay assertion: a check
+that cannot fail proves nothing.
+
+### Framework docs read, per `PROJECT_GUIDE.md` §3
+
+`next dev` generates `apps/web/AGENTS.md` and `CLAUDE.md`, which the project
+guide requires retaining, and which instruct reading
+`node_modules/next/dist/docs/` before writing Next.js code. Doing so caught a
+real incompatibility and flagged one for later.
+
+**Node 20.9 is the minimum for Next 16.** The `engines` field said `>=20`, which
+permits 20.0 through 20.8 — and the first Render deploy ran on **20.8.2**, below
+the floor. Tightened to `>=20.9.0` across all three `package.json` files, keeping
+both workspaces on one Node target per #1's technical note. `NODE_VERSION=22` on
+Render remains the right setting; this makes the requirement explicit rather
+than relying on the host default happening to be new enough.
+
+**Async Request APIs — relevant at #13, not yet.** Next 16 removes synchronous
+access to `params`, `searchParams`, `cookies` and `headers` entirely; they are
+promises now. `app/artists/[id]/page.tsx` and `app/artists/[id]/book/page.tsx`
+must `await params`. Nothing in this issue uses them, so there is nothing to fix
+here — recorded so #13 does not rediscover it.
+
+Two other Next 16 changes worth knowing, neither affecting current code:
+Turbopack is the default for `dev` and `build` (no `--turbo` flag, confirmed in
+the build output), and the `middleware` convention is renamed to `proxy`.
+
+### Added outside the issue's stated scope
+
+- `apps/web/AGENTS.md` and `apps/web/CLAUDE.md` — generated by `next dev`.
+  Committed deliberately: `PROJECT_GUIDE.md` §3 requires retaining them, §2
+  lists both as expected files, and the block itself notes that removing it from
+  a diff only recreates the uncommitted change.
+- `src/app/backend-status.tsx` — a client component, so the cross-origin call is
+  exercised from the browser rather than the server.
+- `apps/web/.env.example` — documents `NEXT_PUBLIC_API_URL` and records that
+  `NEXT_PUBLIC_` values are embedded in the browser bundle, so nothing secret
+  may ever go there.
+- `ApiError` in `src/lib/api.ts` — carries the backend's `error` string so the
+  UI can render it unaltered, and distinguishes a network failure from a server
+  rejection, which need different copy.

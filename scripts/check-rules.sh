@@ -91,10 +91,14 @@ absent "Frontend makes no direct provider calls" \
        'escrowpay\.app|api\.escrowpay|ESCROWPAY_(API_)?(KEY|SECRET)'
 
 # ── No leaked internals in the UI — docs/02 §2, issue #39 ───────────────────
-absent "No raw stack traces rendered in the web app" \
+# Targets values rendered out of an error or response object, which is what
+# #39 actually forbids. A bare `.status` is not enough to match: this codebase
+# has legitimate domain fields named `status` (the health payload, verification
+# state), and a rule that fires on those would be switched off within a week.
+absent "No raw stack traces or HTTP status codes rendered in the web app" \
        "Users never see stack traces or status codes. docs/02-API-CONTRACT.md §2." \
        "apps/web/src" \
-       '\{[^}]*error\.stack[^}]*\}|\{[^}]*\.status\b[^}]*\}\s*<'
+       '\{[^}]*\b(error|err|e|res|response|apiError)\.(stack|status)\b[^}]*\}'
 
 echo
 printf 'passed %s   failed %s   skipped %s\n' "$PASS" "$FAIL" "$SKIP"
