@@ -8,7 +8,7 @@
     "apps/*"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "scripts": {
     "dev:backend": "npm run dev --workspace apps/backend",
