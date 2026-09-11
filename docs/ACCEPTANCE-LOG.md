@@ -893,3 +893,66 @@ someone who has already proven they hold the password.
 ### Out of scope, per the issue
 
 No social login. No password reset flow.
+
+### Audit logging for rejected privilege escalation (added by decision)
+
+Agreed after review, as an extension to #9 rather than a separate issue. Two
+decisions were put to the maintainer; both were taken:
+
+**1. `requireAuth` reads the live database row, not the token payload — kept.**
+The alternative is short-lived tokens plus a refresh mechanism. Rejected for
+now: one indexed primary-key lookup per request is cheap, and the failure mode
+of trusting the token is that a suspended artist keeps accepting bookings and
+taking client money into escrow for the remaining days of their token's life.
+#34's enforcement rules would be decorative otherwise. Revisit only if the query
+ever appears in profiling.
+
+**2. Privilege-escalation attempts are now recorded in `AuditLog`.**
+
+Previously the 403 was returned and nothing was written — the signal existed and
+nobody was listening.
+
+Two events are recorded:
+
+| Action | When | Actor |
+|---|---|---|
+| `REGISTRATION_ROLE_REJECTED` | `POST /auth/register` asks for a role that is not publicly registerable | none — anonymous |
+| `ROLE_DENIED` | an authenticated user is refused an endpoint above their level | the user, named |
+
+**Schema change: `AuditLog.actorUserId` is now nullable**, with `actorIp` and
+`actorUserAgent` added. The column was a required foreign key, which meant the
+events most worth recording — the anonymous ones — were the only events the
+table could not hold. An unauthenticated request trying to register itself as
+`SUPER_ADMIN` has no user id. Migration `20260911214328_audit_log_anonymous_actors`,
+applied locally and to the deployed database:
+
+```
+actorUserId    text  nullable=YES
+actorIp        text  nullable=YES
+actorUserAgent text  nullable=YES
+```
+
+**Two write paths, because the two kinds of event have opposite failure
+requirements** (`src/lib/audit.js`):
+
+- `recordAudit(tx, entry)` — inside the caller's transaction, and **must
+  succeed**. For configuration changes, dispute resolutions and manual money
+  movements: if the audit row cannot be written, the change it records must not
+  happen either. Used from #7 onward.
+- `recordAuditSafe(entry)` — best effort, **never throws**. For security events:
+  the rejection has already happened and is correct, and a failure to log must
+  not turn a clean 403 into a 500. Otherwise an attacker could suppress their
+  own audit trail by breaking the logger.
+
+Verified by three tests (25 backend tests total, all passing):
+
+- A rejected `SUPER_ADMIN` registration writes a row with `actorUserId: null`,
+  the captured IP, and `after.attemptedRole: "SUPER_ADMIN"` — and still creates
+  no account
+- A `CLIENT` refused `/admin/config/ping` writes a row **naming them**, with
+  `after.held: "CLIENT"` and `after.required: ["SUPER_ADMIN"]`
+- A permitted `SUPER_ADMIN` request writes **no** denial row, so the log is not
+  merely recording everything
+
+Rate limiting on these endpoints remains open at #41; this records the attempts,
+it does not yet slow them down.

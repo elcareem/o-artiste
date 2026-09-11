@@ -13,6 +13,7 @@ const {
   SELF_REGISTERABLE_ROLES,
 } = require('../lib/auth');
 const { requireAuth } = require('../middleware/auth');
+const { recordAuditSafe, actorContext } = require('../lib/audit');
 
 const router = express.Router();
 
@@ -41,6 +42,19 @@ router.post('/auth/register', async (req, res, next) => {
       throw new AppError(400, `Your password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
     }
     if (!SELF_REGISTERABLE_ROLES.includes(role)) {
+      // Nobody types SUPER_ADMIN into a signup form. Our own client only ever
+      // sends CLIENT or ARTIST, so a request carrying anything else was
+      // hand-crafted — that is reconnaissance, and it is worth a record.
+      // Refusing outright rather than silently creating a CLIENT is what makes
+      // the attempt visible at all.
+      recordAuditSafe({
+        ...actorContext(req),
+        action: 'REGISTRATION_ROLE_REJECTED',
+        entityType: 'Registration',
+        entityId: String(email ?? 'unknown').trim().toLowerCase(),
+        reason: 'Attempted to self-assign a role that is not publicly registerable.',
+        after: { attemptedRole: role ?? null },
+      });
       throw new AppError(403, 'You can register as a client or an artist.');
     }
 

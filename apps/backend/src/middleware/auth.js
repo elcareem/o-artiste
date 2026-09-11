@@ -10,6 +10,7 @@
 const { verifyToken } = require('../lib/auth');
 const { AppError } = require('../lib/errors');
 const prisma = require('../lib/prisma');
+const { recordAuditSafe, actorContext } = require('../lib/audit');
 
 /**
  * Requires a valid session. Attaches `req.user` — the live database row, not
@@ -58,6 +59,18 @@ function requireRole(...roles) {
       return next(new AppError(401, 'You need to be logged in to do that.'));
     }
     if (!roles.includes(req.user.role)) {
+      // An authenticated user reaching for an endpoint above their level. More
+      // significant than the anonymous case, because this one has an account
+      // we can name.
+      recordAuditSafe({
+        ...actorContext(req),
+        actorUserId: req.user.id,
+        action: 'ROLE_DENIED',
+        entityType: 'Endpoint',
+        entityId: `${req.method} ${req.originalUrl}`,
+        reason: 'Role is not permitted for this endpoint.',
+        after: { held: req.user.role, required: roles },
+      });
       return next(new AppError(403, 'You do not have permission to do that.'));
     }
     next();

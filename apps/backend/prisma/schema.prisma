@@ -580,9 +580,23 @@ model Strike {
 /// reason — a money movement without a recorded justification is indefensible
 /// later, and "later" means a regulator or a user asking months afterwards.
 model AuditLog {
-  id          String @id @default(cuid())
-  actorUserId String
-  actor       User   @relation("AuditActor", fields: [actorUserId], references: [id])
+  id String @id @default(cuid())
+
+  /// Nullable, because the events most worth recording are the ones with no
+  /// authenticated actor: an unauthenticated request attempting to register
+  /// itself as SUPER_ADMIN has no user id, and requiring one would make the
+  /// attack this table exists to catch the one thing it cannot record.
+  ///
+  /// Every actor-bearing event — configuration changes, dispute resolutions,
+  /// manual money movements — still sets it, and those are validated at the
+  /// endpoint rather than by the column.
+  actorUserId String?
+  actor       User?   @relation("AuditActor", fields: [actorUserId], references: [id])
+
+  /// Captured for anonymous events, where they are the only identifying
+  /// signal available. Not a substitute for actorUserId where one exists.
+  actorIp        String?
+  actorUserAgent String?
 
   action     String
   entityType String
@@ -596,6 +610,7 @@ model AuditLog {
 
   @@index([entityType, entityId])
   @@index([actorUserId])
+  @@index([action, createdAt])
 }
 
 /// The idempotency guarantee for the highest-severity path in the system.
