@@ -41,6 +41,10 @@ exists. Recorded in `docs/ACCEPTANCE-LOG.md` as a deliberate deviation.
 - [ ] `WEB_ORIGIN` set to the Vercel URL
 - [ ] `/health` answers at the live URL
 
+The service is ready to deploy as of #2 — `npm start` runs `node src/index.js`,
+binds `PORT` (default 4000), and serves `GET /health`. It has no database or
+Redis dependency yet, so it will start cleanly with only `WEB_ORIGIN` set.
+
 ### Two values to record here when it is live
 
 | Value | Why it matters | Recorded |
