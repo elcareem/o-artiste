@@ -1,0 +1,20 @@
+{
+  "name": "artist-escrow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Artist booking platform with escrow-held funds. Funds are custodied by a CBN-licensed bank and released only on two-sided confirmation.",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:backend": "npm run dev --workspace apps/backend",
+    "dev:web": "npm run dev --workspace apps/web",
+    "test:backend": "npm run test --workspace apps/backend",
+    "lint": "npm run lint --workspace apps/web",
+    "check:rules": "bash scripts/check-rules.sh"
+  }
+}
