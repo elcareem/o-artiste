@@ -148,7 +148,11 @@ a `NEXT_PUBLIC_` prefix.
 
 ## #4 — Managed Postgres
 
-**Status:** ☐ *(local development is unblocked — a local PostgreSQL instance is already running)*
+**Status:** ☑ provisioned and migrated — `o-artiste-db`, PostgreSQL 16, Ohio
+
+- [x] Instance provisioned, same region as the web service
+- [x] Migration applied against the deployed database (16 tables verified)
+- [ ] `DATABASE_URL` set on `o-artiste-api` using the **Internal** connection string
 
 > **Free-tier testing caveat.** Render deletes free PostgreSQL instances after
 > 30 days. If the build runs past a month the database disappears along with its
@@ -156,11 +160,6 @@ a `NEXT_PUBLIC_` prefix.
 > seed script is idempotent, so the state is reproducible with two commands. Do
 > not put anything in it that cannot be regenerated.
 
-- [ ] Instance provisioned (Render → New → PostgreSQL, **same region as the web
-      service**, Ohio)
-- [ ] `DATABASE_URL` set on the `o-artiste-api` service — use the **Internal**
-      connection string, not the external one
-- [ ] `npx prisma migrate deploy` run **against the deployed database**, not only locally
 
 ### How to apply the migration
 
@@ -246,6 +245,13 @@ The amount unit is the one that must not be guessed. The provider's public examp
 - [ ] **A restore from backup actually performed** — configured is not verified
 - [ ] Rate limiting live on auth, booking creation and check-in endpoints
 - [ ] `.env.example` complete; no secrets in the repository
+- [ ] **Database inbound restricted** — currently `0.0.0.0/0`, Render's default.
+      Acceptable while it holds regenerable seed data; not once it holds identity
+      records and booking history. Restrict to Render's egress ranges and have
+      the application connect over the internal hostname only.
+- [ ] **Production database credentials issued fresh** — the testing instance's
+      credentials have been pasted into a terminal and a chat transcript. Never
+      carry them into production.
 
 ---
 
