@@ -599,3 +599,166 @@ the build output), and the `middleware` convention is renamed to `proxy`.
 - `ApiError` in `src/lib/api.ts` — carries the backend's `error` string so the
   UI can render it unaltered, and distinguishes a network failure from a server
   rejection, which need different copy.
+
+---
+
+## #4 — feat(backend): Prisma schema, managed Postgres, initial migration
+
+Branch `feat/4-prisma-schema`. Verified 2026-09-11 against PostgreSQL 16.15.
+
+### `[x]` `npx prisma migrate dev` applies cleanly against a fresh database
+
+Proven by `migrate reset`, which drops everything and replays from scratch —
+a stronger check than applying to a database that already matched:
+
+```
+$ npx prisma migrate reset --force --skip-seed
+Applying migration `20260911204031_init`
+Database reset successful
+
+$ npx prisma migrate status
+1 migration found in prisma/migrations
+Database schema is up to date!
+```
+
+16 tables created: the 15 named in #4, plus `DisputeEvidence`.
+
+### `[x]` `npx prisma generate` produces a client with no errors
+
+```
+✔ Generated Prisma Client (v5.22.0) to ./../../node_modules/@prisma/client
+```
+
+### `[x]` Grepping `schema.prisma` for `Float` and `Decimal` returns zero matches
+
+Zero matches **in field-type position**:
+
+```
+$ grep -nE '^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+(Float|Decimal)\b' prisma/schema.prisma
+zero matches
+```
+
+A bare word-match does return two hits — lines 7 and 305 — but both are
+**comments documenting the rule itself**, not field declarations. The check in
+`check:rules` was therefore made type-position-aware rather than word-matching.
+The rule forbids the *types*, not the *words*, and a check that cannot tell a
+violation from its own documentation is a check nobody trusts. Same reasoning as
+the `{state.status}` false positive corrected at #3.
+
+Confirmed it still has teeth, by replacing three `amountKobo Int` declarations
+with `Float` and running it:
+
+```
+  FAIL  No Float or Decimal field type in the Prisma schema
+        > 228:  amountKobo Float
+        > 452:  amountKobo Float
+        > 481:  amountKobo Float
+passed 5   failed 1   skipped 0
+```
+
+Restored: **6 pass, 0 fail, 0 skip** — every rule in the file is now active, with
+nothing skipped for the first time.
+
+**Verified independently against the database**, which is the claim that
+actually matters — the schema is an intention, the database is the fact:
+
+```sql
+select ... where data_type in ('double precision','real','numeric','money');
+-> NONE
+```
+
+Every one of the 14 money and basis-point columns reports `integer`:
+`Artist.baseRateKobo`, `Booking.amountKobo`,
+`Booking.commissionRateBpsSnapshot`, `Cancellation.{clientRefundKobo,
+artistCompensationKobo, escrowFeesKobo}`, `CancellationTier.{clientRefundBps,
+artistCompensationBps}`, `CommissionRate.rateBasisPoints`,
+`Dispute.{splitClientKobo, splitArtistKobo}`, `FeeLiability.amountKobo`,
+`LedgerEntry.amountKobo`, `TermsAcknowledgement.commissionRateBpsAsDisplayed`.
+
+Geolocation on `CheckIn` is stored as `text` precisely so that a genuinely
+fractional value cannot introduce a `Float`. It is supporting metadata that is
+never computed on (`docs/01` §1).
+
+### `[x]` Required constraints exist, verified in the database
+
+```
+Booking.escrowReference        UNIQUE
+WebhookEvent.providerEventId   UNIQUE
+CheckIn.bookingId              UNIQUE
+Cancellation.bookingId         UNIQUE
+TermsAcknowledgement.bookingId UNIQUE
+```
+
+`BookingState` holds exactly the nine specified values, in order:
+`PENDING_PAYMENT FUNDED_HELD CHECKED_IN AWAITING_CONFIRMATION RELEASED REFUNDED
+CANCELLED DISPUTED RESOLVED`.
+
+`CheckIn` columns — note there is **no client-writable timestamp field at all**,
+which is the point rather than an omission:
+
+```
+redeemedAt  timestamp  default CURRENT_TIMESTAMP
+createdAt   timestamp  default CURRENT_TIMESTAMP
+```
+
+### `[x]` Schema guarantees exercised by test
+
+```
+$ npm run test:backend
+# tests 13  # pass 13  # fail 0  # skipped 0
+```
+
+| Test | What it protects |
+|---|---|
+| `escrowReference` is unique | Two escrows for one booking is unrecoverable (`docs/03` §3) |
+| `WebhookEvent.providerEventId` is unique | The idempotency guarantee — a provider retry cannot produce a second row, which is what makes "record before processing" safe |
+| `CheckIn` timestamp is server-set | The primary evidence in every dispute; a client-supplied time is an assertion, not evidence |
+| Config snapshot survives a round trip | Payout math reads the snapshot, never live config (`docs/07` §4) |
+| **A completed booking sums to exactly zero** | The widest-catching financial check in the system |
+| State defaults to `PENDING_PAYMENT` | |
+
+The ledger test encodes the canonical worked example from `docs/01` §5 and
+`docs/05` §3 — ₦200,000 at 5%, money-in capped at ₦2,000, money-out ₦70 — and
+asserts both that the five entries sum to zero and that the artist's line is
+exactly **18,793,000 kobo (₦187,930)**, the figure #14 and #26 will be held to.
+
+### `[!]` Managed Postgres provisioned, `DATABASE_URL` set on the deployed backend
+
+### `[!]` Migration applied against the deployed database, not just locally
+
+**BLOCKED — no managed Postgres yet.** Both criteria need a Render PostgreSQL
+instance, its `DATABASE_URL` set on the `o-artiste-api` service, and
+`npx prisma migrate deploy` run against it. Tracked in
+`DEPLOYMENT-CHECKLIST.md` § #4.
+
+The 30-day free-tier expiry applies. It is survivable by design: the migration
+is version-controlled and #6's seed is idempotent, so the state is reproducible
+with two commands.
+
+### Local development database
+
+`sudo` requires interactive authentication on this machine and no `elcareem`
+Postgres role exists, so the system instance could not be used. Development runs
+against a container instead:
+
+```
+docker run -d --name artist-escrow-pg \
+  -e POSTGRES_USER=artist -e POSTGRES_PASSWORD=artist_dev \
+  -e POSTGRES_DB=artist_escrow_dev -p 55432:5432 postgres:16-alpine
+```
+
+Port 55432 deliberately, to avoid colliding with the system Postgres on 5432.
+`apps/backend/.env` holds the local connection string and is gitignored —
+confirmed with `git check-ignore`.
+
+### Added outside the issue's stated scope
+
+- `src/lib/prisma.js` — the Prisma Client singleton named in `PROJECT_GUIDE.md`
+  §2. One instance per process: instantiating per request exhausts the
+  connection pool, and a connection failure mid-transaction is not a cheap error
+  on a service holding funding instructions.
+- `test/schema.test.js` — the guarantees above. Skips cleanly when
+  `DATABASE_URL` is absent so the suite still runs without a database.
+- `NODE_ENV` documented in `.env.example`. Cross-checked that every variable the
+  app reads — including `DATABASE_URL`, which Prisma reads from the schema
+  rather than through `process.env` — is documented.
