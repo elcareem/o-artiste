@@ -1896,3 +1896,131 @@ rather than assume.
 unit was unknown. It is **not built**: `amount_minor` is already kobo, so kobo
 passes through untouched and a conversion layer would be a place for a bug to
 live with nothing to gain.
+
+---
+
+## #10 — feat(backend): identity verification (NIN/BVN)
+
+Branch `feat/10-identity-verification`. Verified 2026-09-12, against stubs for
+the failure modes and against the live sandbox for the happy path.
+
+```
+$ npm run test:backend
+# tests 90  # pass 90  # fail 0  # skipped 0
+```
+
+### `[x]` Re-running verification for an already-verified user makes no provider call
+
+Asserted by replacing the provider client with a stub that **throws if called at
+all**, then verifying twice:
+
+```
+first call  → VERIFIED, cached: false, provider called
+second call → VERIFIED, cached: true,  provider NOT called
+```
+
+The ₦50 is once per person for life, so a second call must not reach the
+provider at all — checking status first is what guarantees that. The provider
+also enforces it independently (see the 409 case below), but relying on their
+rejection would mean making the call.
+
+Confirmed against the live sandbox too:
+
+```
+status           : VERIFIED cached: false
+platform cost    : 5000 kobo (IDENTITY_VERIFICATION)
+2nd call cached  : true
+costs after 2nd  : 1
+```
+
+### `[x]` A provider timeout leaves the user in a retryable state
+
+```
+provider throws provider_unreachable
+  → 503 "We could not reach our verification partner. Please try again…"
+  → verificationStatus = RETRYABLE_FAILURE   (not REJECTED)
+  → getStatus().retryable = true
+  → a later attempt succeeds
+```
+
+The retry is exercised, not just the flag — the state really is recoverable. A
+network blip must never permanently lock out a real user.
+
+### `[x]` The result is stored, never the identifier
+
+```
+verificationReference : IDN_85833e6046ae44ddb5ef477ef44f4b87
+escrowPartyId         : PAR_694b24e9a795438eb67a4b3c06fc6f77
+raw NIN stored?       : no
+```
+
+Asserted by serialising the whole user row and searching for the submitted
+number. Retaining a NIN or BVN is NDPR exposure with no operational benefit, and
+the provider masks it on their side too — so neither party holds it.
+
+### `[x]` The ₦50 is recorded as a platform cost, outside per-booking economics
+
+A new `PlatformCost` model, **deliberately not a `LedgerEntry`**. Every ledger
+row references its booking (`docs/01` §5), and this cost is charged once per
+person for life. Forcing it into the booking ledger would mean either a nullable
+booking — weakening the model that makes a booking reconcile to zero — or
+attaching a lifetime cost to whichever booking happened to be first.
+
+Asserted that `ledgerEntry.count() === 0` after verification.
+
+`reference` is unique on the provider's identity id, so a retry cannot charge
+the same check twice.
+
+### Four provider outcomes, four different reactions
+
+The substance of this issue is refusing to collapse these together:
+
+| Provider result | Status | Response | Why |
+|---|---|---|---|
+| success | `VERIFIED` | 201 | billable |
+| `409 identity_already_exists` | `VERIFIED` | 201 | **not billable** |
+| `identity_verification_failed` | `REJECTED` | 403 | terminal without support |
+| 4xx (e.g. malformed email) | `UNVERIFIED` | 400 | fixable by the user |
+| timeout / 5xx | `RETRYABLE_FAILURE` | 503 | fixable by waiting |
+
+**The 409 case was found while building #17.** Identities are unique per
+environment, so a user whose identity was onboarded before gets a 409. Treating
+that as an error would lock out precisely the returning users the caching exists
+to serve — so it is recorded as success, and deliberately not billed, because
+the provider does not charge for an existing identity.
+
+**The 4xx case was a real bug, found by running against the live sandbox.** A
+malformed email returns `422`, and the original catch-all reported it as *"we
+could not reach our verification partner — please try again in a few minutes."*
+That is actively misleading: nothing is unreachable, and retrying unchanged
+fails identically forever. A 4xx now returns `400` with copy naming what to
+check, and leaves the user `UNVERIFIED` rather than `RETRYABLE_FAILURE` —
+nothing is broken, the details simply need correcting. Regression test added.
+
+A rejected identity is **not** retried against the provider on resubmission, and
+no cost is incurred for a failed check.
+
+### `[~]` An unverified client receives 403 on `POST /bookings`
+
+### `[~]` An unverified artist cannot accept a booking
+
+**Deferred to #15 and #18**, as anticipated at planning time — neither endpoint
+exists yet. The `requireVerified` middleware was written at #9 and is ready to
+mount; the criteria are verified where those routes are built, not asserted
+here on routes that do not exist.
+
+### Schema additions
+
+| Field | Why |
+|---|---|
+| `User.escrowPartyId` | The `PAR_…` this user transacts as. Created once at verification and reused for every booking — it is what `payer.party_id` and `beneficiary.party_id` reference at escrow creation. Unique. |
+| `User.verificationFailureReason` | Distinguishes *why* an attempt failed, which is what separates a retryable blip from a rejection |
+| `User.verificationAttempts`, `lastVerificationAttemptAt` | Attempt history, for support and for #41's rate-limiting review |
+| `PlatformCost` | Costs belonging to no single booking |
+
+Migration `20260912170420_identity_verification` applied locally and to the
+deployed database — **17 tables** there now.
+
+A first attempt left an empty migration directory behind, which then applied as
+a no-op migration. Removed, and the history replayed from scratch with
+`migrate reset` to confirm all three migrations apply cleanly in order.
