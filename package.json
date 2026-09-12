@@ -15,7 +15,8 @@
     "dev:web": "npm run dev --workspace apps/web",
     "test:backend": "npm run test --workspace apps/backend",
     "lint": "npm run lint --workspace apps/web",
-    "check:rules": "bash scripts/check-rules.sh"
+    "check:rules": "bash scripts/check-rules.sh",
+    "build": "npm run build --workspaces --if-present"
   },
   "overrides": {
     "qs": "^6.16.0"

@@ -1448,3 +1448,200 @@ against a managed database over the public internet during a deploy, and failing
 halfway leaves a partially seeded state.
 
 **Verified by three consecutive clean full-suite runs**, not one.
+
+---
+
+## #5 — chore(backend): Redis and BullMQ job infrastructure
+
+Branch `feat/5-redis-bullmq`. Verified 2026-09-12.
+
+```
+$ npm run test:backend          (two consecutive runs)
+# tests 59  # pass 59  # fail 0  # skipped 0
+```
+
+### `[x]` A job scheduled out executes at approximately the right time
+
+Asserted in both directions: the job **does not run before** its delay elapses,
+and then runs within tolerance. Checking only that it eventually ran would pass
+even if delays were ignored entirely.
+
+The delay is 2s rather than the issue's 10s. The property under test is that a
+*delayed* job fires after its delay and not before, which does not depend on the
+number being ten — and ten seconds of a test run is ten seconds of waiting.
+
+### `[x]` A job that throws is retried per the configured backoff
+
+Three attempts observed, numbered in order, the third succeeding.
+
+**The backoff itself is asserted, not just the attempt count.** The first retry
+must wait at least ~1s, and the second gap must exceed the first. Without that,
+retries firing instantly would still pass a count-only assertion, and the
+exponential policy would be decorative.
+
+Exponential because the failures worth retrying are transient — a provider
+timeout, a brief partition — and hammering a struggling dependency every second
+makes its recovery slower.
+
+### `[x]` A job failing all retries is visible in the dead-letter queue
+
+A job set to fail more times than it has attempts lands in `dead-letter`
+carrying the originating queue, the job name and data, `attemptsMade`, the
+failure reason, and when it gave up.
+
+The original also remains in the failed set: **the dead letter is a record, not
+a relocation.** A job that vanishes without trace is indistinguishable from one
+that never existed, and on this system the one that vanished might have been
+releasing an artist's payment.
+
+Nothing processes the dead-letter queue. It exists for a human, so retrying it
+automatically would defeat the purpose.
+
+### `[x]` Scheduled jobs survive a process restart
+
+The critical property, and verified by **actually killing and starting
+processes** rather than reasoning about Redis:
+
+1. A delayed job is scheduled while **no worker exists at all**
+2. Its state is confirmed as `delayed` — queued with nothing able to run it
+3. `src/worker.js` is spawned as a **separate OS process**
+4. That new process runs the job, and its stdout is checked for the marker
+
+Also verified outside the suite, with the worker as a long-running service and
+the job scheduled from a different process entirely:
+
+```
+$ npm run start:worker
+[worker] listening on queues: maintenance
+[echo] scheduled-from-api-process (job 1, attempt 1)
+```
+
+This is what makes auto-release survive a deploy.
+
+### `[x]` The queue refuses to start without Redis configured
+
+Throws rather than silently accepting jobs into nothing. A queue that appears to
+work while dropping everything is worse than one that will not start.
+
+### Valkey parity — checked rather than assumed
+
+Render's Key Value runs **Valkey 8.1.4**, not Redis. Valkey is the fork that
+followed Redis's licence change; it reports `redis_version:7.2.4` for
+compatibility. "Compatible" and "identical" are not the same word, and BullMQ
+leans on Lua scripts, so this was tested rather than reasoned about.
+
+The full queue suite was run against both:
+
+| Runtime | Result |
+|---|---|
+| Redis 8.0.5 (local dev) | 5 pass, 0 fail |
+| **Valkey 8.1.4 (matches Render)** | **5 pass, 0 fail** |
+
+Identical. The Valkey container is started with `--maxmemory-policy noeviction`
+to match the deployed instance exactly.
+
+### `maxmemory-policy` must be `noeviction`
+
+Render defaults Key Value to `allkeys-lru`, and that default is correct **for a
+cache**. This is not a cache.
+
+Under an eviction policy Redis silently deletes least-recently-used keys when
+memory fills. Those keys are queued jobs — a scheduled auto-release would
+disappear with no error in any log, and an artist would not be paid until
+someone noticed by hand. `noeviction` makes Redis return an error instead, which
+is visible and fixable.
+
+Set correctly on the deployed instance, and documented in `.env.example` beside
+`REDIS_URL` so it is not lost.
+
+### Architecture notes
+
+**`src/worker.js` is a separate entry point** (`npm run start:worker`), built
+now rather than later. Render's free web service sleeps when idle, and a
+sleeping process runs no jobs — auto-release fires 48–72h after an event,
+exactly when nobody is making requests. The cron-job.org keepalive covers this
+for testing; production should run the worker as its own always-on service, and
+that move is configuration rather than a rewrite **because the entry point
+already exists**.
+
+**Queue namespace is configurable** (`QUEUE_PREFIX`). Test files set their own,
+isolating jobs the way `test/db.js` isolates schemas — without it one suite's
+workers consume another's jobs, which is the flakiness class that cost real time
+at #6, #7 and #8.
+
+**Connections are capped deliberately.** The deployed instance allows 50 and
+each Queue and Worker opens its own. The Postgres pool exhaustion found at #8
+was the same mistake made once already.
+
+**SIGTERM finishes in-flight jobs** rather than killing them. A job cut
+mid-flight here may be one that has already instructed a money movement.
+
+### `[!]` Executes at approximately the right time **on the deployed host**
+
+**BLOCKED, and deliberately not unblocked by opening the instance.**
+
+Render blocks external traffic to Key Value by default — a better posture than
+the Postgres instance, which defaults to `0.0.0.0/0`. It matters more here: the
+internal URL carries **no password**, since Internal Authentication is an
+optional extra that is off. Exposing an unauthenticated Redis to the public
+internet is among the most reliably exploited misconfigurations there is.
+
+So this is verified **through the deployed application** instead: the API
+schedules a job on Render, the worker consumes it over the internal network, and
+execution appears in Render's logs. That exercises the real path rather than a
+developer machine reaching in from outside, which is the better test regardless.
+
+Requires `REDIS_URL` set on `o-artiste-api` from the Internal URL.
+
+### Deploy fix: the Prisma client was never generated on Render
+
+Found when the API redeployed after `REDIS_URL` was added. The build succeeded,
+the service started, and then crashed:
+
+```
+Error: @prisma/client did not initialize yet.
+Please run "prisma generate" and try to import it again.
+    at Object.<anonymous> (/opt/render/project/src/apps/backend/src/lib/prisma.js:11:16)
+    at Object.<anonymous> (/opt/render/project/src/apps/backend/src/routes/auth.js:7:18)
+```
+
+**Cause.** `npm install` runs at the repository root — correctly, since that is
+where the lockfile and the `qs` override live — while the schema is at
+`apps/backend/prisma/schema.prisma`. Prisma's implicit install hook does not
+reliably find a schema inside a workspace, and a build cache that skips
+lifecycle scripts removes even that chance.
+
+Reproduced locally by simulating exactly that:
+
+```
+$ rm -rf node_modules/.prisma node_modules/@prisma/client
+$ npm install --ignore-scripts        # as a cache would
+  not generated
+$ npm run build --workspace apps/backend
+  CLIENT GENERATED
+```
+
+**Fix.** An explicit generate step rather than a reliance on implicit hooks:
+
+- `apps/backend/package.json` gains `build: "prisma generate"` and a
+  `postinstall` of the same, so local installs stay convenient
+- the root gains `build: "npm run build --workspaces --if-present"`
+- **Render's build command becomes
+  `npm install && npm run build --workspace apps/backend`**
+
+Workspace-scoped on purpose: the unscoped root `build` also compiles the Next.js
+app, which the API host does not serve.
+
+**Why it went unnoticed.** The deployed API kept answering `/health` throughout,
+because Render leaves the previous working deploy serving when a new one fails
+to boot. Every deploy since #9 merged — the first issue to require the Prisma
+client at startup — had been failing silently behind a healthy-looking endpoint.
+
+That is worth recording as a general lesson rather than a one-off: **a green
+health check proves something is serving, not that the latest commit deployed.**
+`/health` deliberately has no database dependency, which is right for liveness
+and precisely why it could not have caught this.
+
+Still outstanding on the same service: `NODE_VERSION` is unset, so Render runs
+**Node 20.8.2** — below the `>=20.9.0` both workspaces declare in `engines`.
+Render does not enforce `engines`, so it must be set explicitly.
