@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { getArtist } from '@/lib/artists';
+import { getArtistOrNull } from '@/lib/artists';
 import { formatNaira } from '@/lib/currency';
 import { CancellationRate } from '@/components/cancellation-rate';
-import { ApiError } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,18 +22,14 @@ export const dynamic = 'force-dynamic';
  */
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const artist = await getArtistOrNull(id);
 
-  try {
-    const { artist } = await getArtist(id);
-    return {
-      title: `${artist.stageName} — Artist Escrow`,
-      description: artist.bio ?? `Book ${artist.stageName}.`,
-    };
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) notFound();
-    // Anything else is a real failure and should surface as one, not as a 404.
-    throw error;
-  }
+  if (!artist) return { title: 'Artist not available — Artist Escrow' };
+
+  return {
+    title: `${artist.stageName} — Artist Escrow`,
+    description: artist.bio ?? `Book ${artist.stageName}.`,
+  };
 }
 
 /**
@@ -48,14 +43,12 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function ArtistPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  let artist;
-  try {
-    ({ artist } = await getArtist(id));
-  } catch (error) {
-    // A suspended or unknown artist is a 404 from the API, and a 404 here.
-    if (error instanceof ApiError && error.status === 404) notFound();
-    throw error;
-  }
+  const artist = await getArtistOrNull(id);
+
+  // Called directly in the page body, not from inside a catch. That is the
+  // documented pattern, and it is what actually sets a 404 status — calling it
+  // from a catch renders the right page but leaves the response at 200.
+  if (!artist) notFound();
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-16">
