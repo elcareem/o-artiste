@@ -1,64 +1,111 @@
-import { formatNaira } from '@/lib/currency';
-import { BASE_URL } from '@/lib/api';
-import { BackendStatus } from './backend-status';
+import Link from 'next/link';
+
+import { listArtists } from '@/lib/artists';
+import { ArtistCard } from '@/components/artist-card';
+import { EmptyState } from '@/components/empty-state';
+
+export const dynamic = 'force-dynamic';
+
+/** Category chips. Derived from the live set once #35's data exists. */
+const CATEGORIES = ['Afrobeats', 'DJ', 'Gospel', 'Comedy', 'Live band'];
 
 /**
- * Placeholder landing page.
+ * Discovery grid — issue #13.
  *
- * The artist discovery grid this becomes is #13. What it carries now is the
- * one thing worth proving at bootstrap: that money renders through
- * formatNaira() and the client can reach the backend.
+ * `searchParams` is a Promise in Next 16: synchronous access was removed
+ * entirely, not merely deprecated (`docs/` note recorded at #3).
  */
-export default function Home() {
-  return (
-    <main className="mx-auto max-w-2xl px-6 py-20">
-      <p className="text-sm tracking-widest text-[var(--color-muted)] uppercase">
-        Artist Escrow
-      </p>
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ category?: string }>;
+}) {
+  const { category } = await searchParams;
 
-      <h1 className="mt-4 text-4xl font-semibold tracking-tight text-balance">
+  let listing;
+  let failed = false;
+  try {
+    listing = await listArtists({ category, limit: 24 });
+  } catch {
+    // A backend that is down is not a blank page. No status codes or stack
+    // traces reach the user (docs/02 §2).
+    failed = true;
+  }
+
+  return (
+    <main className="mx-auto max-w-5xl px-6 py-16">
+      <h1 className="text-3xl font-semibold tracking-tight text-balance">
         Book an artist. Your payment is held until the event has happened.
       </h1>
-
-      <p className="mt-5 text-lg leading-relaxed text-[var(--color-muted)]">
-        Funds are held by a licensed bank, never by us, and released only when
-        both sides confirm. If the artist does not show up, you are refunded.
+      <p className="mt-4 max-w-2xl text-[var(--color-muted)]">
+        Funds are held by a licensed bank, never by us, and released only when both
+        sides confirm. If the artist does not show up, you are refunded.
       </p>
 
-      <div className="mt-12 rounded-lg border border-[var(--color-line)] p-6">
-        <h2 className="text-sm font-medium tracking-wide uppercase">
-          Bootstrap checks
-        </h2>
+      <nav aria-label="Filter by category" className="mt-10 flex flex-wrap gap-2">
+        <FilterChip href="/" active={!category}>
+          All
+        </FilterChip>
+        {CATEGORIES.map((name) => (
+          <FilterChip
+            key={name}
+            href={`/?category=${encodeURIComponent(name)}`}
+            active={category === name}
+          >
+            {name}
+          </FilterChip>
+        ))}
+      </nav>
 
-        <dl className="mt-4 space-y-3 text-sm">
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-[var(--color-muted)]">
-              Rate rendered from kobo
-            </dt>
-            {/* 20,000,000 kobo. Never formatted anywhere but here. */}
-            <dd className="font-medium tabular-nums">
-              {formatNaira(20000000)}
-            </dd>
-          </div>
-
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-[var(--color-muted)]">Zero renders as</dt>
-            <dd className="font-medium tabular-nums">{formatNaira(0)}</dd>
-          </div>
-
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-[var(--color-muted)]">API</dt>
-            <dd className="font-mono text-xs break-all">{BASE_URL}</dd>
-          </div>
-
-          <div className="flex items-baseline justify-between gap-4">
-            <dt className="text-[var(--color-muted)]">Backend health</dt>
-            <dd className="font-medium">
-              <BackendStatus />
-            </dd>
-          </div>
-        </dl>
+      <div className="mt-8">
+        {failed ? (
+          <EmptyState title="We could not load artists just now.">
+            Please refresh in a moment.
+          </EmptyState>
+        ) : listing!.artists.length === 0 ? (
+          <EmptyState title={category ? `No ${category} artists yet.` : 'No artists yet.'}>
+            {category ? (
+              <>
+                Try another category, or <Link href="/" className="underline">see everyone</Link>.
+              </>
+            ) : (
+              'Check back soon.'
+            )}
+          </EmptyState>
+        ) : (
+          <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {listing!.artists.map((artist) => (
+              <li key={artist.id}>
+                <ArtistCard artist={artist} />
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </main>
+  );
+}
+
+function FilterChip({
+  href,
+  active,
+  children,
+}: {
+  href: string;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? 'page' : undefined}
+      className={`rounded-full border px-4 py-1.5 text-sm transition-colors ${
+        active
+          ? 'border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-paper)]'
+          : 'border-[var(--color-line)] hover:border-[var(--color-ink)]'
+      }`}
+    >
+      {children}
+    </Link>
   );
 }

@@ -2254,3 +2254,107 @@ is empty rather than an error.
 column added later is private by default rather than exposed until someone
 notices. `baseRateKobo` stays a kobo integer with no `₦` anywhere; formatting is
 the web app's job.
+
+---
+
+## #13 — feat(web): discovery grid and artist profile page
+
+Branch `feat/13-discovery-grid`. Verified 2026-09-12 against both servers
+running, by asserting on the **rendered DOM** rather than on component code.
+
+### `[x]` Rates display as `₦200,000`, never as raw kobo
+
+```
+$ curl localhost:3100/
+rates rendered : ₦250,000 ₦50,000
+raw kobo leak? : 0 occurrences
+
+$ curl localhost:3100/artists/<id>
+rate shown     : ₦250,000
+```
+
+Searched the HTML for the raw kobo values (`25000000`, `5000000`) as well as
+checking the formatted output — a page can show `₦250,000` and still leak the
+integer in a data attribute.
+
+### `[x]` An artist with `cancellationRate: null` shows no stat element in the DOM
+
+```
+cancellation stat : 0 element(s)
+the words N/A     : 0
+a bare 0%         : 0
+```
+
+`CancellationRate` returns `null` when the rate is null, so **no element is
+emitted at all** — nothing to style, space, or accidentally reveal. Checked for
+`N/A`, `No data` and `0%` explicitly, because each is a plausible "helpful"
+addition that would be wrong: `0%` implies a perfect record that has not been
+earned, and `N/A` draws attention to an absence and reads as a warning. An
+artist with two completed bookings should look neutral, because they are
+(`docs/06` §4).
+
+### `[x]` An artist with a rate shows it above the booking CTA, not below the fold
+
+Proven by **byte position in the rendered HTML**, with the API temporarily
+stubbed to return a rate (reverted immediately afterwards — the committed
+backend still returns `null`):
+
+```
+stat byte 18153 | CTA byte 18546   →  stat ABOVE the CTA ✓
+```
+
+The value renders as `children: [12, "%"]` — React splits the text nodes, which
+is why a naive `grep '12%'` finds nothing and the element check is the reliable
+assertion.
+
+Position is the whole point of the stat: it exists so a client can weigh
+reliability *before* committing, which requires seeing it before the decision
+rather than in a footer or on a review page afterwards.
+
+### `[x]` Empty filter results show a readable empty state, not a blank page
+
+```
+$ curl 'localhost:3100/?category=Polka'
+empty-state element : 1
+"No Polka artists yet."
+see everyone link   : 1
+```
+
+The message names the filter and offers the way out. An empty result is a normal
+outcome, not an error.
+
+### A suspended artist renders a readable page
+
+```
+$ curl localhost:3100/artists/<suspended id>
+"This artist is not available."
+status codes shown : 0
+```
+
+No status code or stack trace reaches the user (`docs/02` §2).
+
+### `[!]` Known trade-off: the not-found page returns HTTP 200
+
+Confirmed in a **production build**, not just dev: an unknown or suspended
+artist renders the correct not-found page but with a `200` status rather than
+`404`.
+
+The cause is `loading.tsx` on the detail route. It creates a Suspense boundary,
+so Next streams the shell — and the status line — before `notFound()` is
+reached. Once streaming has begun the status cannot be changed.
+
+**Kept the loading state.** #13 requires *"loading and empty states for both
+views"*, and the user-facing behaviour is correct either way: the page is
+readable and exposes no status code. What is affected is machine consumers —
+a crawler would keep a suspended artist's URL indexed.
+
+Recorded rather than quietly shipped. Revisit at #39, which owns user-facing
+failure handling across all three portals; the fix is either dropping the
+Suspense boundary on this route or resolving the artist in `generateMetadata`,
+which runs before streaming begins.
+
+### Removed
+
+`app/backend-status.tsx`, the #3 bootstrap probe that called `/health` from the
+browser. It existed to prove the cross-origin path before any real page did.
+The grid now exercises the same path with real data, so the probe is redundant.
