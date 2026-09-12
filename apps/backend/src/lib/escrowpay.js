@@ -37,6 +37,17 @@ const RETRY_BASE_DELAY_MS = 400;
 /** Webhook signature tolerance, per the provider's guide. */
 const SIGNATURE_TOLERANCE_SECONDS = 300;
 
+/**
+ * The provider's transaction range — ₦20,000 to ₦3,000,000, in kobo.
+ *
+ * A hard constraint, not product policy: a booking outside this range cannot be
+ * funded at all. Exported here because it is a provider fact, and enforced at
+ * artist rate level (#11) rather than at checkout so the artist finds out when
+ * setting their rate rather than the client at the point of payment.
+ */
+const MIN_TRANSACTION_KOBO = 2000000;
+const MAX_TRANSACTION_KOBO = 300000000;
+
 function config() {
   const apiKey = process.env.ESCROWPAY_API_KEY;
   if (!apiKey) {
@@ -455,4 +466,6 @@ module.exports = {
   DEFAULT_BASE_URL,
   DEFAULT_TIMEOUT_MS,
   SIGNATURE_TOLERANCE_SECONDS,
+  MIN_TRANSACTION_KOBO,
+  MAX_TRANSACTION_KOBO,
 };
