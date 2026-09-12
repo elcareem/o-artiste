@@ -1731,3 +1731,168 @@ code has to land first.
 Corollary already recorded above: a green `/health` proves something is serving,
 not that the current commit deployed. From here, deploy verification checks the
 **commit SHA** and exercises a route that touches a real dependency.
+
+---
+
+## #17 — feat(backend): EscrowPay API client
+
+Branch `feat/17-escrowpay-client`. Verified 2026-09-12 against the live test book.
+
+```
+$ npm run test:backend
+# tests 81  # pass 81  # fail 0  # skipped 0
+```
+
+Built against the contract in `docs/provider/ESCROWPAY-API-MAP.md`, which was
+established from the provider's own OpenAPI document rather than the marketing
+page — the four `/v1/escrows` calls the issue describes do not exist.
+
+### `[x]` Each method verified against the EscrowPay sandbox
+
+11 integration tests, all against the real API:
+
+| Method | Endpoint | Verified |
+|---|---|---|
+| `credentialContext` | `GET /credential-context` | returns `environment: "test"` |
+| `health` | `GET /health` | |
+| `onboardParty` | `POST /parties/onboard` | identity verified, party active, identifier masked |
+| `createPayoutAccount` | `POST /payout-accounts` | `status: verified`, account masked |
+| `listBanks` | `GET /banks` | |
+| `createEscrow` | `POST /transactions` | draft created with our policies |
+| `getEscrow` | `GET /transactions/{id}` | |
+| `release` | `POST /transactions/{id}/releases` | rejects cleanly on an unfunded escrow |
+| `refund` | `POST /transactions/{id}/refunds` | rejects cleanly on an unfunded escrow |
+| `estimateFees` | `POST /fees/estimates` | |
+
+**The suite refuses to run against a non-test key.** Every call creates real
+records; on a live book those would be real money. `isTestKey()` gates it and
+the module throws rather than skipping quietly, so a misconfiguration is loud.
+
+The created transaction was asserted field by field, because the defaults are
+where the risk lives:
+
+```
+status              draft          activation is a separate step
+amount_minor        20000000       kobo passes through unconverted
+release_policy      manual_only    nothing releases unless we instruct it
+refund_policy       manual_only
+payout_preference   manual         never the default retain_in_wallet
+payout_account_id   PAC_…          set explicitly
+automatic_release_at   null        release timing is ours alone
+marketplace_commission_bps  null   commission is computed and ledgered by us
+```
+
+The last two assert **absence**. They are the §5 and §6 decisions expressed as
+tests, so a later change that starts delegating release timing or commission to
+the provider fails here rather than being noticed in a reconciliation.
+
+### `[x]` A repeated create with the same reference does not produce a duplicate
+
+```
+createEscrow({ reference: R, … })  → TXN_abc
+createEscrow({ reference: R, … })  → TXN_abc   (same id)
+```
+
+The provider requires an `Idempotency-Key` header on every money-moving call and
+we pass our self-generated `escrowReference` — never a random value, which on a
+retry would defeat the entire mechanism. This is why the reference is ours
+rather than the provider's (`docs/03` §3).
+
+### `[x]` Signature verification rejects a tampered payload and accepts a valid one
+
+11 unit tests, no network:
+
+- A valid signature over the exact raw bytes is accepted
+- **A tampered payload is rejected** — one byte changed, `TXN_123` → `TXN_999`,
+  the field an attacker would most want to alter
+- A signature made with the wrong secret is rejected
+- **A replay outside the 300-second window is rejected**, while the signature
+  itself is still cryptographically valid — a replay guard, not a correctness
+  check. Just inside the window is accepted, so it is not simply refusing
+  everything
+- **A future timestamp is rejected too**, so clock skew forward is not a bypass
+- **The previous secret is accepted during rotation.** The provider honours
+  either for 24 hours; verifying against one would make every rotation an outage
+- Malformed, missing and partial headers return a reason rather than throwing
+- **A `v1` of the wrong length is rejected without throwing** — `timingSafeEqual`
+  throws on a length mismatch, so a naive implementation turns a forged
+  signature into a 500
+- Comparison is constant-time
+
+**The test that matters most:**
+
+```js
+// Exactly what express.json() would hand a handler: same data, different bytes.
+const reserialised = Buffer.from(JSON.stringify(JSON.parse(RAW.toString())));
+→ valid: false
+```
+
+This proves parsing and re-serialising breaks verification, which is what the
+provider's guide warns about and what #2's raw-body exception exists to prevent.
+The two issues now verify each other.
+
+### `[x]` Request timeout is set below the host's request timeout
+
+**15 seconds**, configurable via `ESCROWPAY_TIMEOUT_MS`.
+
+#2 could not establish Render's figure — they publish none and community reports
+range from 15s to 100s. 15s sits under the lowest, so the criterion is satisfied
+**by construction rather than by measurement**. A REST call to create or release
+an escrow has no business taking longer, and if it does, our timeout firing first
+is the outcome we want because the idempotency key makes the retry safe.
+
+Retries: network faults and 5xx only, twice, with exponential backoff. A 4xx is
+our mistake and is never retried.
+
+### `[x]` Provider errors carry diagnostics without leaking credentials
+
+The provider uses two error shapes — `{"detail":{"code","message"}}` and
+FastAPI's `{"detail":[{loc,msg}]}` — and neither matches ours, so the client
+translates rather than passes through (`docs/02` §2).
+
+The user-facing message stays generic; the provider's own wording, status,
+code and `request_id` are attached to the error and logged:
+
+```
+[escrowpay] POST /payout-accounts → 409 payout_account_exists
+            This bank account is already registered in this environment.
+            (request_id 3c52c810-…)
+```
+
+Asserted that a serialised error never contains the API key. The key travels in
+a header and axios does not include headers in error messages.
+
+### Out of scope, per the issue
+
+No business logic, no ledger writes, no state transitions. The module talks to
+the provider and nothing else — which is what makes #26's rule enforceable: that
+only `escrowService.js` may decide to release or refund is meaningless if this
+client also decides *when*.
+
+### Findings for later issues
+
+**Identities are unique per environment.** Re-onboarding the same NIN returns
+`409 identity_already_exists`. This is the provider enforcing #10's *"a returning
+user is never re-charged or re-checked"* — but #10 must treat that 409 as
+**success plus a lookup**, not a failure, or a returning user is locked out.
+
+**Bank accounts are unique per environment too** — `409 payout_account_exists`.
+#11 must handle an artist re-submitting the same account.
+
+**The fee estimate confirms the published schedule.** For ₦200,000:
+
+```json
+{"amount_minor":200000,"currency":"NGN","fee_type":"escrow_service",
+ "payer":"payer","timing":"at_funding","transaction_amount_minor":20000000}
+```
+
+200,000 kobo = **₦2,000**, exactly the documented cap. It also reveals
+`payer` and `timing: at_funding` — who bears it and when — which #14 should read
+rather than assume.
+
+### Deviation from the plan
+
+`ESCROWPAY_AMOUNT_UNIT` was planned as a configurable conversion point while the
+unit was unknown. It is **not built**: `amount_minor` is already kobo, so kobo
+passes through untouched and a conversion layer would be a place for a bug to
+live with nothing to gain.
