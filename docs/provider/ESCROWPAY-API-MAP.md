@@ -217,3 +217,132 @@ forged ones. The provider's "Webhooks guide" page covers it and needs reading.
 
 Endpoint registration is dashboard-only — `POST /webhook-endpoints` exists in
 the API but the docs say webhook CRUD is not in the public OpenAPI.
+
+---
+
+# Decisions taken, and what the sandbox proved
+
+All three §5–§7 questions were settled by the maintainer and then **verified
+against the live test book** rather than left as reasoning.
+
+## §5 — Auto-release: ours only. Theirs left unset.
+
+**Decided: one source of truth.**
+
+I had suggested setting their timer as a backstop alongside our job. That was
+wrong, and the maintainer was right to reject it: two mechanisms that can each
+move money means that when funds release you must first work out *which* fired,
+and the ledger has to account for both. For money movement there is exactly one
+mechanism.
+
+Ours stays because the condition must be evaluated **at fire time** — auto-release
+is only valid where a `CheckIn` exists and no dispute is open, and their timer
+would decide on what was true when the date was set. `automatic_release_at` is
+never sent.
+
+`release_policy: "manual_only"` enforces the same thing provider-side: nothing
+releases unless we instruct it.
+
+## §6 — Commission: ours. Their fee endpoints: theirs.
+
+`marketplace_commission_bps` is not sent. Two reasons, one of which I initially
+got wrong:
+
+- **Not the snapshot argument.** We would pass the snapshotted rate at creation,
+  the same moment we snapshot it, so versioning is not violated. I withdrew that.
+- **Outcome-dependent splits.** Commission is fixed at creation, but our share
+  differs by outcome: a completed booking pays the artist `amount − commission −
+  fees`; a client cancellation 3–6 days out pays them 30% with commission on
+  *that*; an artist cancellation pays them nothing and accrues a `FeeLiability`.
+  One creation-time percentage cannot express that, so we would override it on
+  every path but the happy one.
+- **Rounding parity.** `docs/01` §5 requires a booking's ledger to sum to exactly
+  zero, and #19 asserts it. If their rounding differs from ours by a single kobo
+  the test fails and we are reverse-engineering their arithmetic.
+
+**But their fee numbers are read, not predicted.** `POST /fees/estimates` and
+`GET /transactions/{id}/fees` return what they will actually charge; the
+transaction record carries `fee_estimate`, `assessed_fees` and `fee_snapshots`.
+#14 currently hardcodes the published schedule — reading actuals is strictly
+better and removes a class of drift.
+
+## §7 — Payout: `automatic` is DISABLED on this account
+
+The decision was *"straight to the artist if the wallet violates the rule; use
+the wallet for testing if direct is not allowed."* Direct **is not allowed**:
+
+```
+POST /transactions  payout_preference=automatic
+→ {"detail":{"code":"policy_violation","message":"automatic_payout_disabled"}}
+```
+
+Verified outcomes:
+
+| `payout_preference` | Result |
+|---|---|
+| `automatic` | **rejected** — `automatic_payout_disabled` |
+| `manual` + `payout_account_id` | accepted |
+| `retain_in_wallet` | accepted |
+| `inherit_business_default` | accepted |
+
+**Using `manual` with an explicit `payout_account_id` for now.** Funds still land
+in our wallet on release, but the payout is ours to issue immediately afterwards
+rather than left sitting at a default. It is the closest available position to
+the rule.
+
+**This does not satisfy `docs/00` §3** — the platform still briefly holds client
+money. Escalations required before launch, added to #41:
+
+1. Ask EscrowPay to **enable automatic payout** on this business, so release goes
+   straight to the artist's account with no wallet leg.
+2. If it cannot be enabled, get **written confirmation of what the wallet balance
+   legally is** — whose funds, under whose licence — because that is the
+   difference between needing a money-transmitter licence and not. Their own FAQ
+   already disclaims it: *"Does this cover our own regulatory position? No."*
+
+Accepted for testing, explicitly, not silently.
+
+## Verified sandbox flow
+
+Every step below was run against the live test book:
+
+```
+POST /parties/onboard   {type:"nin", identifier:"12345678902",
+                         email:…, consent:true}
+  → PAR_715e…  payout_eligible:true  has_verified_payout_account:false
+
+POST /parties/onboard   (identifier 12345678904)        → PAR_f443…
+
+GET  /banks             → 7 simulator banks; "999" is the test wallet
+                          funding destination
+
+POST /payout-accounts   {owner_type:"party", owner_id:PAR_f443…,
+                         bank_code:"000013", account_number:"0123456789"}
+  → PAC_c940…  status:"verified"  masked_account_number:"******6789"
+                resolved_account_name:"SIMULATED ACCOUNT 6789"
+
+POST /transactions      {type:"standard", amount_minor:20000000,
+                         currency:"NGN", funding_mode:"exact",
+                         payer/beneficiary party_id, release_policy:"manual_only",
+                         refund_policy:"manual_only", payout_preference:"manual",
+                         payout_account_id:PAC_c940…, external_reference:…}
+  → TXN_3cd6…  status:"draft"
+```
+
+Two things this establishes for #17 and #18:
+
+**Transactions are created as `draft` and must be activated.**
+`POST /transactions/{id}/activate` is a separate call, which means booking
+creation and escrow activation are distinct steps — useful, because #16 requires
+the cancellation terms to be acknowledged *before* a booking can be funded. The
+draft can exist while acknowledgement is pending.
+
+**Payout accounts auto-verify in test and mask the account number**, the same
+posture as identities. An artist needs one before any release can land, which
+makes it part of #11's profile completeness rather than an afterthought at
+payout time.
+
+**Optimistic concurrency throughout.** Every mutating call takes a `version`,
+and the transaction carries `funded_minor`, `released_minor`, `refunded_minor`
+and `next_actions` — so partial states are first-class and our state machine can
+reconcile against theirs rather than assume.
