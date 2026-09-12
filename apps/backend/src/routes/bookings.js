@@ -9,6 +9,11 @@ const { AppError } = require('../lib/errors');
 const { requireAuth, requireRole, requireVerified } = require('../middleware/auth');
 const { createBooking } = require('../services/bookingService');
 const { computeCompletion } = require('../services/feeService');
+const {
+  getTermsForBooking,
+  acknowledgeTerms,
+  assertAcknowledged,
+} = require('../services/acknowledgementService');
 
 const router = express.Router();
 
@@ -126,6 +131,105 @@ router.get('/bookings/:id/payout-preview', requireAuth, async (req, res, next) =
     });
 
     res.json({ payout: breakdown });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /bookings/:id/terms
+ *
+ * The cancellation table this booking is governed by, in full, read from its
+ * own snapshot. Rendered at checkout as a distinct step — not a link, and not
+ * buried in general terms (docs/05 §8).
+ */
+router.get('/bookings/:id/terms', requireAuth, requireRole('CLIENT'), async (req, res, next) => {
+  try {
+    const terms = await getTermsForBooking({
+      bookingId: req.params.id,
+      clientUserId: req.user.id,
+    });
+    res.json({ terms });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /bookings/:id/terms/acknowledge
+ *
+ * Records the acknowledgement. The client sends back the tiers as displayed to
+ * them, which are checked against the snapshot — that is what makes the record
+ * evidence rather than an assertion.
+ */
+router.post(
+  '/bookings/:id/terms/acknowledge',
+  requireAuth,
+  requireRole('CLIENT'),
+  async (req, res, next) => {
+    try {
+      const { acknowledged, tiersAsDisplayed } = req.body ?? {};
+
+      const record = await acknowledgeTerms({
+        bookingId: req.params.id,
+        clientUserId: req.user.id,
+        acknowledged,
+        tiersAsDisplayed,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent'),
+      });
+
+      res.status(201).json({
+        acknowledgement: {
+          bookingId: record.bookingId,
+          acknowledgedAt: record.acknowledgedAt,
+          tiersAsDisplayed: record.tiersAsDisplayed,
+          commissionRateBpsAsDisplayed: record.commissionRateBpsAsDisplayed,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /bookings/:id/funding
+ *
+ * Returns the bank transfer instruction. #18 replaces the body of this with a
+ * real escrow creation; what matters here is the GATE.
+ *
+ * A booking cannot proceed to funding without a recorded acknowledgement, and
+ * the check lives at the endpoint — so calling this directly, without visiting
+ * the checkout step, fails exactly as it would through the UI.
+ */
+router.post('/bookings/:id/funding', requireAuth, requireRole('CLIENT'), async (req, res, next) => {
+  try {
+    const booking = await prisma.booking.findUnique({
+      where: { id: req.params.id },
+      include: { client: true },
+    });
+    if (!booking || booking.client.userId !== req.user.id) {
+      throw new AppError(404, 'Booking not found.');
+    }
+
+    // The gate. Server-side, at the endpoint — hiding the button in the UI is
+    // a courtesy to the honest user, not a control.
+    await assertAcknowledged(booking.id);
+
+    if (booking.state !== 'PENDING_PAYMENT') {
+      throw new AppError(409, 'This booking has already been paid for.');
+    }
+
+    // Placeholder until #18 creates the escrow and returns real instructions.
+    res.json({
+      funding: {
+        bookingId: booking.id,
+        escrowReference: booking.escrowReference,
+        amountKobo: booking.amountKobo,
+        status: 'AWAITING_ESCROW_CREATION',
+      },
+    });
   } catch (err) {
     next(err);
   }

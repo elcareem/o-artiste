@@ -2767,3 +2767,120 @@ Confirmed with **12 consecutive clean runs** of the deterministic suite.
 | #10 — an unverified artist cannot accept a booking | #18, where acceptance exists. |
 
 Both are correctly open rather than overlooked.
+
+---
+
+## #16 — feat: cancellation policy acknowledgement
+
+Branch `feat/16-terms-acknowledgement`. Verified 2026-09-12.
+
+```
+$ npm run test:backend          (five consecutive runs)
+# tests 134  # pass 134  # fail 0
+```
+
+A compliance obligation, not a UX preference. Nigeria's FCCPA gives consumers a
+right to a refund where a service is not rendered per agreed terms, and there is
+public precedent of Nigerian venue cancellation deductions escalating into
+disputes specifically on the grounds that terms were not clearly disclosed.
+**A deduction we cannot prove was disclosed is a deduction we may not be able to
+defend** — so what this issue produces is evidence.
+
+### `[x]` Attempting to fund a booking with no acknowledgement returns 409
+
+```
+$ curl -X POST /bookings/:id/funding
+{"error":"Accept the cancellation terms before paying for this booking."}  409
+```
+
+409 rather than 403: nothing is forbidden, a required step simply has not
+happened yet. The message names the missing step.
+
+### `[x]` The checkout step cannot be skipped by calling the funding endpoint directly
+
+The guard is `assertAcknowledged` **at the endpoint**, so a request that never
+visited the checkout step fails exactly as it would through the UI. Verified
+live in sequence:
+
+```
+1. POST /bookings/:id/funding            → 409
+2. GET  /bookings/:id/terms              → 4 bands, acknowledged: false
+3. POST /bookings/:id/terms/acknowledge  → 201
+4. POST /bookings/:id/funding            → 200
+```
+
+Hiding the button in the UI is a courtesy to the honest user, not a control
+(`docs/07` §2).
+
+### `[x]` The persisted row contains literal tier percentages, not a foreign key
+
+Asserted that the stored value contains no `versionId`, no `setByUserId` and no
+`effectiveFrom`, and that each band carries exactly the four percentage fields.
+The day-0 band reads `1500` as a literal, readable years later without joining
+any other table.
+
+**Proven by outliving the configuration.** The test acknowledges, then replaces
+the entire live tier table with a two-band set whose day-0 refund is `0` bps,
+then re-reads the acknowledgement: still four bands, still `1500`. That is the
+difference between a pointer and a copy — a pointer requires reconstructing what
+the client saw; a copy **is** what they saw.
+
+### `[x]` The acknowledgement is visible for dispute defence
+
+Retrievable by booking id with the client id and timestamp, for #37's admin
+booking detail.
+
+### Acknowledgement must be an active act
+
+`acknowledged` must be **explicitly `true`**. `false`, `undefined`, `null`,
+`"true"`, `1` and `{}` are all refused with 400, and no row is written. A
+pre-ticked box or a passive T&C acceptance does not satisfy the disclosure
+requirement, and a string `"true"` arriving from a form must not be treated as
+consent.
+
+### The client must send back what they were shown
+
+The request carries `tiersAsDisplayed`, compared against the booking's snapshot.
+That is not ceremony — it is what makes the record evidence rather than an
+assertion.
+
+A tampered table (day-0 refund raised from 1500 to 9000 bps) is **refused with
+409** and nothing is written. Recording it would have made the evidence a lie.
+
+Comparison is order-insensitive: the same table reversed, with keys written in a
+different order — what a JSON round trip through a form produces — is accepted,
+and stored normalised ascending by band so it reads the same way every time. A
+genuine difference in any percentage or day range still fails.
+
+### Additional behaviour
+
+**Idempotent.** Acknowledging twice returns the original record rather than
+erroring or creating a second row — a client who double-taps has not done
+anything wrong.
+
+**Scoped to the booking's own client.** A different client gets 404, and an
+artist gets 403: acknowledgement is the client's act, and confirming a booking
+exists is itself information.
+
+**Only while `PENDING_PAYMENT`.** A booking past that point can no longer have
+its terms acknowledged.
+
+### Three test failures, one cause
+
+Tests 7, 10 and 11 failed on first run with the booking's snapshot holding two
+bands instead of four. The cause was within-file: the case that proves an
+acknowledgement outlives a configuration change *replaces the live tier table*,
+and every scenario created afterwards then snapshotted that replacement.
+
+Fixed at the fixture rather than by reordering tests: each scenario now seeds
+its configuration as of **now**, so it wins over anything an earlier case
+installed, and the reordering test compares against the **booking's own
+snapshot** rather than a module constant. Ordering-dependent tests pass for
+reasons that evaporate the moment someone adds a case.
+
+### Note for #18
+
+`POST /bookings/:id/funding` currently returns a placeholder
+(`AWAITING_ESCROW_CREATION`). #18 replaces the body with real escrow creation
+and bank transfer instructions. **The gate it sits behind is complete** and
+should not need revisiting.
