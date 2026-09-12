@@ -254,6 +254,30 @@ The amount unit is the one that must not be guessed. The provider's public examp
 
 **Gates:** #17 — "Each method verified against the EscrowPay sandbox". #10 — verification flow.
 
+### Webhook endpoint registration — #20
+
+- [ ] Register **exactly one** URL with EscrowPay:
+      `https://o-artiste-api.onrender.com/webhooks/escrowpay`
+- [ ] Copy the signing secret shown at registration into
+      `ESCROWPAY_WEBHOOK_SECRET` on the **backend** service
+- [ ] Confirm the deployed worker is running the `webhooks` queue — the retry
+      path is inert without it, and a failed delivery then sits `FAILED` with
+      nothing to pick it up
+
+**Registration is dashboard-only**; `POST /webhook-endpoints` exists in the API
+but the provider keeps webhook CRUD outside the public surface.
+
+**Only one URL, ever.** A webhook reaching a second deployment — a preview
+environment, an old service, a staging host — is a second process acting on the
+same money movement. This is the reason the backend is never deployed to Vercel
+alongside the web app.
+
+**Rotating the secret:** set the outgoing value as
+`ESCROWPAY_WEBHOOK_SECRET_PREVIOUS` and the new one as
+`ESCROWPAY_WEBHOOK_SECRET` **before** rotating at the provider. Verification
+tries both, which is what makes the provider's 24-hour overlap a rotation rather
+than an outage. Remove the previous value after the overlap closes.
+
 ---
 
 ## #38 — Notifications
@@ -294,6 +318,7 @@ Maintained alongside `apps/backend/.env.example`.
 | `ESCROWPAY_BASE_URL` | provider client | #17 |
 | `ESCROWPAY_API_KEY` | provider client | #17 |
 | `ESCROWPAY_WEBHOOK_SECRET` | webhook verification | #17 |
+| `ESCROWPAY_WEBHOOK_SECRET_PREVIOUS` | webhook verification during rotation | #20 — optional, set only for the 24h overlap |
 | `ESCROWPAY_AMOUNT_UNIT` | provider client | `kobo` or `naira` — open item `docs/00` §11.8 |
 | `ESCROWPAY_TIMEOUT_MS` | provider client | below the host timeout recorded at #2 |
 | `AUTO_RELEASE_GRACE_HOURS` | auto-release job | open item `docs/00` §11.5 |

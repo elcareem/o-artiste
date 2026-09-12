@@ -101,6 +101,28 @@ else
   fi
 fi
 
+# ── Raw webhook body — docs/03 §6, issues #2 and #20 ────────────────────────
+# Signature verification runs against the exact bytes received. express.json()
+# anywhere on the /webhooks path parses and re-serialises them, and every
+# signature then fails — a failure that looks like a provider fault rather than
+# ours. #20 asks explicitly that the exception configured at #2 be verified to
+# have survived later middleware changes; this is that verification, mechanised.
+SRC="apps/backend/src"
+if [ ! -d "$SRC" ]; then
+  skip "express.json() is confined to lib/bodyParsers.js" "$SRC not present yet"
+else
+  hits="$(grep -rnE 'express\.json\s*\(' "$SRC" 2>/dev/null \
+          | grep -vE 'lib/bodyParsers\.js' \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
+  if [ -z "$hits" ]; then
+    pass "express.json() is confined to lib/bodyParsers.js"
+  else
+    fail "express.json() is confined to lib/bodyParsers.js" \
+         "Body parsing is decided in one place so the /webhooks raw-body exception cannot be broken by a mount elsewhere. docs/03-ESCROW-FLOW.md §6." \
+         "$hits"
+  fi
+fi
+
 # ── Single money-moving module — docs/03 §5, issue #26 ──────────────────────
 SRC="apps/backend/src"
 if [ ! -d "$SRC" ]; then

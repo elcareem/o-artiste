@@ -3160,3 +3160,185 @@ fee reimbursement unpaired by ₦1       → 3 tests fail
 cancellation) and #28 (artist cancellation) — the dependency direction the
 backlog specifies. The tests drive each recorder directly inside a transaction,
 which is exactly how those issues will call them.
+
+---
+
+## #20 — feat(backend): webhook handler with idempotency
+
+Branch `feat/20-webhook-handler`. Verified 2026-09-12.
+
+```
+$ npm run test:backend
+# tests 177  # pass 177  # fail 0        (19 new)
+
+$ npm run check:rules
+passed 8   failed 0   skipped 0          (1 new rule)
+```
+
+`POST /webhooks/escrowpay`, `services/webhookService.js`,
+`jobs/webhookRetryJob.js`, registered on the worker's `webhooks` queue.
+
+### The event names in the issue do not exist
+
+#20 specifies handling `escrow.funded`, `escrow.released`, `escrow.refunded` and
+`escrow.disputed`. **None of those are real event names** — they came from the
+provider's marketing page. The real enumeration was read off the provider's
+webhooks guide at #17 and recorded in `docs/provider/ESCROWPAY-API-MAP.md` §2.
+
+A handler written against the issue's names would have acknowledged **every
+genuine delivery** as an unknown type, returned 200, and funded nothing. The
+tests assert explicitly that all four are absent from the handled set.
+
+`docs/03` §6 carried the same four names and has been corrected.
+
+The handled set is asserted **against the doc's own table, parsed at test time**,
+rather than against a number typed into the test — so the contract record and
+the handler provably cannot drift.
+
+### `[x]` Replaying an identical webhook payload produces no duplicate state change and no duplicate ledger entry
+
+```
+3 identical deliveries → 200, 200 (duplicate), 200 (duplicate)
+booking                 FUNDED_HELD
+ledger                  2 entries, sum -20,000,000 kobo
+WebhookEvent rows       1
+```
+
+**The claim is an atomic INSERT on a unique column, not a read-then-write.**
+Tested with **five concurrent deliveries fired together** — which is exactly what
+a provider retrying a slow response produces. Four are told `duplicate`, one
+funding pair is written. A `findUnique`-then-`create` check would let several
+through, and every one of them would write a ledger entry.
+
+### `[x]` A tampered payload is rejected with 401 and leaves no `WebhookEvent` row
+
+```
+same signature, one byte changed → 401, 0 rows, booking unchanged, 0 ledger entries
+```
+
+Five ways of failing verification are covered — no header, malformed header,
+wrong secret, timestamp an hour stale, timestamp an hour in the future — and
+none writes anything. **A rejected payload must leave no row**, because
+recording unverified events would let anyone who can reach the endpoint
+pre-poison the idempotency table with event ids that would then be ignored when
+they legitimately arrived.
+
+**The rejection reason never reaches the response.** It is logged; the caller
+gets `Invalid signature.` Telling them whether the signature was malformed,
+stale or simply wrong helps them iterate towards a valid forgery. Asserted.
+
+**Rotation is tested:** a body signed with `ESCROWPAY_WEBHOOK_SECRET_PREVIOUS`
+is accepted. The provider's overlap is 24 hours, and rejecting the old secret
+would make every rotation an outage.
+
+### `[x]` A handler that throws mid-processing results in a queued retry, not a lost event
+
+Proven end to end through **real Redis and a real BullMQ worker**, not a stub:
+
+```
+1. delivery while provider is down  → 200 retry_queued
+2. jobs in Redis queue "webhooks"   → 1 (WHEV_e2e_…)
+3. event row                        → FAILED, attempts 1, "provider unreachable"
+   booking                          → PENDING_PAYMENT
+4. after the worker ran             → event PROCESSED
+   booking                          → FUNDED_HELD
+   ledger entries                   → 2, sum -20000000 kobo
+```
+
+**200 on failure, deliberately.** Once the event id is in our table, retrying is
+our job. A non-2xx makes the provider redeliver on top of our own retry, putting
+two workers on one event.
+
+The retry replays the **stored bytes**, so it processes exactly what the
+provider sent rather than a reconstruction. A retry that still fails **throws**,
+so BullMQ backs off and eventually dead-letters it — returning quietly would
+mark the job complete with the event unprocessed. Asserted, along with the
+attempt counter incrementing.
+
+### `[x]` An unknown event type returns 200 rather than causing provider-side retries
+
+A non-2xx tells the provider to retry, and retrying an event we will never
+understand produces nothing but noise.
+
+**Two distinct outcomes are kept, not collapsed into one:** an event outside the
+provider's documented set is recorded as `unknown event type` — the contract has
+moved and someone should look — while a documented event with nothing for us to
+do is recorded as a routine no-op. Every documented event is driven through the
+endpoint and asserted to be `PROCESSED` and *not* marked unknown.
+
+### Ordering, and why each step sits where it does
+
+```
+1. Read the RAW body
+2. Verify against those bytes    → invalid: 401, write nothing, stop
+3. CLAIM the event id            → already claimed: 200, stop
+4. Only now: process
+5. Mark processed
+```
+
+**Handlers are individually idempotent as well.** The event-id claim blocks
+duplicate *deliveries*, but the retry job re-runs an event whose first attempt
+may have committed its state change and then failed to mark the event processed.
+The claim does not cover that. Tested: a second `transaction.cancelled` under a
+new event id finds the booking already `CANCELLED` and records
+`already cancelled` rather than throwing on an illegal transition.
+
+### The webhook is a signal to reconcile, not the source of truth
+
+The provider's guide directs confirming with `GET /transactions/{id}` after a
+payment event, and `transaction.funded` does exactly that before writing
+anything. Two consequences, both tested:
+
+- A provider reporting `funded` while `funded_minor` falls short of the booking
+  amount is a **failure to retry, not a payment**. `funding_mode: "exact"` should
+  prevent it, but trusting that and being wrong means an artist performs for
+  money that never arrived.
+- `transaction.partially_funded` is **handled and does not fund the booking**. A
+  client who underpaid has not paid; the booking stays in `PENDING_PAYMENT`.
+
+**`release.completed` and `refund.completed` are confirmations, never
+instructions.** A release we did not instruct is recorded as a mismatch needing
+reconciliation, not applied — a webhook cannot release a booking nobody
+released. Tested.
+
+**The failure events are handled.** `release.failed`, `refund.failed` and
+`payout.failed` mean money did not move; a handler listening only for the happy
+events would leave a booking marked `RELEASED` with nothing delivered.
+
+**`payout.completed` does not advance the booking.** It means the artist's bank
+has the money, which under `payout_preference: manual` is a different moment
+from funds leaving escrow. `RELEASED` already describes our side.
+
+### `[x]` The raw-body exception survived — verified, not assumed
+
+#20's technical note asks that #2's raw-body exception be checked against later
+middleware changes. Done two ways:
+
+1. **A test signs a body with irregular whitespace, tabs and a non-ASCII field**
+   (`"Adé — ₦200,000"`) and posts it over real HTTP through the full middleware
+   stack. A 200 *is* the proof the bytes were untouched — any
+   parse-and-re-serialise anywhere on the path changes them and the signature
+   stops matching. The stored `rawBody` is asserted byte-identical.
+
+2. **A new `check:rules` rule confines `express.json()` to `lib/bodyParsers.js`.**
+   Verified by adding `app.use(express.json())` to `app.js` and watching the rule
+   fire. Without this, a single innocuous-looking mount breaks every signature,
+   and the failure looks like a provider fault rather than ours.
+
+The route also refuses to proceed if `req.body` is not a Buffer, rather than
+verifying whatever it was handed.
+
+### A discrepancy in the provider contract, recorded rather than papered over
+
+The webhooks guide's prose says **36 event types** while the enumeration beside
+it lists **37**. There is no way to tell from here which half is wrong, so both
+are recorded in `docs/provider/ESCROWPAY-API-MAP.md` §2 and the **enumeration
+governs**. The miscount is not load-bearing: an event outside the set is
+acknowledged with 200 and logged, so a missing row costs a log line rather than a
+delivery.
+
+### Authentication
+
+The endpoint takes **no bearer token** — the signature is the authentication, and
+it is stronger here because it also covers the body. Asserted with a junk
+`Authorization` header, which changes nothing either way.

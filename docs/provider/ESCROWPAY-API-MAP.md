@@ -426,7 +426,16 @@ state, then write.
 ## §2 — CORRECTION: the event names in #20 do not exist
 
 #20 specifies handling `escrow.funded`, `escrow.released`, `escrow.refunded` and
-`escrow.disputed`. **None of those are real.** The closed set is 36 events:
+`escrow.disputed`. **None of those are real.** The closed set is the table
+below.
+
+> **The guide's prose says "36 event types" while the enumeration it sits beside
+> lists 37.** Recorded rather than silently reconciled, because there is no way
+> to tell from here which half is wrong. **The enumeration governs** — #20's
+> handler asserts its set against this table, so the two provably cannot drift.
+> The miscount is not load-bearing either way: an event outside the set is
+> acknowledged with 200 and logged, so a missing row costs a log line, not a
+> delivery.
 
 | Group | Events |
 |---|---|
