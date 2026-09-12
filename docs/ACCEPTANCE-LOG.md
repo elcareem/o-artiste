@@ -1059,3 +1059,120 @@ The assertions are now **scoped to the seeded rows** (by known email, commission
 rate id, and tier version id). That is the correct scope regardless: a seed test
 should measure what the seed writes, not what its neighbours happen to be doing.
 A test that fails because another test did its job is a test that gets deleted.
+
+---
+
+## #7 — feat(backend): versioned commission rate configuration
+
+Branch `feat/7-commission-config`. Verified 2026-09-12.
+
+```
+$ npm run test:backend
+# tests 38  # pass 38  # fail 0  # skipped 0
+```
+
+### `[x]` A non-super-admin token receives 403 from the endpoint
+
+```
+$ curl -X PUT /admin/config/commission -H "Authorization: Bearer <ADMIN>" \
+       -d '{"rateBasisPoints":700,"reason":"admin attempt"}'
+{"error":"You do not have permission to do that."}  http=403
+```
+
+Asserted for `CLIENT`, `ARTIST` and `ADMIN`, plus `401` with no token — and
+`201` for `SUPER_ADMIN`, so the guard is a real discrimination rather than a
+blanket refusal.
+
+**`ADMIN` can read the rate but cannot change it.** Reading what the take is
+does not carry the risk that changing it does: an admin resolving a dispute
+affects one booking, this affects every booking created afterwards
+(`docs/07` §1).
+
+This replaces the `/admin/config/ping` placeholder from #9 — that endpoint is
+now deleted, and #9's role-matrix assertions point at the real route.
+
+### `[x]` Changing the rate leaves the prior record intact and queryable
+
+```
+$ curl PUT .../commission  -d '{"rateBasisPoints":700,...}'   → 201
+
+$ curl GET .../commission
+700 bps from 2026-09-12T04:51:02.449Z
+500 bps from 2026-01-01T00:00:00.000Z
+```
+
+A change writes a **new record** with a new id. The test reads the original row
+back by id afterwards and asserts it still reads `500`, not `700` — proving it
+was neither updated nor deleted.
+
+### `[x]` The resolver returns the correct historical rate for a past timestamp
+
+The canonical scenario from the issue — set 5%, change to 7%, query yesterday,
+get 5% — plus the boundary either side of it:
+
+| Query moment | Rate |
+|---|---|
+| day before the change | **500** |
+| exactly at `effectiveFrom` | **700** (inclusive) |
+| 1 ms before `effectiveFrom` | **500** |
+| day after the change | **700** |
+
+**A future-dated rate is scheduled, not active.** A rate set to take effect in
+30 days does not alter what today resolves to, and does take effect once its
+time comes. Both directions asserted.
+
+Ties on `effectiveFrom` break by `createdAt` descending, so two records sharing
+a moment resolve deterministically to the later-written one — the one an admin
+most recently intended.
+
+**With no record at all the resolver throws** rather than defaulting. A silent
+fallback to 5% would price real bookings off a number nobody configured, and the
+discrepancy would surface only in a ledger that will not reconcile.
+
+### `[x]` An audit row exists naming the actor for every change
+
+```
+COMMISSION_RATE_CHANGED by cmtxwqee80001pciztqt6sbf3 : 500 -> 700
+  reason: provider fees increased
+```
+
+Both sides of the change are recorded, so the trail reconstructs rather than
+merely noting that something happened.
+
+**The audit row and the rate record commit or fail together.** Asserted
+directly: calling the service with a non-existent `actorUserId` makes the audit
+insert violate its foreign key, and the rate record count is unchanged
+afterwards. A configuration change that cannot be attributed must not happen at
+all — which is why this uses `recordAudit` inside the transaction rather than
+the best-effort `recordAuditSafe` used for security events (`docs/07` §5).
+
+### `[x]` Rate is basis points, integer, never a float percentage
+
+Rejected with `400`: `5.5`, `"500"`, `-1`, `10001`, `null`, and omitted.
+Accepted: `0` and `10000`, the permitted extremes.
+
+Basis points are integers so that `0.05` can never enter a money calculation
+(`docs/00` §6).
+
+### Additional constraints applied
+
+**A written reason is mandatory** — `400` when absent or whitespace. A change to
+the platform's take without a recorded justification is indefensible later, and
+"later" means a regulator or an artist asking months afterwards.
+
+**Rates cannot be backdated** — `400` for an `effectiveFrom` in the past.
+Backdating would rewrite what the resolver reports for moments that have already
+passed, which is the audit trail changing its own history. Existing bookings are
+protected by their snapshots either way, so backdating buys nothing and costs
+reconstructability. Forward-dating is allowed and useful: it schedules a change.
+
+### Test contamination, second instance
+
+`before.rateBasisPoints` was asserted as a literal `500` and picked up a `700`
+written by an earlier test in the same file. The service behaviour was correct —
+`previous` should be the latest record globally, which is what it returned.
+
+The test now captures the current record immediately before the change and
+asserts `before` matches it. That tests the real guarantee without depending on
+isolation the shared database does not provide. Same lesson as #6: assert what
+the code guarantees, not what the table happens to contain.

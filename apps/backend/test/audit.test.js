@@ -86,8 +86,10 @@ describe('an authenticated user reaching above their level is recorded, naming t
     const c = creds('CLIENT');
     const { token, user } = await (await post(server, '/auth/register', c)).json();
 
-    const res = await fetch(`${server.url}/admin/config/ping`, {
-      headers: { Authorization: `Bearer ${token}` },
+    const res = await fetch(`${server.url}/admin/config/commission`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ rateBasisPoints: 700, reason: 'test' }),
     });
     assert.equal(res.status, 403);
 
@@ -98,7 +100,7 @@ describe('an authenticated user reaching above their level is recorded, naming t
     // more significant than the anonymous case.
     assert.equal(row.actorUserId, user.id);
     assert.equal(row.entityType, 'Endpoint');
-    assert.match(row.entityId, /GET \/admin\/config\/ping/);
+    assert.match(row.entityId, /PUT \/admin\/config\/commission/);
     assert.equal(row.after.held, 'CLIENT');
     assert.deepEqual(row.after.required, ['SUPER_ADMIN']);
   });
@@ -121,7 +123,7 @@ describe('a permitted request writes no denial row', async () => {
       await post(server, '/auth/login', { email: c.email, password: c.password })
     ).json();
 
-    const res = await fetch(`${server.url}/admin/config/ping`, {
+    const res = await fetch(`${server.url}/admin/config/commission`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(res.status, 200);
