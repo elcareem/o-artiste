@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const { createApp } = require('../src/app');
 const { startServer } = require('./helpers');
 const ack = require('../src/services/acknowledgementService');
+const escrowpay = require('../src/lib/escrowpay');
 const bookingService = require('../src/services/bookingService');
 const tierService = require('../src/services/cancellationTierService');
 
@@ -96,6 +97,46 @@ async function scenario() {
   return { admin, clientUser, artistUser, artist, booking };
 }
 
+/**
+ * Stubs the provider for the funding call.
+ *
+ * #16's tests are about the disclosure GATE, not about escrow creation — that
+ * is #18's, and it exercises the real calls. Before #18 the funding endpoint
+ * returned a placeholder, so this file needed no stub; once the endpoint became
+ * real it started reaching EscrowPay with fixture party ids the provider has
+ * never seen, and failed with 502.
+ *
+ * Stubbing keeps this file testing one thing, and keeps it deterministic.
+ */
+async function withStubbedProvider(fn) {
+  const originals = {
+    createEscrow: escrowpay.createEscrow,
+    activateEscrow: escrowpay.activateEscrow,
+    createCheckoutSession: escrowpay.createCheckoutSession,
+  };
+  const id = `TXN_stub_${uniq()}`;
+
+  escrowpay.createEscrow = async () => ({ id, status: 'draft', version: 1 });
+  escrowpay.activateEscrow = async () => ({ id, status: 'pending_funding', version: 2 });
+  escrowpay.createCheckoutSession = async () => ({
+    allowed_channels: ['bank_transfer'],
+    payment_instructions: {
+      account_number: '8881700000',
+      account_name: 'O-artist',
+      bank_code: '090175',
+      amount_minor: N(202000),
+      provider: 'rubies',
+      expires_at: new Date(Date.now() + 1800000).toISOString(),
+    },
+  });
+
+  try {
+    return await fn();
+  } finally {
+    Object.assign(escrowpay, originals);
+  }
+}
+
 async function withServer(fn) {
   const server = await startServer(createApp());
   try {
@@ -167,7 +208,11 @@ describe('the checkout step cannot be skipped by calling the funding endpoint di
     assert.equal(acked.status, 201);
 
     assert.equal(
-      (await call(server, 'POST', `/bookings/${booking.id}/funding`, {}, token)).status,
+      (
+        await withStubbedProvider(() =>
+          call(server, 'POST', `/bookings/${booking.id}/funding`, {}, token)
+        )
+      ).status,
       200
     );
   });

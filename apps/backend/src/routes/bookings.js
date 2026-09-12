@@ -14,6 +14,7 @@ const {
   acknowledgeTerms,
   assertAcknowledged,
 } = require('../services/acknowledgementService');
+const { createEscrowForBooking } = require('../services/escrowService');
 
 const router = express.Router();
 
@@ -205,31 +206,14 @@ router.post(
  */
 router.post('/bookings/:id/funding', requireAuth, requireRole('CLIENT'), async (req, res, next) => {
   try {
-    const booking = await prisma.booking.findUnique({
-      where: { id: req.params.id },
-      include: { client: true },
+    // Escrow creation lives in escrowService — the only module permitted to
+    // talk to the provider about money. The acknowledgement gate is enforced
+    // there as well as here, so no future caller can reach it around the check.
+    const funding = await createEscrowForBooking({
+      bookingId: req.params.id,
+      clientUserId: req.user.id,
     });
-    if (!booking || booking.client.userId !== req.user.id) {
-      throw new AppError(404, 'Booking not found.');
-    }
-
-    // The gate. Server-side, at the endpoint — hiding the button in the UI is
-    // a courtesy to the honest user, not a control.
-    await assertAcknowledged(booking.id);
-
-    if (booking.state !== 'PENDING_PAYMENT') {
-      throw new AppError(409, 'This booking has already been paid for.');
-    }
-
-    // Placeholder until #18 creates the escrow and returns real instructions.
-    res.json({
-      funding: {
-        bookingId: booking.id,
-        escrowReference: booking.escrowReference,
-        amountKobo: booking.amountKobo,
-        status: 'AWAITING_ESCROW_CREATION',
-      },
-    });
+    res.json({ funding });
   } catch (err) {
     next(err);
   }
