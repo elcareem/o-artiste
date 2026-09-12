@@ -2764,9 +2764,27 @@ Confirmed with **12 consecutive clean runs** of the deterministic suite.
 | Item | Blocked on |
 |---|---|
 | #5 — queue timing on the deployed host | No worker process runs on Render yet. Due before #25, which is the first business job. |
-| #10 — an unverified artist cannot accept a booking | #18, where acceptance exists. |
+| #10 — an unverified artist cannot accept a booking | ~~#18~~ — **CLOSED at #20**, see below. |
 
-Both are correctly open rather than overlooked.
+**#10's artist criterion is closed, and the prediction that #18 would close it
+was wrong.** #18 added escrow creation, not acceptance — and there is no
+acceptance step anywhere in this design: `docs/01` §4 goes straight from
+`PENDING_PAYMENT` to `FUNDED_HELD`. The criterion is satisfied at the two gates
+that do exist:
+
+1. **An unverified or suspended artist cannot become party to a booking** —
+   `createBooking` refuses with 403 (#15, covered in `booking.test.js`). This is
+   stronger than the criterion asks: there is no booking for them to accept.
+2. **A booking made while they were in good standing cannot be funded after that
+   changed** — added here. This gate did not exist and is a real hole rather
+   than a formality: a booking can sit in `PENDING_PAYMENT` for days, and
+   escrowing a client's money to a beneficiary we have since suspended is
+   exactly the failure the criterion is about. `escrowService` now re-runs
+   `assertCanTransact` on **both** parties at funding, and a refusal leaves the
+   booking in `PENDING_PAYMENT` with no escrow — the client has not paid and can
+   cancel.
+
+Tested for verification revoked and for suspension, on both sides.
 
 ---
 

@@ -375,3 +375,52 @@ describe('no card payment path exists anywhere in the codebase', async () => {
 test.after(async () => {
   if (prisma) await prisma.$disconnect();
 });
+
+// ── #10's last deferred criterion ────────────────────────────────────────────
+
+describe('an artist who is unverified or suspended cannot be funded into', async () => {
+  // #10's criterion reads "an unverified artist cannot accept a booking". There
+  // is no acceptance step in the state machine — docs/01 §4 goes straight from
+  // PENDING_PAYMENT to FUNDED_HELD — so the criterion is satisfied at the two
+  // gates that do exist, and this closes both.
+
+  // Gate 1: they cannot become party to a booking at all (#15, covered in
+  // booking.test.js). Gate 2, below: a booking made while they were in good
+  // standing cannot be funded after that changed.
+  for (const [label, change] of [
+    ['verification revoked', { verificationStatus: 'UNVERIFIED' }],
+    ['suspended', { accountStanding: 'SUSPENDED' }],
+  ]) {
+    const { clientUser, artistUser, booking } = await readyToFund();
+
+    await prisma.user.update({ where: { id: artistUser.id }, data: change });
+
+    await assert.rejects(
+      () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id }),
+      (err) => {
+        assert.ok(err instanceof AppError, `${label}: expected an AppError`);
+        assert.equal(err.status, 403, `${label}: expected 403`);
+        return true;
+      },
+      `an artist ${label} after booking creation must not receive escrowed money`
+    );
+
+    const after = await prisma.booking.findUnique({ where: { id: booking.id } });
+    assert.equal(after.state, 'PENDING_PAYMENT', `${label}: the client has not paid`);
+    assert.equal(after.escrowId, null, `${label}: no escrow was opened`);
+  }
+});
+
+describe('a client suspended after booking creation cannot fund either', async () => {
+  const { clientUser, booking } = await readyToFund();
+
+  await prisma.user.update({ where: { id: clientUser.id }, data: { accountStanding: 'SUSPENDED' } });
+
+  await assert.rejects(
+    () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id }),
+    (err) => err.status === 403
+  );
+
+  const after = await prisma.booking.findUnique({ where: { id: booking.id } });
+  assert.equal(after.escrowId, null);
+});

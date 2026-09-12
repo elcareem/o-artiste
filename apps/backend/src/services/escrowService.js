@@ -18,6 +18,7 @@ const prisma = require('../lib/prisma');
 const { AppError } = require('../lib/errors');
 const escrowpay = require('../lib/escrowpay');
 const { assertAcknowledged } = require('./acknowledgementService');
+const { assertCanTransact } = require('./bookingService');
 const { moneyInFee } = require('./feeService');
 
 /**
@@ -52,6 +53,20 @@ async function createEscrowForBooking({ bookingId, clientUserId }) {
   // The disclosure gate from #16. Checked here as well as at the route, so a
   // future caller cannot reach escrow creation around it.
   await assertAcknowledged(booking.id);
+
+  // RE-CHECKED AT FUNDING, not only at booking creation.
+  //
+  // Standing and verification are checked when the booking is made (#15), but
+  // a booking can sit in PENDING_PAYMENT for days, and an artist can be
+  // suspended or have their verification revoked in that window. Escrowing a
+  // client's money to a beneficiary we have since suspended is the failure
+  // #10's "an unverified artist cannot accept a booking" is really about — and
+  // the booking-creation gate alone does not cover it.
+  //
+  // Refusing leaves the booking in PENDING_PAYMENT, which is right: the client
+  // has not paid, and can cancel.
+  assertCanTransact(booking.client.user, 'client');
+  assertCanTransact(booking.artist.user, 'artist');
 
   if (booking.state !== 'PENDING_PAYMENT') {
     throw new AppError(409, 'This booking has already been paid for.');
