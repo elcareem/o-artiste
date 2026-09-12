@@ -2,58 +2,42 @@
  * Seed script guarantees — issue #6.
  */
 
-require('dotenv').config();
+const { prisma, hasDatabase } = require('./db')('seed');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
-const hasDatabase = Boolean(process.env.DATABASE_URL);
-const describe = hasDatabase ? test : test.skip;
+const seedModule = require('../prisma/seed');
 
-let prisma;
-let seedModule;
-if (hasDatabase) {
-  prisma = require('../src/lib/prisma');
-  seedModule = require('../prisma/seed');
-}
+const describe = hasDatabase ? test : test.skip;
 
 const BACKEND_ROOT = path.resolve(__dirname, '..');
 
 function runSeed() {
-  execFileSync('node', ['prisma/seed.js'], { cwd: BACKEND_ROOT, stdio: 'pipe' });
-}
-
-/**
- * Everything the seed writes, scoped to the seeded rows only.
- *
- * Scoped deliberately: the other suites create users in this same database, so
- * a whole-table assertion would measure their activity rather than the seed's.
- * A test that fails because a neighbouring test did its job is a test that gets
- * deleted.
- */
-async function seededUsers() {
-  return prisma.user.findMany({
-    where: { email: { in: seedModule.SEED_EMAILS } },
-    orderBy: { email: 'asc' },
+  // The seed runs as a subprocess, so it must be handed this file's schema
+  // explicitly — otherwise it would seed the default schema and the
+  // assertions here would measure a different database entirely.
+  execFileSync('node', ['prisma/seed.js'], {
+    cwd: BACKEND_ROOT,
+    stdio: 'pipe',
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
   });
 }
 
+/**
+ * A complete fingerprint of everything the seed writes, including every
+ * timestamp. If a second run touches a single row, `updatedAt` moves and this
+ * changes — which is the whole point.
+ */
 async function snapshot() {
-  const users = await seededUsers();
-  const userIds = users.map((u) => u.id);
-
-  const [clients, artists, rates, tiers] = await Promise.all([
-    prisma.client.findMany({ where: { userId: { in: userIds } }, orderBy: { userId: 'asc' } }),
-    prisma.artist.findMany({ where: { userId: { in: userIds } }, orderBy: { userId: 'asc' } }),
-    prisma.commissionRate.findMany({
-      where: { id: seedModule.COMMISSION_RATE_ID },
-    }),
-    prisma.cancellationTier.findMany({
-      where: { versionId: seedModule.TIER_VERSION_ID },
-      orderBy: { id: 'asc' },
-    }),
+  const [users, clients, artists, rates, tiers] = await Promise.all([
+    prisma.user.findMany({ orderBy: { email: 'asc' } }),
+    prisma.client.findMany({ orderBy: { userId: 'asc' } }),
+    prisma.artist.findMany({ orderBy: { userId: 'asc' } }),
+    prisma.commissionRate.findMany({ orderBy: { id: 'asc' } }),
+    prisma.cancellationTier.findMany({ orderBy: { id: 'asc' } }),
   ]);
   return JSON.stringify({ users, clients, artists, rates, tiers });
 }
@@ -73,8 +57,11 @@ describe('running the seed twice produces identical database state', async () =>
 describe('seeded accounts cover every role, with transacting users pre-verified', async () => {
   runSeed();
 
-  const all = await seededUsers();
-  const byRole = async (role) => all.filter((u) => u.role === role);
+  // Absolute, whole-table assertions. Possible again because this file owns
+  // its schema: no other suite can add a user here. Before isolation these had
+  // to be scoped to known seed emails, which measured the right thing but
+  // depended on remembering to do it.
+  const byRole = async (role) => prisma.user.findMany({ where: { role } });
 
   assert.equal((await byRole('SUPER_ADMIN')).length, 1);
   assert.equal((await byRole('ADMIN')).length, 1);
@@ -113,10 +100,7 @@ describe('seeded artist rates fall within the EscrowPay transaction range', asyn
   assert.equal(MIN_RATE_KOBO, 2000000);
   assert.equal(MAX_RATE_KOBO, 300000000);
 
-  const users = await seededUsers();
-  const artists = await prisma.artist.findMany({
-    where: { userId: { in: users.map((u) => u.id) } },
-  });
+  const artists = await prisma.artist.findMany();
   assert.equal(artists.length, 2);
 
   for (const artist of artists) {
@@ -131,9 +115,7 @@ describe('seeded artist rates fall within the EscrowPay transaction range', asyn
 describe('the default commission rate is a configuration record, not a constant', async () => {
   runSeed();
 
-  const rates = await prisma.commissionRate.findMany({
-    where: { id: seedModule.COMMISSION_RATE_ID },
-  });
+  const rates = await prisma.commissionRate.findMany();
   assert.equal(rates.length, 1);
   assert.equal(rates[0].rateBasisPoints, 500, '5% expressed in basis points');
   assert.ok(Number.isInteger(rates[0].rateBasisPoints), 'never a float percentage');
@@ -146,10 +128,7 @@ describe('the default commission rate is a configuration record, not a constant'
 describe('the default tier set has no gaps or overlaps in its day ranges', async () => {
   runSeed();
 
-  const tiers = await prisma.cancellationTier.findMany({
-    where: { versionId: seedModule.TIER_VERSION_ID },
-    orderBy: { minDaysBefore: 'asc' },
-  });
+  const tiers = await prisma.cancellationTier.findMany({ orderBy: { minDaysBefore: 'asc' } });
   assert.equal(tiers.length, 4);
 
   // Every row's two percentages must reconcile to the whole booking.

@@ -25,6 +25,23 @@ const MIN_BPS = 0;
 const MAX_BPS = 10000; // 100%
 
 /**
+ * Fallback rate used when no record exists at all.
+ *
+ * Matches the value seeded by `prisma/seed.js`, so a database that has been
+ * seeded and one that has not price identically rather than diverging.
+ *
+ * The fallback is deliberately VISIBLE rather than silent: the record it
+ * returns carries `isDefault: true`, which the admin endpoint surfaces and the
+ * UI can flag, and the first use logs a warning. A silent fallback would price
+ * real bookings off a number nobody configured, and the discrepancy would
+ * surface only in a ledger that will not reconcile — the point is to avoid the
+ * hard failure without losing the signal.
+ */
+const DEFAULT_BPS = 500; // 5%
+
+let warnedAboutDefault = false;
+
+/**
  * Returns the rate record in force at `at`.
  *
  * "In force" means the most recent record whose `effectiveFrom` is at or before
@@ -43,17 +60,33 @@ async function resolveCommissionRate(at = new Date(), client = prisma) {
     orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
   });
 
-  if (!record) {
-    // Loud rather than defaulting. A silent fallback to 5% would price real
-    // bookings off a number nobody configured, and the discrepancy would only
-    // surface in a ledger that will not reconcile.
-    throw new AppError(
-      500,
-      'No platform commission rate is configured. Bookings cannot be priced until one is set.'
+  if (!record) return defaultRate();
+
+  return { ...record, isDefault: false };
+}
+
+/**
+ * The synthetic record used when nothing is configured. Not persisted — writing
+ * it would make an unconfigured platform indistinguishable from a deliberately
+ * configured one.
+ */
+function defaultRate() {
+  if (!warnedAboutDefault) {
+    warnedAboutDefault = true;
+    console.warn(
+      `[commission] No commission rate configured. Falling back to ${DEFAULT_BPS} bps (5%). ` +
+        'Set one via PUT /admin/config/commission.'
     );
   }
 
-  return record;
+  return {
+    id: null,
+    rateBasisPoints: DEFAULT_BPS,
+    effectiveFrom: new Date(0),
+    setByUserId: null,
+    createdAt: new Date(0),
+    isDefault: true,
+  };
 }
 
 /** Convenience for callers that only need the number. */
@@ -137,6 +170,7 @@ function validateEffectiveFrom(value) {
 
 module.exports = {
   resolveCommissionRate,
+  DEFAULT_BPS,
   resolveCommissionBps,
   setCommissionRate,
   listCommissionRates,
