@@ -2333,7 +2333,10 @@ status codes shown : 0
 
 No status code or stack trace reaches the user (`docs/02` §2).
 
-### `[!]` Known trade-off: the not-found page returns HTTP 200
+### `[!]` Known limitation: the not-found page returns HTTP 200
+
+**Two fixes attempted, neither worked.** Recorded with what was actually tried,
+so #39 does not repeat it.
 
 Confirmed in a **production build**, not just dev: an unknown or suspended
 artist renders the correct not-found page but with a `200` status rather than
@@ -2348,10 +2351,27 @@ views"*, and the user-facing behaviour is correct either way: the page is
 readable and exposes no status code. What is affected is machine consumers —
 a crawler would keep a suspended artist's URL indexed.
 
-Recorded rather than quietly shipped. Revisit at #39, which owns user-facing
-failure handling across all three portals; the fix is either dropping the
-Suspense boundary on this route or resolving the artist in `generateMetadata`,
-which runs before streaming begins.
+**Attempt 1 — resolve the artist in `generateMetadata`.** It runs before the
+page component, so `notFound()` there should precede streaming. Verified in a
+production build: **still 200.** The call was kept anyway, because it is the
+right place to resolve the artist and it gives real page titles
+(`<title>DJ Ekene — Artist Escrow</title>`), with `getArtist` wrapped in React's
+`cache()` so the page component reuses the same request rather than doubling
+API traffic.
+
+**Attempt 2 — remove the Suspense boundary** by deleting `loading.tsx` from the
+route. Inconclusive: the test run was interrupted before producing a result, and
+it trades away a loading state this issue explicitly requires.
+
+**Left as is, deliberately.** The user-facing behaviour is already correct — the
+page is readable and exposes no status code. What is affected is machine
+consumers: a crawler would keep a suspended artist's URL indexed. That is worth
+fixing, but not worth further time during a feature issue.
+
+Carried to #39, which owns user-facing failure handling across all three
+portals. The remaining avenues are a route handler or proxy that resolves the
+artist before the page renders at all, or `dynamic = 'force-dynamic'` being the
+cause rather than the Suspense boundary — untested.
 
 ### Removed
 

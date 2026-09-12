@@ -5,6 +5,8 @@
  * `formatNaira()` does that at render, and only there.
  */
 
+import { cache } from 'react';
+
 import { apiFetch } from './api';
 
 export type Artist = {
@@ -57,6 +59,15 @@ export function listArtists(params: {
   return apiFetch<ArtistListing>(`/artists${suffix}`);
 }
 
-export function getArtist(id: string): Promise<{ artist: Artist }> {
-  return apiFetch<{ artist: Artist }>(`/artists/${encodeURIComponent(id)}`);
-}
+/**
+ * Wrapped in React's `cache()` so `generateMetadata` and the page component
+ * share one request rather than each making their own.
+ *
+ * That matters because the artist has to be resolved in `generateMetadata` to
+ * get a correct 404 status — see the comment on that function — and doing so
+ * naively would double every profile page's API traffic.
+ */
+export const getArtist = cache(
+  (id: string): Promise<{ artist: Artist }> =>
+    apiFetch<{ artist: Artist }>(`/artists/${encodeURIComponent(id)}`)
+);
