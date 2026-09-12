@@ -12,11 +12,14 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "test": "node --test \"test/**/*.test.js\"",
-    "seed": "node prisma/seed.js"
+    "seed": "node prisma/seed.js",
+    "start:worker": "node src/worker.js",
+    "dev:worker": "node --watch src/worker.js"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
+    "bullmq": "^5.81.5",
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
