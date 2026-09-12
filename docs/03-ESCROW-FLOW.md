@@ -131,14 +131,43 @@ Processing failures go to the job queue. **A webhook is never silently dropped**
 
 ### Handled events
 
-`escrow.funded` · `escrow.released` · `escrow.refunded` · `escrow.disputed`
+**CORRECTED AT #17.** This section previously named `escrow.funded`,
+`escrow.released`, `escrow.refunded` and `escrow.disputed`, taken from the
+provider's marketing page. **None of those event names exist.** The real
+enumeration is in `docs/provider/ESCROWPAY-API-MAP.md` §2, read off the
+provider's webhooks guide. A handler written against the old names would have
+acknowledged every genuine delivery as an unknown type and funded nothing.
 
 | Event | Effect |
 |---|---|
-| `escrow.funded` | → `FUNDED_HELD`, ledger `FUNDED`, schedule auto-release, notify both parties |
-| `escrow.released` | Reconcile with the release we instructed; confirm `RELEASED` |
-| `escrow.refunded` | Reconcile with the refund we instructed; confirm `REFUNDED` |
-| `escrow.disputed` | Provider-side dispute signal; open or attach to a dispute |
+| `transaction.funded` | Reconcile with `GET /transactions/{id}`, then → `FUNDED_HELD` + ledger `FUNDED` in one transaction |
+| `transaction.partially_funded` | **Does not fund.** `funding_mode: "exact"` is set, so an underpayment leaves the booking in `PENDING_PAYMENT`; the shortfall is surfaced, not swallowed |
+| `transaction.expired` | The escrow is dead, the booking is not — it stays in `PENDING_PAYMENT` so a fresh instruction can be issued rather than being cancelled on a provider timer |
+| `transaction.cancelled` | → `CANCELLED`, when the booking is still somewhere that can be |
+| `release.completed` | **Confirmation, never instruction.** Confirms a `RELEASED` we instructed; a release we did not instruct is recorded as a mismatch, not applied |
+| `refund.completed` | The same, for `REFUNDED` |
+| `payout.completed` | The artist's bank has the money. Distinct from `release.completed`, which only means funds left escrow — under `payout_preference: manual` those are different moments |
+| `release.failed`, `refund.failed`, `payout.failed` | **Money did not move.** Not optional: a handler listening only for the happy events leaves a booking marked `RELEASED` with nothing delivered |
+| `reconciliation.issue_detected` | The provider believes our books disagree with theirs. Needs a human |
+
+Every other documented event is acknowledged with 200 and logged.
+
+**There is no dispute event, because disputes are entirely ours.** The provider
+does not arbitrate on the API product, which confirms #31 and #32 own that state
+machine outright. `DISPUTED` is never driven by a webhook.
+
+**Every handler is individually idempotent**, even though the event-id claim
+already blocks duplicate deliveries. The retry job re-runs an event whose first
+attempt may have committed its state change and then failed to mark the event
+processed; the claim does not cover that, so the handler must.
+
+**The webhook is a signal to reconcile, not the source of truth.** The provider's
+guide directs confirming with `GET /transactions/{id}` after a payment event, and
+`transaction.funded` does exactly that before writing anything. It also means a
+stale or out-of-order delivery cannot fund a booking the provider no longer
+considers funded — and that a provider reporting `funded` while `funded_minor`
+falls short of the booking amount is treated as a failure to retry, not as
+payment.
 
 ## 7. Timeouts
 

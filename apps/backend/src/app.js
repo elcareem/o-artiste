@@ -14,6 +14,7 @@ const { router: adminRouter } = require('./routes/admin');
 const { router: verificationRouter } = require('./routes/verification');
 const { router: artistsRouter } = require('./routes/artists');
 const { router: bookingsRouter } = require('./routes/bookings');
+const { router: webhooksRouter } = require('./routes/webhooks');
 const { requireAuth, requireRole } = require('./middleware/auth');
 
 function createApp() {
@@ -41,6 +42,9 @@ function createApp() {
   app.use(verificationRouter);
   app.use(artistsRouter);
   app.use(bookingsRouter);
+
+  // Raw-bodied, signature-authenticated. See routes/webhooks.js.
+  app.use(webhooksRouter);
 
   // Role-guarded endpoints. Each exists because a later issue needs it, and
   // each is the endpoint #9's "blocked from at least one endpoint above its

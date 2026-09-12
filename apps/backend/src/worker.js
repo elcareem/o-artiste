@@ -15,10 +15,12 @@ require('dotenv').config();
 
 const { registerWorker, closeAll } = require('./lib/queue');
 const echoJob = require('./jobs/echoJob');
+const webhookRetryJob = require('./jobs/webhookRetryJob');
 
 function startWorkers() {
   registerWorker(echoJob.QUEUE_NAME, echoJob.process);
-  console.log('[worker] listening on queues: maintenance');
+  registerWorker(webhookRetryJob.QUEUE_NAME, webhookRetryJob.process);
+  console.log('[worker] listening on queues: maintenance, webhooks');
   return { stop: closeAll };
 }
 
