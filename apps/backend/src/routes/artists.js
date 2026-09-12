@@ -10,7 +10,11 @@ const express = require('express');
 const prisma = require('../lib/prisma');
 const { AppError } = require('../lib/errors');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { updateProfileAsOwner, isListable } = require('../services/artistService');
+const {
+  updateProfileAsOwner,
+  isListable,
+  listabilityFilter,
+} = require('../services/artistService');
 
 const router = express.Router();
 
@@ -30,6 +34,99 @@ function publicArtist(artist) {
     createdAt: artist.createdAt,
   };
 }
+
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+
+/**
+ * The public shape of an artist.
+ *
+ * `cancellationRate` is present from today, returning `null`, even though the
+ * calculation lands in #35. Two reasons: adding the field later would mean
+ * revisiting the frontend, and a `null` contract established now forces #13 to
+ * handle the below-threshold case correctly from the start rather than treating
+ * it as an edge case bolted on afterwards.
+ *
+ * `null` means "not enough bookings to say anything". The UI renders NOTHING
+ * for it — not "0%", which implies a perfect record that has not been earned,
+ * and not "N/A", which draws attention to an absence and reads as a warning
+ * (docs/06 §4).
+ */
+function publicListing(artist) {
+  return {
+    id: artist.id,
+    stageName: artist.stageName,
+    bio: artist.bio,
+    category: artist.category,
+    location: artist.location,
+    baseRateKobo: artist.baseRateKobo,
+    media: artist.media,
+    // Populated in #35. Present and null, never omitted.
+    cancellationRate: null,
+  };
+}
+
+/**
+ * GET /artists — public discovery.
+ *
+ * No authentication: discovery is public. Suspended, unverified and incomplete
+ * artists are excluded **at the query level** rather than filtered afterwards —
+ * a suspended artist appearing in a listing, even briefly, is a trust failure.
+ */
+router.get('/artists', async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
+
+    const where = {
+      ...listabilityFilter(),
+      ...(req.query.category ? { category: { equals: String(req.query.category), mode: 'insensitive' } } : {}),
+      ...(req.query.location ? { location: { equals: String(req.query.location), mode: 'insensitive' } } : {}),
+    };
+
+    const [artists, total] = await Promise.all([
+      prisma.artist.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.artist.count({ where }),
+    ]);
+
+    res.json({
+      artists: artists.map(publicListing),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /artists/:id — public detail.
+ *
+ * A non-listable artist returns 404 rather than 403. Distinguishing them would
+ * confirm the account exists, which is information a suspended artist's
+ * would-be clients have no business receiving.
+ */
+router.get('/artists/:id', async (req, res, next) => {
+  try {
+    const artist = await prisma.artist.findFirst({
+      where: { id: req.params.id, ...listabilityFilter() },
+    });
+    if (!artist) throw new AppError(404, 'Artist not found.');
+
+    res.json({ artist: publicListing(artist) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /** GET /me/artist-profile — the calling artist's own profile. */
 router.get('/me/artist-profile', requireAuth, requireRole('ARTIST'), async (req, res, next) => {
