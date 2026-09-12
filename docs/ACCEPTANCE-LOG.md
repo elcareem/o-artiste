@@ -1176,3 +1176,130 @@ The test now captures the current record immediately before the change and
 asserts `before` matches it. That tests the real guarantee without depending on
 isolation the shared database does not provide. Same lesson as #6: assert what
 the code guarantees, not what the table happens to contain.
+
+---
+
+## Follow-ups agreed at review (after #7)
+
+Three decisions taken by the maintainer after reviewing #7.
+
+### 1. `ADMIN` may read the commission rate — confirmed, no change
+
+Reading what the take is does not carry the risk that changing it does, and
+admins resolving disputes need it to explain why an artist received ₦187,930
+rather than ₦200,000.
+
+### 2. Backdating stays forward-only — confirmed after comparison
+
+The maintainer asked what comparable systems do before deciding. Summary given:
+
+- **Money systems are almost universally forward-only.** Payroll engines, tax
+  tables, billing platforms, insurance rating engines: effective-dated
+  configuration is append-only and takes effect forward. Where backdating exists
+  it is a separate privileged *correction* workflow that generates its own
+  adjustment records.
+- **Accounting systems allow it but fence it** — QuickBooks and Xero permit
+  posting into the past, then lock closed periods. The fence is the point.
+- **Ordinary SaaS configuration allows anything**, because nothing depends on
+  reconstructing history.
+
+This system is in the first category, and bookings snapshot the rate at
+creation, so backdating cannot move money already committed. The only thing it
+changes is the answer to *"what was the rate on 3 March"* — the question an
+audit asks. It buys nothing operationally and costs reconstructability.
+
+Kept forward-only. A correction path, if ever needed, follows the ledger's
+existing philosophy: new offsetting records, never edits.
+
+### 3. The resolver now falls back instead of throwing
+
+**Decided by the maintainer**, against my initial recommendation. Implemented
+with one refinement so the concern behind that recommendation is still met.
+
+With no `CommissionRate` configured, `resolveCommissionRate()` returns a
+synthetic record at **500 bps** — the same value `prisma/seed.js` writes, so a
+seeded and an unseeded database price identically rather than diverging.
+
+The fallback is **visible, not silent**:
+
+| Property | Value | Why |
+|---|---|---|
+| `isDefault` | `true` | The admin endpoint returns it, so the UI can flag an unconfigured platform |
+| `id` | `null` | Synthetic — never persisted, so an unconfigured platform stays distinguishable from a configured one |
+| `setByUserId` | `null` | Nobody set it, so nobody is named |
+| first use | logs a warning | The signal survives even if nobody looks at the screen |
+
+A real record always reports `isDefault: false`.
+
+This removes a real failure mode found by the isolation work below:
+`GET /admin/config/commission` previously returned **500** on a platform with no
+rate configured, taking the admin screen down at exactly the moment an admin
+would be trying to fix it.
+
+---
+
+## Test isolation (option B, agreed at review)
+
+### The problem
+
+Two failures in #6 and #7 had the same shape: the code was correct and the test
+was wrong, because every test file shared one database.
+
+- #6 asserted "exactly one `SUPER_ADMIN`" and counted users created by the auth
+  suite — found 3
+- #7 asserted a prior rate of `500` and read a `700` written moments earlier
+
+Both were fixed by scoping assertions, which measures the right thing but
+depends on remembering to do it on every future issue. The stakes rise from
+here: **#19's headline assertion is that a booking's ledger entries sum to
+zero**, which is worthless if another suite can add rows to the same table. A
+financial suite that fails intermittently is one people stop believing.
+
+Three options were put to the maintainer; **B was chosen**.
+
+### The implementation
+
+`apps/backend/test/db.js`. Each test file gets **its own PostgreSQL schema**
+inside the same database:
+
+```js
+const { prisma, hasDatabase } = require('./db')('auth');   // → schema test_auth
+const { createApp } = require('../src/app');               // bound to it
+```
+
+`DATABASE_URL` is rewritten with `?schema=test_<name>` **before the Prisma
+singleton is constructed**, so every module that later requires it — routes,
+services, middleware — transparently uses that schema. `prisma db push` creates
+and populates it; the migrations themselves are verified against a real database
+in #4, so a throwaway schema does not need migration history.
+
+The seed subprocess is handed the schema explicitly, since it runs as a separate
+process and would otherwise seed the default schema.
+
+### Proof that it works
+
+The scoping workarounds added in #6 were **reverted to absolute, whole-table
+assertions** — `exactly 1 SUPER_ADMIN`, `exactly 2 artists`, `exactly 1
+commission rate` — and the suite still passes:
+
+```
+$ npm run test:backend
+# tests 41  # pass 41  # fail 0  # skipped 0
+real 0m12.1s
+```
+
+Those assertions failed before isolation. Zero scoping workarounds remain in
+`seed.test.js`.
+
+### What it does not fix, stated plainly
+
+Isolation is **per file, not per test**. Cases within one file share a schema by
+design, so #7's `before.rateBasisPoints` fix stays: that contamination came from
+an earlier case in the *same* file, and per-file isolation does not address
+ordering within a file.
+
+Where a case genuinely needs an empty schema, the answer is now a separate file
+— which is why `commissionDefault.test.js` exists rather than deleting rows
+other cases depend on and hoping the ordering holds.
+
+Cost: about 4 seconds across the suite for the per-file `db push`.

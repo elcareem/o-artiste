@@ -2,7 +2,7 @@
  * Authentication, roles and permission middleware — issue #9.
  */
 
-require('dotenv').config();
+const { prisma, hasDatabase } = require('./db')('auth');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,11 +11,7 @@ const jwt = require('jsonwebtoken');
 const { createApp } = require('../src/app');
 const { startServer } = require('./helpers');
 
-const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describe = hasDatabase ? test : test.skip;
-
-let prisma;
-if (hasDatabase) prisma = require('../src/lib/prisma');
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;

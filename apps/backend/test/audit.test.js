@@ -2,7 +2,7 @@
  * Audit trail for rejected privilege escalation — docs/07-ADMIN-CONFIG.md §5.
  */
 
-require('dotenv').config();
+const { prisma, hasDatabase } = require('./db')('audit');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -10,11 +10,7 @@ const assert = require('node:assert/strict');
 const { createApp } = require('../src/app');
 const { startServer } = require('./helpers');
 
-const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describe = hasDatabase ? test : test.skip;
-
-let prisma;
-if (hasDatabase) prisma = require('../src/lib/prisma');
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;

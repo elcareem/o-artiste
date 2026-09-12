@@ -8,16 +8,14 @@
 
 // Loaded here rather than relying on the server entry point, so the suite can
 // reach the database without booting the app.
-require('dotenv').config();
+// Must be first: binds this file to its own schema before the Prisma
+// singleton is constructed.
+const { prisma, hasDatabase } = require('./db')('schema');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const hasDatabase = Boolean(process.env.DATABASE_URL);
 const describe = hasDatabase ? test : test.skip;
-
-let prisma;
-if (hasDatabase) prisma = require('../src/lib/prisma');
 
 const TIER_SET = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
