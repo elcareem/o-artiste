@@ -267,6 +267,47 @@ function activateEscrow({ transactionId, version, reference }) {
   });
 }
 
+/**
+ * Creates the bank account the payer transfers into — the funding instruction.
+ *
+ * Bank transfer only. There is no card path anywhere in this system and none
+ * may be added: a chargeback arriving weeks after funds have been released to
+ * an artist is unrecoverable, which is the exact risk escrow exists to remove
+ * (docs/03 §2).
+ */
+function createPaymentAccount({ transactionId, reference, expectedAmountKobo, currency = 'NGN' }) {
+  return request({
+    method: 'POST',
+    path: `/transactions/${transactionId}/payment-accounts`,
+    idempotencyKey: reference,
+    body: {
+      currency,
+      ...(expectedAmountKobo !== undefined ? { expected_amount_minor: expectedAmountKobo } : {}),
+    },
+  });
+}
+
+/**
+ * Opens a checkout session, which is where the FULL funding instruction lives.
+ *
+ * `POST /transactions/{id}/payment-accounts` returns the destination account
+ * masked (`****4680`), which is useless for making a transfer. The checkout
+ * session returns `payment_instructions` with the complete account number,
+ * bank code, account name and the amount to send.
+ *
+ * It also reports `allowed_channels`, which the sandbox returns as
+ * `["bank_transfer"]` — the provider enforces bank-transfer-only on their side,
+ * independently of us never building a card path.
+ */
+function createCheckoutSession({ transactionId, reference }) {
+  return request({
+    method: 'POST',
+    path: `/transactions/${transactionId}/checkout-sessions`,
+    idempotencyKey: reference,
+    body: {},
+  });
+}
+
 function getEscrow(transactionId) {
   return request({ method: 'GET', path: `/transactions/${transactionId}` });
 }
@@ -467,6 +508,8 @@ function assertInteger(value, name) {
 module.exports = {
   createEscrow,
   activateEscrow,
+  createPaymentAccount,
+  createCheckoutSession,
   getEscrow,
   release,
   refund,

@@ -92,7 +92,7 @@ Corrections to money follow the ledger rule in `01` §5: **offsetting entries, n
 
 All of these were deliberately built as configuration rather than constants **precisely so this screen can exist**, and so the three open items above can be closed by a decision rather than a deploy.
 
-Requirements: change history showing actor and timestamp for each prior version; non-super-admins cannot see or submit restricted fields; and a **preview showing how a sample booking would be affected before saving** — because a basis-point change is hard to reason about in the abstract and easy to reason about as "this ₦200,000 booking would pay ₦185,930 instead of ₦187,930".
+Requirements: change history showing actor and timestamp for each prior version; non-super-admins cannot see or submit restricted fields; and a **preview showing how a sample booking would be affected before saving** — because a basis-point change is hard to reason about in the abstract and easy to reason about as "this ₦200,000 booking would pay ₦188,000 instead of ₦190,000".
 
 ## 7. Operational visibility (#37)
 

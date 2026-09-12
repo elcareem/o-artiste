@@ -2884,3 +2884,129 @@ reasons that evaporate the moment someone adds a case.
 (`AWAITING_ESCROW_CREATION`). #18 replaces the body with real escrow creation
 and bank transfer instructions. **The gate it sits behind is complete** and
 should not need revisiting.
+
+---
+
+## #18 — feat(backend): escrow creation and funding instruction
+
+Branch `feat/18-escrow-creation`. Verified 2026-09-12.
+
+```
+$ npm run test:backend
+# tests 143  # pass 143  # fail 0      (four consecutive runs)
+```
+
+Live against the sandbox:
+
+```
+escrow id       TXN_5dd5bf7535e24d50b52e87865957d10d
+escrow state    pending_funding
+booking amount  20,000,000
+provider fee       200,000
+TRANSFER        20,200,000  = ₦202,000
+channels        ["bank_transfer"]
+account         8881754743 | O-artist | bank 090175 | rubies
+booking state   PENDING_PAYMENT
+```
+
+### `[x]` A created booking returns a valid funding instruction
+
+Three provider calls, in order, each carrying our `escrowReference` as the
+`Idempotency-Key`:
+
+```
+POST /transactions                     → draft
+POST /transactions/{id}/activate       → pending_funding
+POST /transactions/{id}/checkout-sessions → the funding instruction
+```
+
+**The checkout session is where the usable details live.** `POST
+/transactions/{id}/payment-accounts` returns the destination account **masked**
+(`****4680`) — which is useless for making a transfer. Only the checkout session
+returns the full account number. Found by probing both; a plausible-looking
+implementation built on the payment-account response would have shipped a
+funding page nobody could pay into.
+
+The instruction is asserted to contain no `*`, so a masked value can never reach
+a client as if it were dialable.
+
+**Both money figures are named.** `bookingAmountKobo` (₦200,000) and
+`amountToTransferKobo` (₦202,000) are separate fields, because the provider
+charges the money-in fee to the payer on top rather than deducting it from the
+escrow. #21 must show both: a client who expects to send ₦200,000 and is asked
+for ₦202,000 at their banking app is the surprise FCCPA disclosure exists to
+prevent.
+
+### `[x]` A simulated provider error leaves the booking in `PENDING_PAYMENT` with no orphaned escrow
+
+Tested by failing **each of the three calls in turn**, not just the first:
+
+```
+createEscrow fails         → 502, state PENDING_PAYMENT, escrowId null
+activateEscrow fails       → 502, state PENDING_PAYMENT, escrowId null
+createCheckoutSession fails → 502, state PENDING_PAYMENT, escrowId null
+```
+
+Nothing is persisted until all three succeed. A half-created booking is worse
+than a failed one: the client can simply try again.
+
+**And a retry is provably safe.** A separate test fails the first attempt,
+succeeds on the second, and asserts both calls carried the **same** idempotency
+key — our `escrowReference`. That is why the reference is self-generated rather
+than taken from the provider (`docs/03` §3).
+
+Calling funding twice after success returns the existing escrow and **does not
+call the provider again**, asserted with a counter.
+
+### `[x]` Grepping the codebase for card-related provider calls returns zero matches
+
+Asserted as a test rather than a one-off check, so it cannot rot. The provider
+reports the same constraint independently: `allowed_channels: ["bank_transfer"]`
+comes back from their checkout session.
+
+Escrow and card chargebacks are structurally incompatible — a chargeback
+arriving weeks after funds have reached an artist is unrecoverable, which is the
+exact risk escrow exists to remove.
+
+### The gate holds at both layers
+
+`assertAcknowledged` is checked inside `escrowService` as well as at the route,
+so a future caller cannot reach escrow creation around #16's disclosure step.
+Asserted with a provider stub that throws if reached: **no escrow is created for
+a booking whose terms were never accepted.**
+
+Also refused before any provider call: a client or artist without an
+`escrowPartyId`, a booking already past `PENDING_PAYMENT`, and a request from a
+client who does not own the booking (404, not 403).
+
+### `escrowService.js` now exists, and the rule it enforces
+
+This is the module `check:rules` has been guarding an empty seat for since #1:
+**the only module permitted to move money.** #26, #27 and #28 add release and
+refund here. The rule still passes with the module now populated.
+
+### #16's gate test needed a stub once this endpoint became real
+
+`POST /bookings/:id/funding` returned a placeholder at #16, so that file needed
+no provider stub. Making it real broke one assertion there: the fixture users
+carry invented `escrowPartyId` values the provider has never seen, so the call
+returned 502 instead of 200.
+
+Fixed by stubbing the provider **in #16's file**, which keeps it testing one
+thing — the disclosure gate — and keeps it deterministic. The real provider
+calls are #18's to exercise, and they are.
+
+Worth noting as a pattern rather than a one-off: replacing a placeholder with a
+real integration can break a neighbouring issue's tests without either being
+wrong. The full suite catching it immediately is the point of running it before
+every commit.
+
+### A note on provider flakiness
+
+The first live walkthrough failed with `ETIMEDOUT`. The provider was reachable
+but slow — a health check took 5.7 seconds. The retry policy hardened at #15
+(three attempts, jittered backoff) did not save it, because the congestion
+outlasted the 15-second client timeout.
+
+This is exactly why the sandbox suite was separated from `npm test` earlier in
+this session. The deterministic suite was unaffected.

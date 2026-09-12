@@ -77,7 +77,7 @@ Resolved by distinguishing the **service** from its **triggers**: #33 builds the
 
 | # | Issue | Gate |
 |---|---|---|
-| 26 | Release execution | ₦200,000 at 5% disburses **₦187,930**; sole provider caller by grep |
+| 26 | Release execution | ₦200,000 at 5% disburses **₦190,000** (corrected at #18); sole provider caller by grep |
 | 22 | Check-in code generation | An artist token never receives the code |
 | 23 | Check-in redemption | Server timestamp; a client-supplied time is ignored |
 | 24 | Two-sided confirmation matrix | Every row covered by a test |

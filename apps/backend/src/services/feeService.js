@@ -77,40 +77,67 @@ function moneyOutFee(payoutKobo) {
 }
 
 /**
- * A completed booking: the artist bears commission and both escrow fees.
+ * A completed booking.
  *
- * Order matters. Commission is taken from the booking total (the artist's gross
- * share on a completion), then escrow fees. The artist is the residual party,
- * so their net is computed by subtraction — R2 — which makes the parts sum to
- * the total by construction.
+ * FEE BEARERS FOLLOW THE PROVIDER'S LIVE CONFIGURATION, not our original spec.
+ * Read from `GET /fees/configuration` on the test book:
+ *
+ *   escrow_service (money-in)  payer: "payer"     timing: "at_funding"
+ *   payout         (money-out) payer: "business"  timing: "at_payout"
+ *
+ * So the CLIENT pays the money-in fee **on top of** the booking amount when
+ * funding, and the PLATFORM absorbs the payout fee. Neither is deducted from
+ * the escrow, which holds exactly the booking amount.
+ *
+ * `docs/05` originally had the artist bearing both, deducted on completion.
+ * That was written from the published fee schedule before the sandbox existed
+ * and is wrong about the bearers — the provider was already behaving this way.
+ * Changed by decision after the conflict was found at #18 rather than adjusted
+ * silently; see `docs/05` §1.
+ *
+ * The artist is still the residual party (R2): their net is computed by
+ * subtraction so the parts reconcile by construction.
  */
 function computeCompletion({ amountKobo, commissionBps }) {
   assertInteger(amountKobo, 'amountKobo');
   assertInteger(commissionBps, 'commissionBps');
 
+  // Charged to the client at funding, in addition to the amount. It never
+  // enters escrow, so it is never ours to deduct.
   const moneyIn = moneyInFee(amountKobo);
+  const clientPays = amountKobo + moneyIn;
+
   const commission = applyBps(amountKobo, commissionBps);
 
-  // The money-out fee depends on the payout size, which depends on the fee —
-  // so it is computed against the amount remaining before it is deducted.
-  const beforeMoneyOut = amountKobo - moneyIn - commission;
-  const moneyOut = moneyOutFee(beforeMoneyOut);
+  // R2: the artist takes what remains of the escrow after commission.
+  const artistNet = amountKobo - commission;
 
-  // R2: the artist absorbs the remainder.
-  const artistNet = amountKobo - moneyIn - commission - moneyOut;
+  // Borne by us, at payout. It reduces the platform's take rather than the
+  // artist's payment.
+  const moneyOut = moneyOutFee(artistNet);
+  const platformNet = commission - moneyOut;
 
   return {
     amountKobo,
+    /** What the client actually transfers — amount PLUS the money-in fee. */
+    clientPaysKobo: clientPays,
     commissionKobo: commission,
     moneyInFeeKobo: moneyIn,
     moneyOutFeeKobo: moneyOut,
     artistNetKobo: artistNet,
-    feeBearer: 'ARTIST',
+    platformNetKobo: platformNet,
+    moneyInBearer: 'CLIENT',
+    moneyOutBearer: 'PLATFORM',
+    commissionBearer: 'ARTIST',
+    /**
+     * Reconciles against what the CLIENT PAYS, not against the booking amount,
+     * because the money-in fee is part of the client's outflow but never part
+     * of the escrow.
+     */
     parts: [
-      { party: 'PLATFORM', kobo: commission },
-      { party: 'PROVIDER', kobo: moneyIn },
-      { party: 'PROVIDER', kobo: moneyOut },
       { party: 'ARTIST', kobo: artistNet },
+      { party: 'PLATFORM', kobo: platformNet },
+      { party: 'PROVIDER', kobo: moneyIn + moneyOut },
     ],
   };
 }
@@ -145,14 +172,19 @@ function computeClientCancellation({
   const clientShare = applyBps(amountKobo, clientRefundBps);
   const artistShare = amountKobo - clientShare;
 
+  // The client already paid the money-in fee at funding, on top of the amount.
+  // It is consumed and not refundable — which is itself the client bearing the
+  // cost of their own cancellation, as docs/05 §6 intends.
   const moneyIn = moneyInFee(amountKobo);
-  const moneyOut = refundIncursMoneyOut && clientShare > 0 ? moneyOutFee(clientShare) : 0;
-  const escrowFees = moneyIn + moneyOut;
 
-  // The client bears the fees, floored at zero.
-  const refundBeforeFloor = clientShare - escrowFees;
-  const clientRefund = Math.max(0, refundBeforeFloor);
-  const unrecoveredShortfall = Math.max(0, -refundBeforeFloor);
+  // The refund leg's payout fee falls on the platform under the provider's
+  // configuration, so it does not reduce what the client receives.
+  const moneyOut = refundIncursMoneyOut && clientShare > 0 ? moneyOutFee(clientShare) : 0;
+
+  // The refund is the client's share of the escrow, undiminished. The floor
+  // remains because a future tier set could still produce a zero share.
+  const clientRefund = Math.max(0, clientShare);
+  const unrecoveredShortfall = 0;
 
   // The artist's compensation is reduced only by commission.
   const commission = applyBps(artistShare, commissionBps);
@@ -164,13 +196,14 @@ function computeClientCancellation({
     artistShareKobo: artistShare,
     moneyInFeeKobo: moneyIn,
     moneyOutFeeKobo: moneyOut,
-    escrowFeesKobo: escrowFees,
+    /** Sunk at funding, borne by the client, not recoverable. */
+    clientSunkFeeKobo: moneyIn,
     clientRefundKobo: clientRefund,
-    /** Absorbed by the platform, never chased. Shown to nobody as a debt. */
     unrecoveredShortfallKobo: unrecoveredShortfall,
     commissionKobo: commission,
     artistCompensationKobo: artistCompensation,
-    feeBearer: 'CLIENT',
+    moneyInBearer: 'CLIENT',
+    moneyOutBearer: 'PLATFORM',
   };
 }
 
@@ -197,11 +230,20 @@ function computeArtistCancellation({
 
   return {
     amountKobo,
-    // The full amount. Not "the amount minus fees".
+    // The escrow returns in full, and the client is additionally reimbursed the
+    // money-in fee they paid at funding. ZERO fee exposure means zero: they did
+    // nothing wrong, and passing them any cost for the artist's decision would
+    // undermine the guarantee the platform is built on.
     clientRefundKobo: amountKobo,
+    clientFeeReimbursementKobo: moneyIn,
+    clientTotalReturnedKobo: amountKobo + moneyIn,
     moneyInFeeKobo: moneyIn,
     moneyOutFeeKobo: moneyOut,
-    /** Fronted by the platform now, recovered from the artist later. */
+    /**
+     * Fronted by the platform now, recovered from the artist later. Covers the
+     * money-in fee reimbursed to the client plus the payout fee on the refund
+     * leg — the artist's decision, so the artist's cost.
+     */
     feeLiabilityKobo: moneyIn + moneyOut,
     artistCompensationKobo: 0,
     commissionKobo: 0,
