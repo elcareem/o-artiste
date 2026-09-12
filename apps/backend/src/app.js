@@ -10,6 +10,7 @@ const cors = require('cors');
 const { bodyParsers } = require('./lib/bodyParsers');
 const { notFoundHandler, errorHandler } = require('./lib/errors');
 const { router: authRouter } = require('./routes/auth');
+const { router: adminRouter } = require('./routes/admin');
 const { requireAuth, requireRole } = require('./middleware/auth');
 
 function createApp() {
@@ -33,18 +34,12 @@ function createApp() {
   });
 
   app.use(authRouter);
+  app.use(adminRouter);
 
   // Role-guarded endpoints. Each exists because a later issue needs it, and
   // each is the endpoint #9's "blocked from at least one endpoint above its
   // level" criterion is verified against.
   app.get('/admin/ping', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), (req, res) => {
-    res.json({ status: 'ok', role: req.user.role });
-  });
-
-  // SUPER_ADMIN only — ADMIN is deliberately NOT accepted. Roles are matched
-  // exactly, with no implicit hierarchy (docs/07 §1). #7 and #8 mount the real
-  // configuration endpoints behind this same guard.
-  app.get('/admin/config/ping', requireAuth, requireRole('SUPER_ADMIN'), (req, res) => {
     res.json({ status: 'ok', role: req.user.role });
   });
 

@@ -49,6 +49,16 @@ const post = (server, path, body, token) =>
     body: JSON.stringify(body),
   });
 
+const put = (server, path, body, token) =>
+  fetch(`${server.url}${path}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+
 const get = (server, path, token) =>
   fetch(`${server.url}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -178,14 +188,20 @@ describe('each role is blocked from an endpoint above its level', async () => {
     // CLIENT cannot reach an admin endpoint.
     assert.equal((await get(server, '/admin/ping', clientToken)).status, 403);
 
-    // ADMIN can reach admin, but NOT super-admin configuration. Roles are
-    // matched exactly — SUPER_ADMIN is not "ADMIN plus more" (docs/07 §1).
+    // ADMIN can reach admin, and can READ the commission rate, but cannot
+    // CHANGE it. Roles are matched exactly — SUPER_ADMIN is not "ADMIN plus
+    // more" (docs/07 §1).
     assert.equal((await get(server, '/admin/ping', adminToken)).status, 200);
-    assert.equal((await get(server, '/admin/config/ping', adminToken)).status, 403);
+    assert.equal((await get(server, '/admin/config/commission', adminToken)).status, 200);
+    assert.equal(
+      (await put(server, '/admin/config/commission', { rateBasisPoints: 700, reason: 'test' }, adminToken)).status,
+      403,
+      'an ADMIN must not be able to change the platform take'
+    );
 
-    // SUPER_ADMIN reaches both.
+    // SUPER_ADMIN reaches all three.
     assert.equal((await get(server, '/admin/ping', superToken)).status, 200);
-    assert.equal((await get(server, '/admin/config/ping', superToken)).status, 200);
+    assert.equal((await get(server, '/admin/config/commission', superToken)).status, 200);
 
     // No token at all.
     assert.equal((await get(server, '/admin/ping')).status, 401);
@@ -213,7 +229,7 @@ describe('there is NO public route by which an account can self-assign ADMIN or 
     // And a self-minted token claiming SUPER_ADMIN is worthless without the
     // signing key.
     const forged = jwt.sign({ sub: 'anyone', role: 'SUPER_ADMIN' }, 'guessed-secret');
-    assert.equal((await get(server, '/admin/config/ping', forged)).status, 401);
+    assert.equal((await get(server, '/admin/config/commission', forged)).status, 401);
   });
 });
 
