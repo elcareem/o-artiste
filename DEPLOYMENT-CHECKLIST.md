@@ -166,7 +166,11 @@ a `NEXT_PUBLIC_` prefix.
 
 ## #4 — Managed Postgres
 
-**Status:** ☐ *(local development is unblocked — a local PostgreSQL instance is already running)*
+**Status:** ☑ provisioned, migrated, and wired to the API
+
+- [x] Instance provisioned — `o-artiste-db`, PostgreSQL 16, Ohio
+- [x] Migration applied against the deployed database (16 tables verified)
+- [x] `DATABASE_URL` set on `o-artiste-api` from the **Internal** string
 
 > **Free-tier testing caveat.** Render deletes free PostgreSQL instances after
 > 30 days. If the build runs past a month the database disappears along with its
@@ -206,7 +210,15 @@ the public network, but is only reachable from inside Render.
 
 ## #5 — Managed Redis
 
-**Status:** ☐ *(local development is unblocked — a local Redis instance is already running)*
+**Status:** ☑ provisioned — `o-artiste-redis`, Valkey 8.1.4, Ohio
+
+- [x] Created with maxmemory policy **`noeviction`** (Render defaults to
+      `allkeys-lru`, which silently evicts queued jobs)
+- [x] `REDIS_URL` set on `o-artiste-api` from the **Internal** string
+- [x] External traffic left **closed** — the internal URL carries no password,
+      so exposing it would be a serious misconfiguration
+- [ ] Worker not yet running on Render; `o-artiste-api` runs the API only.
+      Decision due before #25, when the first business job exists.
 
 > **Free-tier testing caveat.** Render's free Key Value instances hold data in
 > memory with no disk persistence. This does not affect #5's criterion as
