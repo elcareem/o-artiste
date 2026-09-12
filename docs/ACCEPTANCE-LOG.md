@@ -2333,45 +2333,70 @@ status codes shown : 0
 
 No status code or stack trace reaches the user (`docs/02` §2).
 
-### `[!]` Known limitation: the not-found page returns HTTP 200
+### `[x]` The not-found page returns HTTP 200 — which is correct, and my concern was wrong
 
-**Two fixes attempted, neither worked.** Recorded with what was actually tried,
-so #39 does not repeat it.
+Investigated properly after being asked to fix rather than defer it. The
+conclusion is that **there is nothing to fix**, and the reasoning I recorded
+first was mistaken.
 
-Confirmed in a **production build**, not just dev: an unknown or suspended
-artist renders the correct not-found page but with a `200` status rather than
-`404`.
+**It is documented, intended framework behaviour.** From
+`node_modules/next/dist/docs/.../not-found.md`:
 
-The cause is `loading.tsx` on the detail route. It creates a Suspense boundary,
-so Next streams the shell — and the status line — before `notFound()` is
-reached. Once streaming has begun the status cannot be changed.
+> *"Next.js will return a `200` HTTP status code for streamed responses, and
+> `404` for non-streamed responses."*
 
-**Kept the loading state.** #13 requires *"loading and empty states for both
-views"*, and the user-facing behaviour is correct either way: the page is
-readable and exposes no status code. What is affected is machine consumers —
-a crawler would keep a suspended artist's URL indexed.
+**The harm I claimed does not occur.** I wrote that "a crawler would keep a
+suspended artist's URL indexed". Next injects a `noindex` tag for exactly this
+case, and the streaming documentation says so outright:
 
-**Attempt 1 — resolve the artist in `generateMetadata`.** It runs before the
-page component, so `notFound()` there should precede streaming. Verified in a
-production build: **still 200.** The call was kept anyway, because it is the
-right place to resolve the artist and it gives real page titles
-(`<title>DJ Ekene — Artist Escrow</title>`), with `getArtist` wrapped in React's
-`cache()` so the page component reuses the same request rather than doubling
-API traffic.
+> *"Some crawlers may label these responses as 'soft 404s'. In the streaming
+> case, this does not lead to indexation because the page is explicitly marked
+> `noindex` in the HTML."*
 
-**Attempt 2 — remove the Suspense boundary** by deleting `loading.tsx` from the
-route. Inconclusive: the test run was interrupted before producing a result, and
-it trades away a loading state this issue explicitly requires.
+Verified in a production build:
 
-**Left as is, deliberately.** The user-facing behaviour is already correct — the
-page is readable and exposes no status code. What is affected is machine
-consumers: a crawler would keep a suspended artist's URL indexed. That is worth
-fixing, but not worth further time during a feature issue.
+```
+GET /artists/nope        → 200, <meta name="robots" content="noindex"/>
+GET /artists/<real id>   → 200, no robots tag, <title>DJ Ekene — Artist Escrow</title>
+```
 
-Carried to #39, which owns user-facing failure handling across all three
-portals. The remaining avenues are a route handler or proxy that resolves the
-artist before the page renders at all, or `dynamic = 'force-dynamic'` being the
-cause rather than the Suspense boundary — untested.
+The tag appears on the not-found page and **only** there.
+
+### Four hypotheses tested before reading the documentation
+
+Recorded because the order was wrong — the docs were the fastest path and I
+reached for them last.
+
+| | Hypothesis | Result |
+|---|---|---|
+| A | `loading.tsx` on the detail route causes streaming | 200 — **incomplete test**, the root `app/loading.tsx` also wraps the route |
+| B | `dynamic = 'force-dynamic'` forces it | 200 — and the test was invalid anyway, since `revalidate = 0` also forces dynamic |
+| C | Neither directive | 200 |
+| D | `notFound()` called from a `catch` rather than the render path | 200 |
+
+All four wrong. The actual rule is simply **streamed responses cannot change a
+status that has already been sent** — the headers go out when the first Suspense
+boundary renders.
+
+### Kept from the investigation
+
+**`getArtistOrNull()`**, returning `null` instead of throwing on a 404, with
+`notFound()` called directly in the page body. That is the pattern the framework
+documents, it reads better than a `catch` that re-throws, and a missing artist is
+an expected outcome here rather than an exception — the API returns 404 for
+suspended, unverified and unknown artists alike. Any other failure still throws,
+so a provider outage cannot masquerade as a missing artist.
+
+**`generateMetadata`**, giving real page titles and resolving through the same
+request-cached fetch, so there is still one API call per page view.
+
+### If a literal 404 is ever required
+
+The documentation names the route: resolve the resource in `proxy` before the
+response body streams. It costs an API call per artist page view in the proxy
+layer, and the docs caution to keep such checks fast. Not worth it while
+`noindex` already prevents the only consequence that was at stake — but recorded
+so the option is known rather than rediscovered.
 
 ### Removed
 

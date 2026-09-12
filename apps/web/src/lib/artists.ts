@@ -7,7 +7,7 @@
 
 import { cache } from 'react';
 
-import { apiFetch } from './api';
+import { ApiError, apiFetch } from './api';
 
 export type Artist = {
   id: string;
@@ -71,3 +71,26 @@ export const getArtist = cache(
   (id: string): Promise<{ artist: Artist }> =>
     apiFetch<{ artist: Artist }>(`/artists/${encodeURIComponent(id)}`)
 );
+
+/**
+ * Returns the artist, or `null` if the API says there isn't one.
+ *
+ * A missing artist is an expected outcome here, not an exception — the API
+ * returns 404 for suspended, unverified and unknown artists alike. Turning that
+ * into `null` lets the page call `notFound()` directly in its body, which is
+ * the pattern the framework documents and the one that actually produces a 404
+ * status. Calling `notFound()` from inside a `catch` renders the right UI but
+ * leaves the response at 200.
+ *
+ * Any other failure still throws — a provider outage must not masquerade as a
+ * missing artist.
+ */
+export const getArtistOrNull = cache(async (id: string): Promise<Artist | null> => {
+  try {
+    const { artist } = await getArtist(id);
+    return artist;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+});
