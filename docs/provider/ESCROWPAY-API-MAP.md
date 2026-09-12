@@ -346,3 +346,129 @@ payout time.
 and the transaction carries `funded_minor`, `released_minor`, `refunded_minor`
 and `next_actions` — so partial states are first-class and our state machine can
 reconcile against theirs rather than assume.
+
+---
+
+# Webhooks — the complete contract
+
+From the provider's Webhooks guide. Not in the OpenAPI document: webhook
+endpoint management is deliberately outside the public API surface, and
+registration is dashboard-only.
+
+## Headers
+
+| Header | Format |
+|---|---|
+| `Content-Type` | `application/json` |
+| `EscrowPay-Signature` | `t=<unix_seconds>,v1=<hex_hmac>` |
+| `EscrowPay-Event-Id` | Immutable event id, `WHEV_…` |
+| `EscrowPay-Delivery-Id` | This *attempt's* id |
+| `User-Agent` | `EscrowPay-Webhooks/1.0` |
+
+**`EscrowPay-Event-Id` is the idempotency key, not `Delivery-Id`.** A retry keeps
+the same event id and gets a new delivery id, so deduplicating on the wrong one
+would treat every retry as a fresh event — the exact double-processing failure
+`docs/03` §6 calls the highest-severity bug class here. It maps directly onto
+`WebhookEvent.providerEventId`, which #4 already made unique.
+
+The guide is explicit: *"Deliveries are at-least-once; a retry never changes the
+underlying financial outcome. Deduplicate on EscrowPay-Event-Id."*
+
+## Signature verification
+
+```
+v1 = hex( HMAC_SHA256( whsec_… , "{t}." || raw_body_bytes ) )
+```
+
+1. Parse `t` and `v1` from `EscrowPay-Signature`
+2. **Reject if `|now − t| > 300` seconds** — a replay window, not just a
+   correctness check
+3. Build the signed message as **raw bytes**: ASCII of `t`, one `.` byte, then
+   the exact raw body
+4. HMAC-SHA256, hex-encode
+5. **Constant-time** comparison
+
+> *"do not parse and re-serialize JSON"*
+
+That single instruction is why #2 configured the raw-body exception at bootstrap
+rather than retrofitting it. `express.json()` anywhere on this path silently
+breaks every signature, and the failure looks like a provider fault. The test
+added at #2 — asserting the body arrives as a `Buffer`, byte-for-byte identical
+with irregular whitespace preserved — is precisely this guarantee.
+
+**Secret rotation has a 24-hour overlap**: signatures from the current *or*
+previous secret are valid during it. Verification must therefore try both, which
+means the configuration is `ESCROWPAY_WEBHOOK_SECRET` **and** an optional
+`ESCROWPAY_WEBHOOK_SECRET_PREVIOUS`. Building for one secret would make rotation
+an outage.
+
+## Payload
+
+```json
+{
+  "id": "WHEV_…",
+  "type": "transaction.funded",
+  "api_version": "2026-07-24",
+  "created_at": "2026-07-24T04:00:00Z",
+  "object": "transaction",
+  "object_id": "TXN_…",
+  "data": {}
+}
+```
+
+Payloads are immutable and carry no secrets, raw KYC, or provider raw payloads.
+
+After a payment event the guide directs confirming state with
+`GET /api/v1/transactions/{id}` — so the webhook is a **signal to reconcile**,
+not the source of truth. That suits our append-only ledger: we read authoritative
+state, then write.
+
+## §2 — CORRECTION: the event names in #20 do not exist
+
+#20 specifies handling `escrow.funded`, `escrow.released`, `escrow.refunded` and
+`escrow.disputed`. **None of those are real.** The closed set is 36 events:
+
+| Group | Events |
+|---|---|
+| transaction | `created`, `funding_started`, `partially_funded`, `funded`, `expired`, `cancelled` |
+| charge | `pending`, `succeeded`, `failed`, `reversed` |
+| payment_account | `active`, `funded`, `expired` |
+| milestone | `funded`, `release_scheduled`, `released`, `refunded` |
+| release | `created`, `scheduled`, `completed`, `failed` |
+| refund | `created`, `processing`, `completed`, `failed`, `requires_action` |
+| wallet | `credited`, `debited` |
+| payout | `created`, `processing`, `completed`, `failed`, `reversed` |
+| other | `business.verification_updated`, `administrative_hold.applied`, `administrative_hold.released`, `reconciliation.issue_detected` |
+
+### Mapping to our booking state machine
+
+| Provider event | Booking transition |
+|---|---|
+| `transaction.funded` | → `FUNDED_HELD` |
+| `transaction.expired` | funding deadline passed — booking stays `PENDING_PAYMENT`, escrow dead |
+| `transaction.cancelled` | → `CANCELLED` |
+| `release.completed` | → `RELEASED` |
+| `refund.completed` | → `REFUNDED` |
+| `payout.completed` | artist actually has the money — distinct from release |
+| `release.failed`, `refund.failed`, `payout.failed` | money did **not** move; must not be treated as success |
+
+Three consequences:
+
+**There is no `disputed` event, because disputes are entirely ours.** That
+matches the provider's own position — they do not arbitrate on the API product —
+and confirms #31 and #32 own that state machine outright. `DISPUTED` is never
+driven by a webhook.
+
+**Release and payout are separate events.** `release.completed` means funds left
+escrow; `payout.completed` means they reached the artist's bank. Under the
+`manual` payout preference forced on us in §7, those are genuinely different
+moments, and the ledger should not claim the artist was paid at the first one.
+
+**The failure events are not optional.** `release.failed` and `payout.failed`
+mean money did not move. A handler that only listens for the happy events would
+leave a booking marked `RELEASED` with nothing delivered. `…/retry` operations
+exist on releases, refunds and payouts for exactly this.
+
+`transaction.partially_funded` matters too: we set `funding_mode: "exact"`, so an
+underpayment should not fund the booking — but the event still arrives and must
+be handled rather than ignored.
