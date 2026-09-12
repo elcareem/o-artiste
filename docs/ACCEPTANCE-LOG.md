@@ -722,18 +722,74 @@ The ledger test encodes the canonical worked example from `docs/01` §5 and
 asserts both that the five entries sum to zero and that the artist's line is
 exactly **18,793,000 kobo (₦187,930)**, the figure #14 and #26 will be held to.
 
-### `[!]` Managed Postgres provisioned, `DATABASE_URL` set on the deployed backend
+### `[x]` Managed Postgres provisioned, `DATABASE_URL` set on the deployed backend
 
-### `[!]` Migration applied against the deployed database, not just locally
+Render PostgreSQL 16, instance `o-artiste-db`, database `artist_escrow`, region
+**Ohio (US East)** — the same region as `o-artiste-api`, since internal
+connections only work within a region and the region cannot be changed after
+creation.
 
-**BLOCKED — no managed Postgres yet.** Both criteria need a Render PostgreSQL
-instance, its `DATABASE_URL` set on the `o-artiste-api` service, and
-`npx prisma migrate deploy` run against it. Tracked in
-`DEPLOYMENT-CHECKLIST.md` § #4.
+`DATABASE_URL` is set on the service from the **Internal** connection string.
+Verified by exercising a database-backed route rather than by reading the
+dashboard:
+
+```
+$ curl -X POST https://o-artiste-api.onrender.com/auth/login \
+       -d '{"email":"nobody@example.test","password":"wrong-password-here"}'
+{"error":"Email or password is incorrect."}   http=401
+```
+
+Reaching that message requires the Prisma client to have generated,
+`DATABASE_URL` to resolve, and a real query against the `User` table to return
+nothing. A misconfigured database would have produced a 500.
+
+### `[x]` Migration applied against the deployed database, not just locally
+
+```
+$ DATABASE_URL="<render external>" npx prisma migrate deploy \
+    --schema apps/backend/prisma/schema.prisma
+Applying migration `20260911204031_init`
+All migrations have been successfully applied.
+```
+
+`migrate deploy` rather than `migrate dev` — `dev` can reset the database and
+generates new migrations, while `deploy` only applies what is already committed.
+That distinction stops mattering the moment an instance holds data anyone cares
+about, so the habit is worth forming before it does.
+
+Verified against the deployed instance directly, not inferred from the command
+exiting zero:
+
+| Check | Result |
+|---|---|
+| Tables created | **16** |
+| Columns of type `double precision`, `real`, `numeric`, `money` | **NONE** |
+| Money and basis-point columns that are `integer` | **14 of 14** |
+
+The money rule therefore holds on the deployed database, not only in the schema
+file and not only locally.
+
+A first `migrate deploy` appeared to succeed while `migrate status` still
+reported the migration unapplied — the output had been over-filtered while
+masking the connection string, hiding the real result. Re-run unfiltered, it
+applied. Worth recording: **a deployment step verified only by its own exit code
+is not verified.** The table count and column types are the evidence.
 
 The 30-day free-tier expiry applies. It is survivable by design: the migration
 is version-controlled and #6's seed is idempotent, so the state is reproducible
 with two commands.
+
+### Security note carried to #41
+
+The instance accepts inbound connections from `0.0.0.0/0` — Render's default,
+and a precondition for running the migration from a developer machine at all.
+Acceptable for a test database holding regenerable seed data; not acceptable
+once it holds identity records and booking history.
+
+Added to the #41 checklist: restrict inbound to Render's egress ranges, have the
+application reach the database over the internal hostname only, and issue
+production credentials that have never been pasted into a chat transcript or a
+terminal history.
 
 ### Local development database
 
