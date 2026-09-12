@@ -30,9 +30,21 @@ const DEFAULT_BASE_URL = 'https://production-business-api.escrowpay.app/api/v1';
  */
 const DEFAULT_TIMEOUT_MS = 15000;
 
-/** Network faults and 5xx are worth retrying. A 4xx is our mistake — it is not. */
-const DEFAULT_RETRIES = 2;
+/**
+ * Network faults and 5xx are worth retrying. A 4xx is our mistake — it is not.
+ *
+ * Three attempts after the first, with jittered exponential backoff. Observed
+ * in practice: the sandbox occasionally drops a connection outright, and two
+ * retries fired within a second were not enough to ride it out. Jitter matters
+ * because a burst of calls that all fail together would otherwise all retry
+ * together, reproducing the same burst.
+ *
+ * Safe at any count because every money-moving call carries an
+ * `Idempotency-Key`: a retry is the same request, not a second one.
+ */
+const DEFAULT_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 400;
+const RETRY_JITTER_MS = 250;
 
 /** Webhook signature tolerance, per the provider's guide. */
 const SIGNATURE_TOLERANCE_SECONDS = 300;
@@ -105,7 +117,7 @@ async function request({ method, path, body, idempotencyKey, retries = DEFAULT_R
       // because the idempotency key makes a duplicate create impossible.
       lastError = err;
       if (attempt < retries) {
-        await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt);
+        await sleep(backoffFor(attempt));
         continue;
       }
       throw providerUnreachable(err);
@@ -113,7 +125,7 @@ async function request({ method, path, body, idempotencyKey, retries = DEFAULT_R
 
     if (response.status >= 500 && attempt < retries) {
       lastError = response;
-      await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt);
+      await sleep(backoffFor(attempt));
       continue;
     }
 
@@ -126,6 +138,11 @@ async function request({ method, path, body, idempotencyKey, retries = DEFAULT_R
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Exponential, with jitter so simultaneous failures do not retry in lockstep. */
+function backoffFor(attempt) {
+  return RETRY_BASE_DELAY_MS * 2 ** attempt + Math.floor(Math.random() * RETRY_JITTER_MS);
+}
 
 /**
  * Translates a provider error into ours.
