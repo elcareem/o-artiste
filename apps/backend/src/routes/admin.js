@@ -14,6 +14,11 @@ const {
   resolveCommissionRate,
   listCommissionRates,
 } = require('../services/commissionService');
+const {
+  setCancellationTiers,
+  resolveTierSet,
+  listTierVersions,
+} = require('../services/cancellationTierService');
 
 const router = express.Router();
 
@@ -72,6 +77,64 @@ router.put(
       });
 
       res.status(201).json({ current: created });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/config/cancellation-tiers
+ *
+ * The set currently in force, plus every prior version. Prior sets remain
+ * queryable forever — a booking cancelled today may have been created under a
+ * table that has since been replaced, and reconstructing that is the whole
+ * reason versions are kept.
+ */
+router.get(
+  '/admin/config/cancellation-tiers',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req, res, next) => {
+    try {
+      const [current, history] = await Promise.all([resolveTierSet(), listTierVersions()]);
+      res.json({ current, history });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /admin/config/cancellation-tiers
+ *
+ * SUPER_ADMIN only. Saves a validated set as a new version; prior versions are
+ * never touched.
+ *
+ * Rows are replaced wholesale rather than patched individually, because the
+ * band structure itself changes — adding a 14-day tier or splitting the day-of
+ * band is a business decision, not a deploy.
+ */
+router.put(
+  '/admin/config/cancellation-tiers',
+  requireAuth,
+  requireRole('SUPER_ADMIN'),
+  async (req, res, next) => {
+    try {
+      const { tiers, effectiveFrom, reason } = req.body ?? {};
+
+      if (typeof reason !== 'string' || reason.trim().length === 0) {
+        throw new AppError(400, 'Give a reason for this change.');
+      }
+
+      const saved = await setCancellationTiers({
+        tiers,
+        effectiveFrom,
+        actorUserId: req.user.id,
+        reason: reason.trim(),
+      });
+
+      res.status(201).json({ current: saved });
     } catch (err) {
       next(err);
     }

@@ -1303,3 +1303,148 @@ Where a case genuinely needs an empty schema, the answer is now a separate file
 other cases depend on and hoping the ordering holds.
 
 Cost: about 4 seconds across the suite for the per-file `db push`.
+
+---
+
+## #8 — feat(backend): versioned cancellation tier configuration
+
+Branch `feat/8-cancellation-tiers`. Verified 2026-09-12.
+
+```
+$ npm run test:backend          (three consecutive runs)
+# tests 54  # pass 54  # fail 0  # skipped 0
+```
+
+### `[x]` Submitting overlapping ranges returns 400 with a message naming the conflict
+
+```
+{"error":"Bands day 1 to 6 and day 5 and above overlap.
+          A cancellation in that window would match two rules."}
+```
+
+**Both offending bands are named.** "Invalid tier set" tells an admin nothing
+they can act on.
+
+### `[x]` Submitting a set with a gap at days 3–4 returns 400 naming that window
+
+```
+{"error":"Days 3 to 4 are not covered by any band.
+          A cancellation in that window would have no applicable rule."}
+```
+
+The uncovered window is computed and named, not merely detected. A single-day
+gap is phrased in the singular — *"Day 1 is not covered"* — because a message
+that reads as broken English gets trusted less than one that reads as written.
+
+### `[x]` Submitting a row summing to 9500 bps returns 400
+
+```
+{"error":"day 1 and above: client refund 4000 + artist compensation 5500
+          = 9500 basis points. They must sum to 10000."}
+```
+
+Shows both numbers and their sum, so the admin can see which one to move.
+
+The two percentages divide the **booking total**. Platform commission applies to
+the artist's share *afterwards* and is never carved out of this split —
+conflating them silently changes what the client was shown (`docs/05` §5).
+
+### `[x]` A set that does not cover day 0 is rejected
+
+```
+{"error":"Day 0 is not covered. The lowest band starts at day 1,
+          so a booking cancelled on the event day has no applicable rule."}
+```
+
+### `[x]` A prior tier set remains queryable after a change
+
+The second version in the test **restructures** the table — five bands instead
+of four, adding a 14-day tier, which is exactly the change the issue says rows
+must be addable for rather than merely editable.
+
+After the change: the prior version still returns four rows, and its day-0 band
+still reads `1500`, not the new `1000`. The resolver returns the new version.
+
+### `[x]` A non-super-admin receives 403
+
+`CLIENT`, `ARTIST` and `ADMIN` all rejected; no token gives `401`. `ADMIN` **can
+read** the table — seeing it does not carry the risk of changing it.
+
+### Additional guarantees
+
+**The open-ended band is required, unique, and must be the top band.** Zero
+open-ended bands means a cancellation made far in advance matches nothing; two
+means it matches both. Both rejected with distinct messages.
+
+**Rows are validated individually before the set is considered** — fractional
+basis points, numeric strings, negative days, a band ending before it starts,
+and an empty set each produce their own message.
+
+**Every day from 0 to 400 resolves to exactly one band** in a saved set,
+verified by iteration rather than inspection.
+
+**The validator is pure** — no database, no clock — and is exercised directly as
+well as through the route. #36 mirrors these rules client-side for immediate
+feedback, but the server stays authoritative: a tier table with a gap must be
+unsaveable regardless of which path the request arrives by.
+
+**Changes require a written reason and are recorded in full.** The audit row
+stores the whole resulting set, not merely that something changed.
+
+---
+
+## Test-suite defects found and fixed while building #8
+
+The isolation work merged before this issue exposed three real problems. All
+three produced *intermittent* failures — the kind that get rerun rather than
+investigated.
+
+### 1. Schemas persisted between runs
+
+`db push` creates structure, not a clean slate. A file asserting "this schema
+starts empty" passed the first time and failed every time after.
+
+`test/db.js` now truncates every table in the schema before the file runs —
+`TRUNCATE ... RESTART IDENTITY CASCADE`, so foreign keys do not dictate order
+and sequences do not drift.
+
+### 2. Connection-pool exhaustion looked like a deadlock
+
+Prisma defaults to `cpus * 2 + 1` connections per client — 17 here. Nine test
+files run in parallel, each with its own client, plus subprocesses: comfortably
+past PostgreSQL's 100-connection ceiling.
+
+The failure mode is genuinely misleading. An interactive transaction acquires a
+connection, completes one statement, then waits forever for a second one the
+pool cannot give it. It surfaces as `idle in transaction` followed by a
+transaction timeout, which reads like a deadlock rather than exhaustion.
+
+Test clients now cap `connection_limit=5`.
+
+### 3. Two seed subprocesses could overlap on the same unique index
+
+Diagnosed from `pg_stat_activity` and `pg_blocking_pids`:
+
+```
+1318 | idle in transaction | INSERT INTO "test_seed"."User" ...
+1319 | active | wait=Lock/transactionid | INSERT INTO "test_seed"."User" ...
+1319 <- blocked by 1318
+```
+
+One seed held the `User` unique index inside an open transaction while a second
+blocked behind it, and both hit the timeout.
+
+`prisma/seed.js` now exports `main()` and self-executes **only when run as a
+script** (`require.main === module`). Tests call it in-process, against the
+already-open client, which removes the second connection pool and the overlap by
+construction — and is faster.
+
+The command-line form the acceptance criterion actually names is still
+exercised, once, at the end of the file with nothing else touching the schema.
+
+The seed's interactive transaction budget was also raised from Prisma's 5s
+default to 30s. That default is tuned for a request handler; a seed may run
+against a managed database over the public internet during a deploy, and failing
+halfway leaves a partially seeded state.
+
+**Verified by three consecutive clean full-suite runs**, not one.

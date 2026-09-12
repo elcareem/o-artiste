@@ -2,7 +2,7 @@
  * Versioned commission rate configuration — issue #7.
  */
 
-const { prisma, hasDatabase } = require('./db')('commission');
+const { prisma, hasDatabase, ready } = require('./db')('commission');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,6 +12,9 @@ const { startServer } = require('./helpers');
 const service = require('../src/services/commissionService');
 
 const describe = hasDatabase ? test : test.skip;
+
+// The schema is emptied before anything runs, so a rerun behaves like a first run.
+test.before(async () => { if (ready) await ready; });
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;

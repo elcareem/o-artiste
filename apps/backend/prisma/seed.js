@@ -144,7 +144,12 @@ async function seedUsers() {
       if (spec.artist) await tx.artist.create({ data: { userId: u.id, ...spec.artist } });
 
       return u;
-    });
+    },
+    // Prisma's 5s default is tuned for a request handler, not a seed. This one
+    // may run against a managed database over the public internet during a
+    // deploy, or against a local database under test-suite contention, and
+    // failing halfway through leaves a partially seeded state.
+    { timeout: 30000 });
 
     created.push(user);
   }
@@ -222,14 +227,21 @@ async function main() {
   console.log('[seed] done');
 }
 
-main()
-  .catch((err) => {
-    console.error('[seed] failed:', err.message);
-    process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+// Only self-executes when run as a script. Required as a module — by tests, or
+// by a future bootstrap — it exports `main` instead, so the seed can run
+// in-process against an already-open client rather than spawning a second
+// process with its own connection pool.
+if (require.main === module) {
+  main()
+    .catch((err) => {
+      console.error('[seed] failed:', err.message);
+      process.exitCode = 1;
+    })
+    .finally(() => prisma.$disconnect());
+}
 
 module.exports = {
+  main,
   USERS,
   SEED_EMAILS: USERS.map((u) => u.email),
   DEFAULT_TIERS,

@@ -10,12 +10,15 @@
 // reach the database without booting the app.
 // Must be first: binds this file to its own schema before the Prisma
 // singleton is constructed.
-const { prisma, hasDatabase } = require('./db')('schema');
+const { prisma, hasDatabase, ready } = require('./db')('schema');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const describe = hasDatabase ? test : test.skip;
+
+// The schema is emptied before anything runs, so a rerun behaves like a first run.
+test.before(async () => { if (ready) await ready; });
 
 const TIER_SET = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
