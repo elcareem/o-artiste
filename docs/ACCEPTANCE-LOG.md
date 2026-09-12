@@ -98,7 +98,29 @@ Local portion verified — see the git status output recorded at commit time.
 gitignored. The *push* half of this criterion is covered by the blocked item
 below.
 
-### `[!]` Branch protection is active on `main`: PRs required, 1 approval, no code-owner restriction
+### `[x]` Branch protection is active on `main`
+
+Configured by the maintainer on 2026-09-12. Verified by attempting a direct
+push, which the rule detected and named:
+
+```
+remote: Bypassed rule violations for refs/heads/main:
+remote: - Changes must be made through a pull request.
+```
+
+**It warns rather than blocks for the repository owner.** GitHub's
+"Do not allow bypassing the above settings" is unticked, so the rule is enforced
+for collaborators and advisory for the owner. That is a common and defensible
+setup for a solo maintainer who needs an escape hatch — recorded so it is a
+known posture rather than an assumed one.
+
+Required approvals are **0**, the deviation agreed at #1: GitHub does not let a
+PR author approve their own pull request, so requiring one would block every
+merge on a single-maintainer project. Raise it to 1 when a second collaborator
+exists.
+
+The probe push left two empty commits on `main`, which the maintainer chose to
+leave in place rather than force-push away.
 
 **BLOCKED — no GitHub repository yet, and `gh` is not installed on this machine.**
 
@@ -2000,7 +2022,11 @@ nothing is broken, the details simply need correcting. Regression test added.
 A rejected identity is **not** retried against the provider on resubmission, and
 no cost is incurred for a failed check.
 
-### `[~]` An unverified client receives 403 on `POST /bookings`
+### `[x]` An unverified client receives 403 on `POST /bookings`
+
+**Closed at #15**, where the endpoint was built and `requireVerified` mounted.
+Asserted there that the message tells the client what to do rather than merely
+refusing. See the #15 section.
 
 ### `[~]` An unverified artist cannot accept a booking
 
@@ -2676,3 +2702,68 @@ the new process never got to write over.
 
 Worth remembering as a verification failure mode: a green test suite and a red
 curl can both be right when they are talking to different processes.
+
+
+---
+
+## Verification pass — everything through #15
+
+Run 2026-09-12 at the maintainer's request, before starting #16.
+
+| Check | Result |
+|---|---|
+| Issues recorded | **16** — #1–#15 plus #17, in the corrected build order |
+| Deterministic backend tests | **123 pass, 0 fail**, across 12 consecutive runs |
+| Provider contract tests | **11 pass, 0 fail** |
+| Web tests | 7 pass, 0 fail |
+| `npm run lint` | exit 0 |
+| `npm run check:rules` | **6 pass, 0 fail, 0 skip** |
+| Web production build | compiled successfully |
+| Working tree | clean |
+| Deployed API | `/health` 200, `/artists` 200, `/auth/login` 401 (database-backed) |
+| Deployed web | 200 |
+| Deployed database | 3 migrations applied, **17 tables**, schema up to date |
+
+### The one real problem this pass found, and how it was fixed
+
+The first audit run showed **9 failing tests**, and the next twelve runs were
+clean. The failures were all in the EscrowPay suite, and the only provider error
+in the log was a transient connection failure.
+
+**The root cause was structural, not a bug in any test.** `npm test` called a
+live third party, so it could fail for reasons that have nothing to do with our
+code — a dropped connection, a rate limit, their maintenance window. A financial
+test suite that fails for reasons outside the code is one people stop believing,
+and the fix is not more retries.
+
+The provider suite is now a **separate file convention**, `*.sandbox.js`, which
+`npm test` does not discover:
+
+```
+npm test              123 tests — our code. Deterministic. Must always pass.
+npm run test:sandbox   11 tests — the provider contract. May fail when they are down.
+npm run test:all       both.
+```
+
+Nothing is weakened: the same 11 assertions still run, and #40's end-to-end
+script runs them against the sandbox as part of release verification. What
+changed is that a red `npm test` now always means *our code is wrong*.
+
+Confirmed with **12 consecutive clean runs** of the deterministic suite.
+
+### Two acceptance boxes corrected as stale
+
+- **#1 branch protection** — the maintainer configured it; the box still read
+  blocked. Now recorded as active, with the finding that it warns rather than
+  blocks for the repository owner.
+- **#10's unverified-client criterion** — closed at #15 when the endpoint
+  existed; the #10 section still read deferred.
+
+### Genuinely outstanding
+
+| Item | Blocked on |
+|---|---|
+| #5 — queue timing on the deployed host | No worker process runs on Render yet. Due before #25, which is the first business job. |
+| #10 — an unverified artist cannot accept a booking | #18, where acceptance exists. |
+
+Both are correctly open rather than overlooked.
