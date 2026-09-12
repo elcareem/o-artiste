@@ -2173,3 +2173,84 @@ release can reach them, and that bank accounts are unique per environment.
 That is not in #11's stated scope — its field list is explicit — so it has not
 been added here. It needs a home before #26 executes a release; raised rather
 than folded in.
+
+---
+
+## #12 — feat(backend): artist listing and detail endpoints
+
+Branch `feat/12-artist-listing`. Verified 2026-09-12.
+
+```
+$ npm run test:backend
+# tests 104  # pass 104  # fail 0  # skipped 0
+```
+
+### `[x]` `curl <backend>/artists` returns 200 with a paginated payload
+
+```
+$ curl localhost:4000/artists          # no Authorization header
+{"artists":[
+  {"id":"cmtymgun7…","stageName":"DJ Ekene","category":"DJ","location":"Abuja",
+   "baseRateKobo":5000000,"cancellationRate":null},
+  {"id":"cmtymgun2…","stageName":"Tolu Live","category":"Afrobeats","location":"Lagos",
+   "baseRateKobo":25000000,"cancellationRate":null}],
+ "pagination":{"page":1,"limit":20,"total":2,"totalPages":1}}
+200
+```
+
+Unauthenticated, because discovery is public.
+
+### `[x]` A suspended artist does not appear in the listing and returns 404 on detail
+
+```
+$ UPDATE "User" SET "accountStanding"='SUSPENDED' …
+$ curl localhost:4000/artists
+listed: DJ Ekene | total: 1
+
+$ curl localhost:4000/artists/<suspended id>
+{"error":"Artist not found."}  404
+```
+
+The `total` drops too — the exclusion happens **at the query level**, not by
+filtering a fetched page, so a suspended artist cannot appear even transiently
+and cannot skew a count. Filtering after fetching would also corrupt pagination:
+a page of 20 could return 19.
+
+**404, not 403.** Distinguishing them would confirm the account exists, which is
+information a suspended artist's would-be clients have no business receiving.
+
+Unverified, `REMOVED` and incomplete-profile artists are excluded by the same
+filter, each asserted independently.
+
+### `[x]` `cancellationRate` is present and returns `null`, not omitted
+
+Asserted with `'cancellationRate' in subject` rather than a truthiness check —
+**the field existing while being null is the contract**, and a truthiness test
+would pass just as happily if the field were missing.
+
+Checked on both the listing and the detail endpoint.
+
+It returns `null` today and is populated in #35. Adding it later would mean
+revisiting the frontend; establishing the contract now forces #13 to handle the
+below-threshold case from the start rather than bolting it on afterwards. `null`
+means *"not enough bookings to say anything"*, and the UI renders **nothing** —
+not `0%`, which implies a perfect record that has not been earned, and not
+`N/A`, which draws attention to an absence and reads as a warning (`docs/06` §4).
+
+### Additional behaviour
+
+**Filtering** by `category` and `location`, case-insensitively, so a filter chip
+need not match storage casing. A filter matching nothing returns an empty array
+with `total: 0` and `totalPages: 1` — an empty page, not an error, which is what
+#13 renders its empty state from.
+
+**Pagination is bounded.** `limit` is capped at 100 and `page` floors at 1, so
+`?limit=9999&page=-5` clamps rather than erroring or returning the whole table.
+Asserted that consecutive pages do not overlap, and that a page beyond the end
+is empty rather than an error.
+
+**The public shape is an allowlist.** Asserted that `userId`, `passwordHash`,
+`email`, `phone` and `profileComplete` appear nowhere in a public payload — a
+column added later is private by default rather than exposed until someone
+notices. `baseRateKobo` stays a kobo integer with no `₦` anywhere; formatting is
+the web app's job.
