@@ -956,3 +956,106 @@ Verified by three tests (25 backend tests total, all passing):
 
 Rate limiting on these endpoints remains open at #41; this records the attempts,
 it does not yet slow them down.
+
+---
+
+## #6 — chore(backend): seed script
+
+Branch `chore/6-seed-script`. Verified 2026-09-12.
+
+```
+$ npm run test:backend
+# tests 30  # pass 30  # fail 0  # skipped 0
+```
+
+### `[x]` `node prisma/seed.js` run twice produces identical database state
+
+Fingerprinted with an MD5 over every seeded row **including `createdAt` and
+`updatedAt`**, so any write at all would change it:
+
+```
+counts after run 1 (user/artist/client/rate/tier): 6/2/2/1/4
+counts after run 2 (user/artist/client/rate/tier): 6/2/2/1/4
+md5 after run 1: 4e32b6fd2b8f4cc8248e3a8bdc671dec
+md5 after run 2: 4e32b6fd2b8f4cc8248e3a8bdc671dec
+IDENTICAL — including every timestamp
+```
+
+**Every write is guarded by an existence check rather than an upsert.** An
+upsert would satisfy a row-count assertion while still issuing an `UPDATE` on
+every run, moving `updatedAt`. The criterion says *identical state*, so nothing
+may be written twice — not even harmlessly.
+
+### `[x]` Seeded artist rates fall within the EscrowPay transaction range
+
+```
+DJ Ekene:   5000000 kobo  (₦50,000)
+Tolu Live: 25000000 kobo  (₦250,000)
+```
+
+Both inside ₦20,000–₦3,000,000. The seed **refuses to run** if a rate falls
+outside it, rather than leaving the failure to surface when a client tries to
+pay — `assertRatesAreFundable()` throws before anything is written.
+
+Tolu Live at ₦250,000 sits exactly on the EscrowPay money-in cap boundary, which
+makes it a useful fixture for #14's fee tests.
+
+### `[x]` The default tier set has no gaps or overlaps in its day ranges
+
+```
+0 to 0   refund 1500  / comp 8500  = 10000
+1 to 2   refund 4000  / comp 6000  = 10000
+3 to 6   refund 7000  / comp 3000  = 10000
+7 to ∞   refund 10000 / comp 0     = 10000
+```
+
+Asserted four ways, because "no gaps or overlaps" is easy to eyeball and easy to
+get wrong:
+
+- Every row's two percentages sum to exactly **10000 bps**
+- **Day 0 is covered** — a booking cancelled on the day has to resolve to
+  something
+- Exactly **one open-ended band**, and it is the last one
+- Each band starts exactly where the previous ended (`min == previous.max + 1`)
+- **Every day from 0 to 30 resolves to exactly one band**, checked by iteration
+  rather than by inspection
+
+A gap would mean a cancellation in that window has no applicable rule, and there
+is no safe default: refunding everything harms the artist, refunding nothing is
+FCCPA exposure (`docs/05` §5).
+
+### `[x]` Configuration seeded as records, not constants
+
+One `CommissionRate` at **500 bps**, attributed to the seeded `SUPER_ADMIN` —
+an audit trail with no actor is not an audit trail. Asserted to be an integer,
+never a float percentage, so `0.05` can never enter a money calculation.
+
+This is the real point of seeding here: it establishes from day one that the
+rate and the tier table are **data**, so no later issue is tempted to hardcode
+5% and quietly diverge from the versioned record payout math is supposed to read
+(`docs/07` §3).
+
+### `[x]` Accounts cover every role, with the right verification posture
+
+Six accounts: 1 `SUPER_ADMIN`, 1 `ADMIN`, 2 `CLIENT`, 2 `ARTIST`.
+
+Clients and artists are **pre-verified**, so later phases have something to work
+against without running the provider flow. Admins are deliberately **not** —
+they never transact, and verification exists so money has a confirmed recipient.
+
+`verificationReference` holds the **result** of the check, never a NIN or BVN.
+Retaining the identifier is NDPR exposure with no operational benefit.
+
+Every seeded user has its `Client` or `Artist` profile row, created in the same
+transaction, so a half-seeded account cannot exist.
+
+### Test contamination found and fixed
+
+The seed tests initially failed in the full suite while passing alone: they
+asserted whole-table counts, and the auth and audit suites create users in the
+same database — 3 super-admins and 9 artists by the time they ran.
+
+The assertions are now **scoped to the seeded rows** (by known email, commission
+rate id, and tier version id). That is the correct scope regardless: a seed test
+should measure what the seed writes, not what its neighbours happen to be doing.
+A test that fails because another test did its job is a test that gets deleted.
