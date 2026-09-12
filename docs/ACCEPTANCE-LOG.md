@@ -3010,3 +3010,153 @@ outlasted the 15-second client timeout.
 
 This is exactly why the sandbox suite was separated from `npm test` earlier in
 this session. The deterministic suite was unaffected.
+
+---
+
+## #19 — feat(backend): append-only ledger service
+
+Branch `feat/19-ledger-service`. Verified 2026-09-12.
+
+```
+$ npm run test:backend
+# tests 158  # pass 158  # fail 0        (15 new)
+
+$ npm run check:rules
+passed 7   failed 0   skipped 0          (2 new rules)
+```
+
+`services/ledgerService.js` — the sole writer of ledger entries, and the only
+module that may touch `prisma.ledgerEntry`.
+
+### `[x]` Summing ledger entries for a completed booking reconciles to zero
+
+Read back off the database, not recomputed — this is what the parties actually
+ended up with on the canonical ₦200,000 booking at 5%:
+
+```
+CLIENT     -20,200,000     (-₦202,000)
+ARTIST     +19,000,000     (+₦190,000)
+PLATFORM      +993,000       (+₦9,930)
+PROVIDER      +207,000       (+₦2,070)
+           ───────────
+SUM                 0
+```
+
+Reconciliation is asserted across **every terminal outcome × four amounts** —
+release, client cancellation at three tiers, and artist cancellation, at
+₦20,000, ₦126,667 (where the money-in cap first binds), ₦250,000 (the 0.8%
+crossover) and ₦3,000,000. Twenty combinations, all zero.
+
+**An in-flight booking deliberately does not balance.** After funding alone the
+ledger sums to −₦200,000, which is the money sitting in escrow and not yet
+distributed. A scheme that balanced at every instant would have to invent a
+counterparty for escrow; the invariant is about *settled* bookings, and the
+ledger has to be able to represent an in-flight one honestly. `reconcile`
+reports `balanced: false` and `assertBalanced` throws.
+
+**On an artist cancellation the client's net position is exactly zero** — not
+merely refunded. They get the escrow back *and* the money-in fee they paid on
+top of it, so `byParty.CLIENT === 0`. Zero fee exposure means zero.
+
+### `[x]` A state change that fails rolls back its ledger entry — no orphaned rows
+
+Tested in both directions, because the failure is symmetric:
+
+```
+ledger write → illegal transition (PENDING_PAYMENT → RELEASED) → throws
+  entryCount 0, booking still PENDING_PAYMENT
+
+legal transition → rejected ledger write → throws
+  booking still PENDING_PAYMENT
+```
+
+**The same-transaction rule is enforced structurally, not by convention.**
+`record` inspects the client it is handed and *refuses the base Prisma
+singleton* — the interactive transaction client omits `$transaction`, which is
+what makes them distinguishable without asking the caller to assert anything. A
+developer who forgets the transaction gets an exception, not an orphaned row
+discovered months later during a dispute. Every composite recorder is covered by
+the same guard, asserted one by one.
+
+### `[x]` Grepping for `ledgerEntry.update` and `ledgerEntry.delete` returns zero matches
+
+Two rule changes, both verified by deliberately introducing a violation and
+watching the rule fire:
+
+1. **Scope widened** from `apps/backend/src` to the backend's `src`, `test` and
+   `prisma` directories plus the web app. #19 requires that no mutation path
+   exists *anywhere in the codebase*, and a mutation reached through a test
+   helper or a seed script is a mutation.
+
+2. **New rule — `ledgerService.js` is the sole writer.** The transaction guard
+   above is only unbypassable while one module writes entries; a second writer
+   reintroduces exactly the orphaned-row failure the guard prevents. Same
+   argument as `escrowService.js` for money movement.
+
+Widening the scope immediately produced a **false positive**: the schema's own
+comment documenting the rule matched it. Fixed by dropping comment lines before
+matching, for every `absent`-based rule — these rules forbid code, and a check
+that cannot tell a violation from its own documentation is a check nobody
+trusts. Commenting a call out is not a bypass, because a commented call does not
+run. Re-verified afterwards that a real `tx.ledgerEntry.update` still fails the
+check.
+
+### `[x]` A correction produces two visible entries, not one modified entry
+
+```
+FUNDED      CLIENT   -20,200,000    (original, untouched)
+CORRECTION  CLIENT   +20,200,000    offsetsEntryId → the original
+                                     "Reverses FUNDED — funded at the wrong amount"
+```
+
+A correction is the exact negation, carries the reason in its description, and
+names what it offsets. Guarded against double-correcting the same entry
+(silently reversing the reversal), correcting a correction, and correcting
+without a stated reason.
+
+**A reversal alone leaves the booking unbalanced, by design.** It is the
+caller's job to write the replacement entries; `reconcile` failing in between is
+the ledger reporting an incomplete correction rather than concealing one. Tested
+end to end: correct a commission entry, rewrite it, and the booking reconciles
+again with `entryCount + 2` — by adding entries, never by editing.
+
+### Design decisions worth recording
+
+**Figures are never passed in.** Every composite recorder takes a booking and
+derives its amounts from `feeService` and the booking's own frozen snapshot. A
+caller cannot write entries that disagree with the arithmetic the rest of the
+system uses. The fee service is pure, so computing twice and moving money once
+costs nothing.
+
+**Commission is recorded gross, with the payout fee as its own pair.** Netting
+the fee into the commission line balances identically and hides what the
+platform's take was before its costs.
+
+**Fee liabilities are balanced pairs, so they do not disturb reconciliation** —
+an accrued debt has moved no money yet. The accrual is recorded on the booking
+that caused it and the settlement on the later booking whose payout pays it off.
+Tested: both bookings reconcile to zero independently, and the artist's
+positions across the two show the liability carried and then paid.
+
+**Zero-kobo entries are rejected.** An entry that moves nothing records nothing;
+composite recorders drop zero-value legs (a 0 bps commission, a waived fee)
+before reaching the primitive, so a zero arriving there means a caller computed
+something wrong.
+
+### Mutation-tested
+
+The reconciliation assertions were confirmed to be load-bearing rather than
+vacuous by breaking the service deliberately and checking the suite goes red:
+
+```
+payout-fee pair off by 1 kobo          → 4 tests fail
+fee reimbursement unpaired by ₦1       → 3 tests fail
+```
+
+### Callers arrive later, by design
+
+#19 is the ledger *service*. Its recorders are called from #20 (funding, on
+`escrow.funded`), #26 (release and liability settlement), #27 (client
+cancellation) and #28 (artist cancellation) — the dependency direction the
+backlog specifies. The tests drive each recorder directly inside a transaction,
+which is exactly how those issues will call them.

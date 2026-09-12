@@ -162,15 +162,33 @@ The ledger answers the question booking state cannot: *how did the money get the
 
 `amountKobo` is **signed from the party's perspective**: positive means the party received value, negative means the party parted with it. **The entries for any settled booking sum to exactly zero.** That single invariant is the widest-catching financial check in the system, which is why `40`'s e2e script asserts it at the end of every scenario.
 
+Most movements credit or debit a single party, because the counterparty is the escrow itself, which is not a ledger party. A movement **between two parties who are both on the ledger** — the payout fee, which the platform bears and the provider receives — is written as a matching pair, so it nets to zero without concealing either side.
+
 Worked example — a ₦200,000 booking completing at 5% commission:
 
-| Type | Party | `amountKobo` |
-|---|---|---|
-| `FUNDED` | `CLIENT` | −20,000,000 |
-| `COMMISSION` | `PLATFORM` | +1,000,000 |
-| `ESCROW_FEE_IN` | `PROVIDER` | +200,000 |
-| `ESCROW_FEE_OUT` | `PROVIDER` | +7,000 |
-| `RELEASED` | `ARTIST` | +18,793,000 |
-| | **Sum** | **0** |
+| | Type | Party | `amountKobo` |
+|---|---|---|---|
+| **At funding** | `FUNDED` | `CLIENT` | −20,200,000 |
+| | `ESCROW_FEE_IN` | `PROVIDER` | +200,000 |
+| | | *running sum* | *−20,000,000* |
+| **At release** | `COMMISSION` | `PLATFORM` | +1,000,000 |
+| | `ESCROW_FEE_OUT` | `PLATFORM` | −7,000 |
+| | `ESCROW_FEE_OUT` | `PROVIDER` | +7,000 |
+| | `RELEASED` | `ARTIST` | +19,000,000 |
+| | | **Sum** | **0** |
 
-The artist receives **₦190,000** and the client transfers **₦202,000**, which are the figures #26 asserts. The arithmetic behind each line is in `05` — including the correction found at #18, where the provider's live fee configuration turned out to charge money-in to the client at funding and money-out to the platform, rather than deducting both from the escrow. The figure recorded here was previously ₦187,930.
+The running sum after funding is **−₦200,000**, and that is correct rather than a failure: it is the money sitting in escrow, received from the client and not yet distributed. The invariant is that a **settled** booking sums to zero, so the ledger must be able to represent an in-flight one honestly.
+
+Net positions: the client parts with **₦202,000**, the artist receives **₦190,000**, the platform nets **₦9,930**, and the provider takes **₦2,070**. Those are the figures #26 asserts. The arithmetic behind each line is in `05` — including the correction found at #18, where the provider's live fee configuration turned out to charge money-in to the client at funding and money-out to the platform, rather than deducting both from the escrow. The artist figure recorded here was previously ₦187,930.
+
+Commission is recorded **gross**, with the payout fee as its own pair, rather than netting the fee into the commission line. Both balance identically; only the gross form still shows what the platform's take was before its costs.
+
+### Corrections and reconciliation
+
+A correction is the exact negation of the entry it offsets, typed `CORRECTION` and carrying `offsetsEntryId`. Between the reversal and the replacement entries the booking does not balance — that is intended. `reconcile` reporting an incomplete correction is the ledger doing its job; a scheme that kept the books balanced through a half-applied correction would be hiding one.
+
+`FeeLiability` movements (#28, #26) are written as balanced pairs, artist against platform, so they do not disturb reconciliation: an accrued debt has moved no money yet. The accrual is recorded on the booking that caused it and the settlement on the later booking whose payout pays it off, so **each booking still reconciles to zero on its own** even though the liability spans two.
+
+### Implementation
+
+`services/ledgerService.js` is the sole writer, enforced by grep. Its `record` primitive **refuses the base Prisma client** and accepts only an interactive transaction client, which turns rule 3 from a convention into a structural guarantee — a caller who forgets the transaction gets an exception, not an orphaned row. The composite recorders take a booking and derive every figure from `feeService` and the booking's own frozen snapshot; no caller passes amounts in, so ledger entries cannot drift from the arithmetic the rest of the system uses.
