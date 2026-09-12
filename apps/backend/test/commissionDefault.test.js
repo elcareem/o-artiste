@@ -6,7 +6,7 @@
  * other cases depend on, and leaving the outcome to test ordering.
  */
 
-const { prisma, hasDatabase } = require('./db')('commissiondefault');
+const { prisma, hasDatabase, ready } = require('./db')('commissiondefault');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,6 +16,9 @@ const { startServer } = require('./helpers');
 const service = require('../src/services/commissionService');
 
 const describe = hasDatabase ? test : test.skip;
+
+// The schema is emptied before anything runs, so a rerun behaves like a first run.
+test.before(async () => { if (ready) await ready; });
 
 describe('with no rate configured, the resolver falls back rather than failing', async () => {
   assert.equal(await prisma.commissionRate.count(), 0, 'this schema starts empty');

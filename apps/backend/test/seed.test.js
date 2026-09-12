@@ -2,7 +2,7 @@
  * Seed script guarantees — issue #6.
  */
 
-const { prisma, hasDatabase } = require('./db')('seed');
+const { prisma, hasDatabase, ready } = require('./db')('seed');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,18 +13,35 @@ const seedModule = require('../prisma/seed');
 
 const describe = hasDatabase ? test : test.skip;
 
+/**
+ * Empty the schema, then seed ONCE for the whole file.
+ *
+ * Each case previously re-ran the seed, which meant two subprocesses could
+ * overlap: the first held the User unique index inside its transaction while
+ * the second blocked on the same rows, and both eventually timed out. Seeding
+ * once here serialises it by construction, and the idempotency case below runs
+ * the second pass explicitly, which is the only place a second run is actually
+ * the thing under test.
+ */
+test.before(async () => {
+  if (ready) await ready;
+  if (hasDatabase) await runSeed();
+});
+
 const BACKEND_ROOT = path.resolve(__dirname, '..');
 
-function runSeed() {
-  // The seed runs as a subprocess, so it must be handed this file's schema
-  // explicitly — otherwise it would seed the default schema and the
-  // assertions here would measure a different database entirely.
-  execFileSync('node', ['prisma/seed.js'], {
-    cwd: BACKEND_ROOT,
-    stdio: 'pipe',
-    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
-  });
-}
+/**
+ * Runs the seed IN-PROCESS, against this file's schema.
+ *
+ * It was previously spawned as a subprocess, which opened a second connection
+ * pool against the same schema. Two seed processes could then overlap on the
+ * `User` unique index — one holding it inside an open transaction while the
+ * other blocked — and both eventually hit the transaction timeout. In-process
+ * removes the overlap by construction, and is faster.
+ *
+ * The script's command-line behaviour is still covered, once, at the end.
+ */
+const runSeed = () => seedModule.main();
 
 /**
  * A complete fingerprint of everything the seed writes, including every
@@ -43,10 +60,10 @@ async function snapshot() {
 }
 
 describe('running the seed twice produces identical database state', async () => {
-  runSeed();
+  // One run already happened in before(); this is the second.
   const first = await snapshot();
 
-  runSeed();
+  await runSeed();
   const second = await snapshot();
 
   // Not merely "no duplicates" — byte-identical, timestamps included. An
@@ -55,8 +72,6 @@ describe('running the seed twice produces identical database state', async () =>
 });
 
 describe('seeded accounts cover every role, with transacting users pre-verified', async () => {
-  runSeed();
-
   // Absolute, whole-table assertions. Possible again because this file owns
   // its schema: no other suite can add a user here. Before isolation these had
   // to be scoped to known seed emails, which measured the right thing but
@@ -93,7 +108,6 @@ describe('seeded accounts cover every role, with transacting users pre-verified'
 });
 
 describe('seeded artist rates fall within the EscrowPay transaction range', async () => {
-  runSeed();
   const { MIN_RATE_KOBO, MAX_RATE_KOBO } = seedModule;
 
   // ₦20,000 – ₦3,000,000. A rate outside this could never be funded at all.
@@ -113,8 +127,6 @@ describe('seeded artist rates fall within the EscrowPay transaction range', asyn
 });
 
 describe('the default commission rate is a configuration record, not a constant', async () => {
-  runSeed();
-
   const rates = await prisma.commissionRate.findMany();
   assert.equal(rates.length, 1);
   assert.equal(rates[0].rateBasisPoints, 500, '5% expressed in basis points');
@@ -126,8 +138,6 @@ describe('the default commission rate is a configuration record, not a constant'
 });
 
 describe('the default tier set has no gaps or overlaps in its day ranges', async () => {
-  runSeed();
-
   const tiers = await prisma.cancellationTier.findMany({ orderBy: { minDaysBefore: 'asc' } });
   assert.equal(tiers.length, 4);
 
@@ -168,6 +178,20 @@ describe('the default tier set has no gaps or overlaps in its day ranges', async
     );
     assert.equal(matching.length, 1, `day ${day} must match exactly one band, matched ${matching.length}`);
   }
+});
+
+describe('the script runs from the command line, as the acceptance criterion states', async () => {
+  // `node prisma/seed.js` is what the issue specifies, so it is exercised as
+  // written — once, last, with nothing else touching the schema.
+  execFileSync('node', ['prisma/seed.js'], {
+    cwd: BACKEND_ROOT,
+    stdio: 'pipe',
+    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
+  });
+
+  // Still idempotent when invoked that way.
+  const users = await prisma.user.findMany();
+  assert.equal(users.length, 6);
 });
 
 test.after(async () => {

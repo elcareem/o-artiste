@@ -2,7 +2,7 @@
  * Authentication, roles and permission middleware — issue #9.
  */
 
-const { prisma, hasDatabase } = require('./db')('auth');
+const { prisma, hasDatabase, ready } = require('./db')('auth');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,6 +12,9 @@ const { createApp } = require('../src/app');
 const { startServer } = require('./helpers');
 
 const describe = hasDatabase ? test : test.skip;
+
+// The schema is emptied before anything runs, so a rerun behaves like a first run.
+test.before(async () => { if (ready) await ready; });
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;

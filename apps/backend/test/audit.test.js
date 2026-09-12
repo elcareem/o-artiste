@@ -2,7 +2,7 @@
  * Audit trail for rejected privilege escalation — docs/07-ADMIN-CONFIG.md §5.
  */
 
-const { prisma, hasDatabase } = require('./db')('audit');
+const { prisma, hasDatabase, ready } = require('./db')('audit');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,6 +11,9 @@ const { createApp } = require('../src/app');
 const { startServer } = require('./helpers');
 
 const describe = hasDatabase ? test : test.skip;
+
+// The schema is emptied before anything runs, so a rerun behaves like a first run.
+test.before(async () => { if (ready) await ready; });
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
