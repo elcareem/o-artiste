@@ -29,13 +29,24 @@ fail() {
   if [ -n "${3:-}" ]; then printf '%s\n' "$3" | sed 's/^/        > /'; fi
 }
 
-# absent <label> <reason-on-hit> <path> <pattern...>
-# Passes when the pattern does NOT appear under <path>.
+# absent <label> <reason-on-hit> <paths> <pattern...>
+# Passes when the pattern does NOT appear under any of <paths> (space separated).
+# Paths that do not exist yet are dropped; if none exist the rule SKIPs, so a
+# rule can name a directory a later issue creates without reporting a false pass.
 absent() {
-  local label="$1" reason="$2" path="$3"; shift 3
-  if [ ! -e "$path" ]; then skip "$label" "$path not present yet"; return; fi
+  local label="$1" reason="$2" paths="$3"; shift 3
+  local existing=()
+  local p
+  for p in $paths; do [ -e "$p" ] && existing+=("$p"); done
+  if [ ${#existing[@]} -eq 0 ]; then skip "$label" "$paths not present yet"; return; fi
   local hits
-  hits="$(grep -rnE "$*" "$path" 2>/dev/null || true)"
+  # Comment lines are dropped before matching. These rules forbid CODE, and the
+  # schema, the services and the docs all describe the rules they are subject to
+  # in their own comments — a check that cannot tell a violation from its own
+  # documentation is a check nobody trusts. Commenting a call out is not a
+  # bypass either: a commented call does not run.
+  hits="$(grep -rnE "$*" "${existing[@]}" 2>/dev/null \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
   if [ -z "$hits" ]; then pass "$label"; else fail "$label" "$reason" "$hits"; fi
 }
 
@@ -63,10 +74,32 @@ else
 fi
 
 # ── Append-only ledger — docs/01 §5, issue #19 ──────────────────────────────
+# Scoped to the whole backend, not just src/: #19 requires that no update or
+# delete path exists ANYWHERE in the codebase, and a mutation reached through a
+# test helper or a seed script is a mutation.
 absent "No ledger update or delete path" \
        "The ledger is append-only; corrections are new offsetting entries. docs/01-DATA-MODEL.md §5." \
-       "apps/backend/src" \
+       "apps/backend/src apps/backend/test apps/backend/prisma apps/web/src" \
        'ledgerEntry\.(update|delete|updateMany|deleteMany|upsert)'
+
+# The transaction guard in ledgerService is only unbypassable while that module
+# is the sole writer. A second writer reintroduces exactly the orphaned-row and
+# lost-entry failures the guard exists to prevent, so the restriction is
+# structural rather than a review habit — the same argument as escrowService.
+SRC="apps/backend/src"
+if [ ! -d "$SRC" ]; then
+  skip "ledgerService.js is the sole writer of ledger entries" "$SRC not present yet"
+else
+  hits="$(grep -rnE '\.ledgerEntry\.' "$SRC" 2>/dev/null \
+          | grep -vE 'services/ledgerService\.js' || true)"
+  if [ -z "$hits" ]; then
+    pass "ledgerService.js is the sole writer of ledger entries"
+  else
+    fail "ledgerService.js is the sole writer of ledger entries" \
+         "All ledger writes go through services/ledgerService.js, which requires a transaction client. docs/01-DATA-MODEL.md §5." \
+         "$hits"
+  fi
+fi
 
 # ── Single money-moving module — docs/03 §5, issue #26 ──────────────────────
 SRC="apps/backend/src"
