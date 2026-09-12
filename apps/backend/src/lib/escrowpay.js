@@ -267,6 +267,26 @@ function activateEscrow({ transactionId, version, reference }) {
   });
 }
 
+/**
+ * Creates the bank account the payer transfers into — the funding instruction.
+ *
+ * Bank transfer only. There is no card path anywhere in this system and none
+ * may be added: a chargeback arriving weeks after funds have been released to
+ * an artist is unrecoverable, which is the exact risk escrow exists to remove
+ * (docs/03 §2).
+ */
+function createPaymentAccount({ transactionId, reference, expectedAmountKobo, currency = 'NGN' }) {
+  return request({
+    method: 'POST',
+    path: `/transactions/${transactionId}/payment-accounts`,
+    idempotencyKey: reference,
+    body: {
+      currency,
+      ...(expectedAmountKobo !== undefined ? { expected_amount_minor: expectedAmountKobo } : {}),
+    },
+  });
+}
+
 function getEscrow(transactionId) {
   return request({ method: 'GET', path: `/transactions/${transactionId}` });
 }
@@ -467,6 +487,7 @@ function assertInteger(value, name) {
 module.exports = {
   createEscrow,
   activateEscrow,
+  createPaymentAccount,
   getEscrow,
   release,
   refund,

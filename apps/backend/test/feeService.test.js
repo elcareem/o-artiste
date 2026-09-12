@@ -17,13 +17,24 @@ const N = (naira) => naira * 100; // naira → kobo, for readable test data
 // The canonical example
 // ---------------------------------------------------------------------------
 
-test('a ₦200,000 booking at 5% yields an artist net of ₦187,930', () => {
+test('the canonical ₦200,000 booking, under the provider’s fee bearers', () => {
+  // #14 originally asserted ₦187,930, computed from docs/05's assumption that
+  // the artist bears both escrow fees. The provider's live configuration says
+  // otherwise — money-in is charged to the payer at funding, money-out to the
+  // business at payout — and the figure changes accordingly. Found at #18 and
+  // changed by decision rather than adjusted quietly.
   const r = fee.computeCompletion({ amountKobo: N(200000), commissionBps: 500 });
 
   assert.equal(r.moneyInFeeKobo, N(2000), 'money-in is capped at ₦2,000');
+  assert.equal(r.clientPaysKobo, N(202000), 'the client transfers amount PLUS the fee');
   assert.equal(r.commissionKobo, N(10000), '5% of ₦200,000');
   assert.equal(r.moneyOutFeeKobo, N(70), 'payout above ₦50,000');
-  assert.equal(r.artistNetKobo, 18793000, '₦187,930');
+
+  assert.equal(r.artistNetKobo, N(190000), '₦190,000 — escrow less commission');
+  assert.equal(r.platformNetKobo, 993000, '₦9,930 — commission less the payout fee we absorb');
+
+  assert.equal(r.moneyInBearer, 'CLIENT');
+  assert.equal(r.moneyOutBearer, 'PLATFORM');
 });
 
 // ---------------------------------------------------------------------------
@@ -92,17 +103,36 @@ test('R2 — the parts sum to the whole for every amount, with no kobo unaccount
     for (const bps of [0, 1, 250, 500, 733, 1000, 9999, 10000]) {
       const r = fee.computeCompletion({ amountKobo, commissionBps: bps });
 
-      const sum = r.commissionKobo + r.moneyInFeeKobo + r.moneyOutFeeKobo + r.artistNetKobo;
-      assert.equal(sum, amountKobo, `${amountKobo} @ ${bps}bps: parts must sum to the whole`);
+      // Reconciles against what the CLIENT PAYS, not the booking amount: the
+      // money-in fee is part of their outflow but never enters escrow.
+      const sum = r.artistNetKobo + r.platformNetKobo + r.moneyInFeeKobo + r.moneyOutFeeKobo;
+      assert.equal(
+        sum,
+        r.clientPaysKobo,
+        `${amountKobo} @ ${bps}bps: parts must sum to what the client paid`
+      );
 
-      // And the declared parts agree with the named figures.
       assert.equal(
         r.parts.reduce((t, p) => t + p.kobo, 0),
-        amountKobo,
+        r.clientPaysKobo,
         `${amountKobo} @ ${bps}bps: parts list must also reconcile`
       );
 
-      for (const value of [r.commissionKobo, r.moneyInFeeKobo, r.moneyOutFeeKobo, r.artistNetKobo]) {
+      // The escrow itself still splits exactly between artist and commission.
+      assert.equal(
+        r.artistNetKobo + r.commissionKobo,
+        amountKobo,
+        `${amountKobo} @ ${bps}bps: escrow must split exactly`
+      );
+
+      for (const value of [
+        r.commissionKobo,
+        r.moneyInFeeKobo,
+        r.moneyOutFeeKobo,
+        r.artistNetKobo,
+        r.platformNetKobo,
+        r.clientPaysKobo,
+      ]) {
         assert.ok(Number.isInteger(value), 'every figure is an integer number of kobo');
       }
     }
@@ -117,15 +147,9 @@ test('a fractional commission assigns the remainder to the artist, per the docum
 
   assert.equal(r.commissionKobo, 100001, 'floored, not rounded to 100002');
 
-  // The artist's net is the residual, so nothing is dropped.
-  assert.equal(
-    r.artistNetKobo,
-    amountKobo - r.moneyInFeeKobo - r.commissionKobo - r.moneyOutFeeKobo
-  );
-  assert.equal(
-    r.commissionKobo + r.moneyInFeeKobo + r.moneyOutFeeKobo + r.artistNetKobo,
-    amountKobo
-  );
+  // The artist's net is the residual of the escrow, so nothing is dropped.
+  assert.equal(r.artistNetKobo, amountKobo - r.commissionKobo);
+  assert.equal(r.artistNetKobo + r.commissionKobo, amountKobo);
 });
 
 // ---------------------------------------------------------------------------
@@ -141,12 +165,15 @@ test('client cancellation: the client bears the fees, the artist’s share does 
     artistCompensationBps: 3000,
   });
 
-  assert.equal(r.feeBearer, 'CLIENT');
+  assert.equal(r.moneyInBearer, 'CLIENT');
   assert.equal(r.clientShareKobo, N(140000));
   assert.equal(r.artistShareKobo, N(60000));
 
-  // Fees come out of the client's share only.
-  assert.equal(r.clientRefundKobo, N(140000) - r.escrowFeesKobo);
+  // The refund is the client's share of the escrow, undiminished. The cost they
+  // bear for cancelling is the money-in fee they already paid at funding, which
+  // is sunk rather than deducted here.
+  assert.equal(r.clientRefundKobo, N(140000));
+  assert.equal(r.clientSunkFeeKobo, N(2000), 'paid at funding, not returned');
 
   // The artist's compensation is reduced by commission alone — never by fees.
   assert.equal(r.commissionKobo, N(3000), '5% of the artist’s ₦60,000');
@@ -183,29 +210,26 @@ test('the ₦0 floor is UNREACHABLE with the default tiers — measured, not ass
   }
 });
 
-test('the refund floors at ₦0 under a tier set an admin could actually create', () => {
-  // #8 lets a super-admin define any bps split, so a 1% refund band is
-  // creatable even though the default set has nothing like it. That is the
-  // configuration where the floor matters — and #30 must state the ₦0 outcome
-  // in plain language rather than showing a blank field.
+test('a 0 bps refund band produces a ₦0 refund, stated rather than implied', () => {
+  // Under the provider's bearers the refund is no longer reduced by fees, so a
+  // ₦0 outcome now arises only from a tier that awards the client nothing —
+  // which #8 permits a super-admin to create. #30 must state that in plain
+  // language rather than showing a blank field.
   const r = fee.computeClientCancellation({
     amountKobo: N(20000),
     commissionBps: 500,
-    clientRefundBps: 100, // 1%
-    artistCompensationBps: 9900,
+    clientRefundBps: 0,
+    artistCompensationBps: 10000,
   });
 
-  assert.equal(r.clientShareKobo, N(200));
-  assert.ok(r.escrowFeesKobo > r.clientShareKobo, 'fees exceed the share, which is the point');
-  assert.equal(r.clientRefundKobo, 0, 'floored at zero, never negative');
+  assert.equal(r.clientShareKobo, 0);
+  assert.equal(r.clientRefundKobo, 0, 'zero, never negative');
+  // They still lose the money-in fee they paid at funding.
+  assert.equal(r.clientSunkFeeKobo, N(400));
 
-  // Reported rather than hidden. Not chased either: building collection logic
-  // for a sub-₦2,000 gap costs more than the gap.
-  assert.equal(r.unrecoveredShortfallKobo, r.escrowFeesKobo - r.clientShareKobo);
-  assert.ok(r.unrecoveredShortfallKobo > 0);
-
-  // The artist is still paid their share — the shortfall is the platform's.
+  // The artist takes the whole escrow less commission.
   assert.ok(r.artistCompensationKobo > 0);
+  assert.equal(r.artistShareKobo, N(20000));
 });
 
 test('artist cancellation: the client is made whole with zero fee exposure', () => {

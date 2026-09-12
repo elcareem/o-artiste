@@ -173,4 +173,4 @@ Worked example — a ₦200,000 booking completing at 5% commission:
 | `RELEASED` | `ARTIST` | +18,793,000 |
 | | **Sum** | **0** |
 
-The artist receives ₦187,930, which is the figure #26 asserts. The arithmetic behind each line is in `05`.
+The artist receives **₦190,000** and the client transfers **₦202,000**, which are the figures #26 asserts. The arithmetic behind each line is in `05` — including the correction found at #18, where the provider's live fee configuration turned out to charge money-in to the client at funding and money-out to the platform, rather than deducting both from the escrow. The figure recorded here was previously ₦187,930.

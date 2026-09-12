@@ -8,12 +8,39 @@ Implemented by **#14** (`feeService.js`, pure), **#27**, **#28**, **#29**. Every
 
 ## 1. Fee schedule
 
-| Fee | Rule |
-|---|---|
-| **Platform commission** | Configurable bps, default **500** (5%), applied to the artist's gross share |
-| **EscrowPay money-in** | 1.5% + ₦100, **capped at ₦2,000**, for amounts up to ₦250,000; **0.8% uncapped** above ₦250,000 |
-| **EscrowPay money-out** | **₦40** for payouts up to ₦50,000; **₦70** above |
-| **Verification** | ₦50 per successful check, **once per person for life** |
+| Fee | Rule | **Borne by** | **When** |
+|---|---|---|---|
+| **Platform commission** | Configurable bps, default **500** (5%), applied to the artist's gross share | Artist | at release |
+| **EscrowPay money-in** | 1.5% + ₦100, **capped at ₦2,000**, for amounts up to ₦250,000; **0.8% uncapped** above | **Client** | **at funding, on top of the amount** |
+| **EscrowPay money-out** | **₦40** for payouts up to ₦50,000; **₦70** above | **Platform** | at payout |
+| **Verification** | ₦50 per successful check, **once per person for life** | Platform | at onboarding |
+
+> ### Correction — the fee bearers, found at #18
+>
+> This table originally had the **artist** bearing both escrow fees, deducted
+> from the escrow at completion. That was written from the published fee
+> schedule before a sandbox key existed, and it is **wrong about the bearers**.
+>
+> The provider's live configuration, read from `GET /fees/configuration`:
+>
+> ```
+> escrow_service (money-in)   payer: "payer"      timing: "at_funding"
+> payout         (money-out)  payer: "business"   timing: "at_payout"
+> ```
+>
+> So the client is charged the money-in fee **on top of** the booking amount
+> when funding, and the platform absorbs the payout fee. **Neither is ever
+> deducted from the escrow**, which holds exactly the booking amount.
+>
+> Adopted rather than reconfigured, by decision. `PATCH /fees/configuration`
+> exists and the bearers may be changeable, but matching the provider removes
+> any risk of our arithmetic drifting from theirs — and #19 requires every
+> booking to reconcile to zero against numbers they control.
+>
+> **Consequence for disclosure:** the client pays more than the headline price,
+> so #16's acknowledgement step and #21's funding page must both state the fee
+> plainly. A client who expects to transfer ₦200,000 and is asked for ₦202,000
+> is exactly the surprise the FCCPA obligations exist to prevent.
 
 Verification is an onboarding cost and a platform cost. **It never enters per-booking economics** — it is not deducted from a payout, not added to a fee total, and not charged again for a returning user.
 
@@ -33,13 +60,26 @@ Booking ₦200,000 = **20,000,000 kobo**, commission 500 bps, completing normall
 
 | Step | Arithmetic | Kobo |
 |---|---|---|
-| Booking amount | | 20,000,000 |
-| Money-in | 1.5% = 300,000, + ₦100 = 310,000, **capped** | −200,000 |
+| Booking amount | what the escrow holds | 20,000,000 |
+| Money-in, added for the client | 1.5% = 300,000, + ₦100 = 310,000, **capped** | +200,000 |
+| **Client transfers** | | **20,200,000** |
 | Commission | 5% of 20,000,000 | −1,000,000 |
-| Money-out | payout above ₦50,000 → ₦70 | −7,000 |
-| **Artist net** | | **18,793,000** |
+| **Artist net** | escrow less commission | **19,000,000** |
+| Money-out, absorbed by us | payout above ₦50,000 → ₦70 | −7,000 |
+| **Platform net** | commission less the payout fee | **993,000** |
 
-**₦187,930** — the figure asserted in #14 and #26.
+**The client pays ₦202,000. The artist receives ₦190,000. The platform nets
+₦9,930.**
+
+It reconciles against what the **client paid**, not against the booking amount —
+the money-in fee is part of their outflow but never enters escrow:
+
+```
+19,000,000 (artist) + 993,000 (platform) + 207,000 (provider) = 20,200,000 ✓
+```
+
+> The figure previously recorded here was **₦187,930**, computed from the
+> incorrect bearers above. #14 and #26's assertions move to **₦190,000**.
 
 ## 4. The rounding rule
 
