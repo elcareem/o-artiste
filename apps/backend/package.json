@@ -14,7 +14,9 @@
     "test": "node --test \"test/**/*.test.js\"",
     "seed": "node prisma/seed.js",
     "start:worker": "node src/worker.js",
-    "dev:worker": "node --watch src/worker.js"
+    "dev:worker": "node --watch src/worker.js",
+    "build": "prisma generate",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

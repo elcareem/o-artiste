@@ -1592,3 +1592,56 @@ execution appears in Render's logs. That exercises the real path rather than a
 developer machine reaching in from outside, which is the better test regardless.
 
 Requires `REDIS_URL` set on `o-artiste-api` from the Internal URL.
+
+### Deploy fix: the Prisma client was never generated on Render
+
+Found when the API redeployed after `REDIS_URL` was added. The build succeeded,
+the service started, and then crashed:
+
+```
+Error: @prisma/client did not initialize yet.
+Please run "prisma generate" and try to import it again.
+    at Object.<anonymous> (/opt/render/project/src/apps/backend/src/lib/prisma.js:11:16)
+    at Object.<anonymous> (/opt/render/project/src/apps/backend/src/routes/auth.js:7:18)
+```
+
+**Cause.** `npm install` runs at the repository root — correctly, since that is
+where the lockfile and the `qs` override live — while the schema is at
+`apps/backend/prisma/schema.prisma`. Prisma's implicit install hook does not
+reliably find a schema inside a workspace, and a build cache that skips
+lifecycle scripts removes even that chance.
+
+Reproduced locally by simulating exactly that:
+
+```
+$ rm -rf node_modules/.prisma node_modules/@prisma/client
+$ npm install --ignore-scripts        # as a cache would
+  not generated
+$ npm run build --workspace apps/backend
+  CLIENT GENERATED
+```
+
+**Fix.** An explicit generate step rather than a reliance on implicit hooks:
+
+- `apps/backend/package.json` gains `build: "prisma generate"` and a
+  `postinstall` of the same, so local installs stay convenient
+- the root gains `build: "npm run build --workspaces --if-present"`
+- **Render's build command becomes
+  `npm install && npm run build --workspace apps/backend`**
+
+Workspace-scoped on purpose: the unscoped root `build` also compiles the Next.js
+app, which the API host does not serve.
+
+**Why it went unnoticed.** The deployed API kept answering `/health` throughout,
+because Render leaves the previous working deploy serving when a new one fails
+to boot. Every deploy since #9 merged — the first issue to require the Prisma
+client at startup — had been failing silently behind a healthy-looking endpoint.
+
+That is worth recording as a general lesson rather than a one-off: **a green
+health check proves something is serving, not that the latest commit deployed.**
+`/health` deliberately has no database dependency, which is right for liveness
+and precisely why it could not have caught this.
+
+Still outstanding on the same service: `NODE_VERSION` is unset, so Render runs
+**Node 20.8.2** — below the `>=20.9.0` both workspaces declare in `engines`.
+Render does not enforce `engines`, so it must be set explicitly.

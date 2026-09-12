@@ -38,10 +38,28 @@ exists. Recorded in `docs/ACCEPTANCE-LOG.md` as a deliberate deviation.
 
 - [x] Web service created — `o-artiste-api`, region Ohio (US East)
 - [x] **Root Directory blank** (repository root)
-- [x] Build `npm install`, start `npm run start --workspace apps/backend`
+- [x] **Build `npm install && npm run build --workspace apps/backend`**
+- [x] Start `npm run start --workspace apps/backend`
+
+**The build command must include `npm run build`.** `npm install` alone does not
+generate the Prisma client here: the install runs at the repository root while
+the schema lives at `apps/backend/prisma/schema.prisma`, and Prisma's implicit
+install hook does not reliably locate a schema inside a workspace — especially
+when a build cache skips lifecycle scripts. Without it the service installs
+cleanly, starts, and then crashes the moment a route requires the client:
+
+```
+Error: @prisma/client did not initialize yet.
+Please run "prisma generate" and try to import it again.
+```
+
+Scoped to `--workspace apps/backend` deliberately: the unscoped root `build`
+would also compile the Next.js app, which this host does not serve.
 - [x] Health Check Path `/health`
 - [x] Auto-Deploy: On Commit
-- [ ] `NODE_VERSION` = `22` — first deploy used Node 20.8.2
+- [ ] `NODE_VERSION` = `22` — **still running 20.8.2**, below the `>=20.9.0`
+      the workspaces declare in `engines`. Render does not enforce `engines`, so
+      this has to be set explicitly.
 - [x] `WEB_ORIGIN` = `https://o-artiste-web.vercel.app` (set at #3)
 
 **Root Directory must stay blank.** This is an npm workspaces monorepo: the
