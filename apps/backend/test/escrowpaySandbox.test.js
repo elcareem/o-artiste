@@ -32,11 +32,70 @@ const ref = (p) => `test_${p}_${Date.now()}_${seq++}`;
  * each time, always ending even.
  */
 /**
- * Bank accounts are unique per environment too — `payout_account_exists` on a
- * repeat — so this is generated per run as well.
+ * Bank accounts are unique per environment — `payout_account_exists` on a
+ * repeat. Random 10-digit numbers still collide surprisingly often, because the
+ * simulator appears to key on the last four digits (`SIMULATED ACCOUNT 6789`),
+ * making the effective space ~10,000 rather than nine billion.
+ *
+ * Retrying on a collision rather than widening the number: the uniqueness rule
+ * is documented provider behaviour, and this test exists to verify our client,
+ * not to win a namespace lottery. Fighting it with more entropy would only make
+ * the flake rarer, not absent — and a financial suite that fails one run in
+ * three is one people stop believing.
+ */
+/**
+ * The simulator rejects payout accounts whose number ends in `0`, with
+ * `rejection_reason: "destination_invalid"`. Every other final digit verifies —
+ * measured, after two wrong guesses at the rule:
+ *
+ *   last digit 0 → rejected (destination_invalid)
+ *   last digits 1-9 → verified
+ *
+ * Note this is NOT the even/odd rule that governs identity fixtures. Assuming
+ * the two followed the same convention is what produced a suite failing one run
+ * in three, and the symptom read as flakiness rather than as a fixture rule.
  */
 function accountNumber() {
-  return String(Math.floor(Math.random() * 9_000_000_000) + 1_000_000_000);
+  const head = String(Math.floor(Math.random() * 900_000_000) + 100_000_000);
+  const last = Math.floor(Math.random() * 9) + 1; // 1-9, never 0
+  return `${head}${last}`;
+}
+
+async function registerPayoutAccount(partyId, attempts = 5) {
+  let lastError;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await ep.createPayoutAccount({
+        partyId,
+        bankCode: '000013',
+        accountNumber: accountNumber(),
+        reference: ref('payout_acct'),
+      });
+    } catch (err) {
+      if (err.providerCode !== 'payout_account_exists') throw err;
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+/** Same story for identities, which are also unique per environment. */
+async function onboardVerifiedParty(label, attempts = 5) {
+  let lastError;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await ep.onboardParty({
+        type: 'nin',
+        identifier: verifiedNin(),
+        email: `oartiste.${label}.${Date.now()}.${i}@gmail.com`,
+        reference: ref(label),
+      });
+    } catch (err) {
+      if (err.providerCode !== 'identity_already_exists') throw err;
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 function verifiedNin() {
@@ -58,12 +117,7 @@ describe('health responds', async () => {
 });
 
 describe('onboardParty verifies an identity and returns a party', async () => {
-  const payer = await ep.onboardParty({
-    type: 'nin',
-    identifier: verifiedNin(),
-    email: `oartiste.payer.${Date.now()}@gmail.com`,
-    reference: ref('payer'),
-  });
+  const payer = await onboardVerifiedParty('payer');
 
   assert.match(payer.party.id, /^PAR_/);
   assert.equal(payer.party.status, 'active');
@@ -94,28 +148,19 @@ describe('an odd-digit identifier fails verification with a reason, not a crash'
 });
 
 describe('createPayoutAccount registers a verified account for the artist', async () => {
-  const artist = await ep.onboardParty({
-    type: 'nin',
-    identifier: verifiedNin(),
-    email: `oartiste.artist.${Date.now()}@gmail.com`,
-    reference: ref('artist'),
-  });
+  const artist = await onboardVerifiedParty('artist');
   state.artistPartyId = artist.party.id;
 
   const banks = await ep.listBanks();
   assert.ok(Array.isArray(banks) ? banks.length : banks.length !== 0);
 
-  const account = await ep.createPayoutAccount({
-    partyId: state.artistPartyId,
-    bankCode: '000013',
-    accountNumber: accountNumber(),
-    reference: ref('payout_acct'),
-  });
+  const account = await registerPayoutAccount(state.artistPartyId);
 
   assert.match(account.id, /^PAC_/);
   assert.equal(account.status, 'verified');
   assert.equal(account.payout_eligible, true);
   assert.match(account.masked_account_number, /^\*+\d+$/);
+  assert.equal(account.rejection_reason, null);
 
   state.payoutAccountId = account.id;
 });

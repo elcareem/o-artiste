@@ -2024,3 +2024,152 @@ deployed database — **17 tables** there now.
 A first attempt left an empty migration directory behind, which then applied as
 a no-op migration. Removed, and the history replayed from scratch with
 `migrate reset` to confirm all three migrations apply cleanly in order.
+
+---
+
+# Phase 2 — Artists, Booking & Escrow Funding
+
+## #11 — feat(backend): artist profile and rate card
+
+Branch `feat/11-artist-profile`, stacked on `feat/10-identity-verification`.
+Verified 2026-09-12.
+
+```
+$ npm run test:backend          (eight consecutive runs)
+# tests 97  # pass 97  # fail 0  # skipped 0
+```
+
+### `[x]` A rate of ₦19,999 or ₦3,000,001 returns 400 naming the permitted range
+
+```
+$ curl -X PUT /artists/:id -d '{"baseRateKobo":1999900}'
+{"error":"Your rate must be between ₦20,000 and ₦3,000,000.
+          Bookings outside that range cannot be processed by our payment partner."}
+400
+
+$ curl -X PUT /artists/:id -d '{"baseRateKobo":300000100}'
+400  (same message)
+```
+
+**The message names both limits**, because "invalid rate" leaves an artist
+guessing at a bound they have no way to discover. It also says *why* — the bound
+is the provider's transaction range, not a policy we invented.
+
+Tested at the boundary rather than with wild values: one kobo under the floor,
+one kobo over the ceiling, and both bounds themselves **accepted**, so the range
+is inclusive and the check is not simply refusing everything.
+
+The bound is enforced **at profile level, not at checkout**. The artist finds
+out while editing their own rate, rather than a client discovering it at the
+point of payment.
+
+### `[x]` An artist editing another artist's profile receives 403
+
+```
+$ curl -X PUT /artists/<someone-else's-id> -H "Authorization: Bearer <other artist>"
+{"error":"You can only edit your own profile."}  403
+```
+
+Also asserted: **nothing was written**. A 403 that still mutated would be worse
+than no check at all. No token gives 401, and a `CLIENT` token gives 403 —
+the endpoint is role-guarded as well as ownership-guarded.
+
+Ownership is resolved from the authenticated user, so there is no artist id in
+the request to tamper with.
+
+### `[x]` The rate is stored and returned as a kobo integer, never a formatted string
+
+```json
+{"baseRateKobo": 25000000}
+```
+
+Asserted to be a `number`, an integer, and that the serialised response contains
+**no `₦` and no thousands separators**. Formatting is the web app's job via
+`formatNaira()`; an API that returns `"₦250,000"` has made the value unusable
+for arithmetic and invented a second representation of money.
+
+### Additional behaviour
+
+**Profile completeness is derived, not declared.** `profileComplete` is
+recomputed on every update from `stageName`, `category`, `location` and
+`baseRateKobo`. Clearing any one of them makes the profile incomplete again —
+asserted by setting the rate to `null` and watching `listable` flip to false.
+
+**Listability requires all three conditions**, each tested independently:
+complete profile, `VERIFIED` user, and standing not `SUSPENDED`/`REMOVED`. A
+suspended artist appearing in a listing even briefly is a trust failure, so the
+filter is expressed as a Prisma `where` fragment for #12 to apply **at the query
+level** rather than filtering after fetching.
+
+`GET /me/artist-profile` returns `listable` and `verificationStatus` alongside
+the profile, so an artist is told plainly why they are not yet discoverable
+rather than left to wonder why nobody can find them.
+
+### Added outside the issue's stated scope
+
+- `src/lib/money.js` — `formatNairaForMessage()`, used **only** in error copy
+  that has to name a limit. Deliberately not a general formatter: duplicating
+  the web app's `formatNaira()` would create a second place where money changes
+  representation, and every such place is somewhere a rounding bug can live.
+  *"Your rate must be between 2000000 and 300000000"* is not a sentence anyone
+  can act on, which is the one case that justifies it.
+- `MIN_TRANSACTION_KOBO` / `MAX_TRANSACTION_KOBO` moved into
+  `lib/escrowpay.js`, since they are provider facts rather than our policy, and
+  #15 will need the same numbers when validating a booking amount.
+
+### Open item left alone, deliberately
+
+`docs/00` §11 carries an unresolved question about bookings above ₦3,000,000.
+Per the issue's technical note, **the hard rejection stands and no workaround
+path was built.** A partial-payment or split-booking mechanism invented now
+would be a guess at a commercial answer that has not been given.
+
+### A flaky sandbox suite, and two wrong diagnoses before the right one
+
+The first full run after this issue showed **4 failures in `escrowpaySandbox`**,
+then passed on a re-run. Intermittent, at roughly one run in three. That is the
+worst failure mode for a financial suite — the kind that gets re-run rather than
+investigated, until nobody believes a red result.
+
+Three diagnoses, two of them wrong:
+
+1. **Wrong — provider rate limiting under parallel load.** Plausible, and it
+   explained the intermittency, but the suite passed in isolation for reasons
+   that had nothing to do with concurrency.
+2. **Wrong — random account numbers colliding.** `409 payout_account_exists`
+   *was* occurring, and a retry-on-collision helper was added. It reduced the
+   rate but did not remove it, which should have been the clue that it was a
+   second symptom rather than the cause.
+3. **Right, and only after measuring instead of guessing.** The account was
+   being created with `status: "rejected"` and
+   `rejection_reason: "destination_invalid"`. Registering ten accounts with
+   final digits 0-9 gave the rule directly:
+
+```
+last digit 0  → rejected (destination_invalid)
+last digit 1-9 → verified
+```
+
+**Account numbers ending in `0` are rejected.** My generator had been "fixed" to
+produce even final digits — on the assumption that payout accounts followed the
+same even/odd convention as identity fixtures — which put `0` in one slot of
+five and produced almost exactly the observed failure rate.
+
+The two fixtures do **not** share a convention: identities verify on an even
+final digit, payout accounts verify on anything except `0`. Assuming otherwise
+cost two rounds of wrong fixes.
+
+Verified across **eight consecutive full-suite runs, all clean**. One green run
+would not have distinguished a fix from luck at a one-in-three failure rate.
+
+The `payout_account_exists` retry was kept — that collision is real, just not
+the cause — and the rule is documented in the test rather than left as a magic
+constant.
+
+### Noted for a later issue, not silently absorbed
+
+#17 established that an artist needs a **payout account** registered before any
+release can reach them, and that bank accounts are unique per environment.
+That is not in #11's stated scope — its field list is explicit — so it has not
+been added here. It needs a home before #26 executes a release; raised rather
+than folded in.
