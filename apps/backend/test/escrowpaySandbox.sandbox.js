@@ -261,3 +261,27 @@ describe('amounts must be integers — no floats reach the provider', async () =
     /integer number of kobo/
   );
 });
+
+/**
+ * NOTE ON THE FILENAME
+ *
+ * `.sandbox.js` rather than `.test.js`, so `npm test` does not discover it.
+ *
+ * Every other suite is deterministic: it depends only on this machine's
+ * database and Redis. This one calls EscrowPay's live sandbox, so it can fail
+ * for reasons that have nothing to do with our code — a dropped connection, a
+ * rate limit, their maintenance window. During verification the full suite
+ * failed 9 tests in one run and passed 12 consecutive runs afterwards, with the
+ * only provider error being a transient connection failure.
+ *
+ * Mixing the two makes `npm test` non-deterministic by construction, and a
+ * financial suite that fails for reasons outside the code is one people stop
+ * believing. So:
+ *
+ *   npm test            — our code. Must always pass.
+ *   npm run test:sandbox — the provider contract. May fail when they are down.
+ *   npm run test:all     — both.
+ *
+ * These assertions are not weakened, only separated: #40's end-to-end script
+ * runs them against the sandbox as part of release verification.
+ */

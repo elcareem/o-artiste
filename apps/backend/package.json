@@ -16,7 +16,9 @@
     "start:worker": "node src/worker.js",
     "dev:worker": "node --watch src/worker.js",
     "build": "prisma generate",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:sandbox": "node --test \"test/**/*.sandbox.js\"",
+    "test:all": "npm run test && npm run test:sandbox"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
