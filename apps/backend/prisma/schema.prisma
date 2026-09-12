@@ -149,9 +149,22 @@ model User {
   verificationStatus    VerificationStatus  @default(UNVERIFIED)
   verificationMethod    VerificationMethod?
   verifiedAt            DateTime?
-  /// The provider's reference for the check. NEVER the raw NIN or BVN —
-  /// retaining the identifier is NDPR exposure with no operational benefit.
+  /// The provider's reference for the check (`IDN_…`). NEVER the raw NIN or
+  /// BVN — retaining the identifier is NDPR exposure with no operational
+  /// benefit, and the provider masks it on their side too.
   verificationReference String?
+
+  /// The EscrowPay party (`PAR_…`) this user transacts as. Created once during
+  /// verification and reused for every booking — it is what `payer.party_id`
+  /// and `beneficiary.party_id` reference at escrow creation.
+  escrowPartyId String? @unique
+
+  /// Set when a verification attempt failed in a way that may succeed on a
+  /// retry — a provider timeout, not a genuine mismatch. Distinguishing the two
+  /// is what stops a network blip from permanently locking a real user out.
+  verificationFailureReason String?
+  verificationAttempts      Int     @default(0)
+  lastVerificationAttemptAt DateTime?
 
   accountStanding       AccountStanding @default(GOOD)
   /// Set when standing is RESTRICTED: the minimum lead time, in days, inside
@@ -492,6 +505,32 @@ model FeeLiability {
   updatedAt DateTime @updatedAt
 
   @@index([artistUserId, status])
+}
+
+/// Costs the platform bears that belong to no single booking.
+///
+/// Deliberately NOT a `LedgerEntry`: every ledger row references its booking
+/// (`docs/01` §5), and identity verification is charged once per person for
+/// life, not per transaction. Forcing it into the booking ledger would either
+/// require a nullable booking — weakening the model that makes a booking
+/// reconcile to zero — or attach a lifetime cost to whichever booking happened
+/// to be first.
+model PlatformCost {
+  id String @id @default(cuid())
+
+  category   String
+  amountKobo Int
+
+  userId String?
+
+  /// The provider reference the cost arose from, e.g. an `IDN_…`. Unique, so a
+  /// retry or a repeated webhook cannot charge the same check twice.
+  reference String? @unique
+
+  description String?
+  incurredAt  DateTime @default(now())
+
+  @@index([category, incurredAt])
 }
 
 // ---------------------------------------------------------------------------

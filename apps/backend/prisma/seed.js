@@ -133,6 +133,11 @@ async function seedUsers() {
                 // retaining a NIN or BVN is NDPR exposure with no operational
                 // benefit (docs/02 §6).
                 verificationReference: `seed_verification_${spec.role.toLowerCase()}`,
+                // A placeholder party id. Real EscrowPay parties are created by
+                // the verification flow; seeded users never call the provider,
+                // so this marks them as having one without inventing a PAR_
+                // value that would 404 if a booking tried to use it.
+                escrowPartyId: `seed_party_${spec.email.split('@')[0]}`,
               }
             : {}),
         },
