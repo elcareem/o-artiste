@@ -1645,3 +1645,33 @@ and precisely why it could not have caught this.
 Still outstanding on the same service: `NODE_VERSION` is unset, so Render runs
 **Node 20.8.2** — below the `>=20.9.0` both workspaces declare in `engines`.
 Render does not enforce `engines`, so it must be set explicitly.
+
+### Deploy verified after the Prisma fix
+
+Sequence, recorded because it took three attempts and each failure was a
+different shape of the same mistake:
+
+1. Build command was `npm install` — Prisma client never generated, service
+   crashed on first database import
+2. Build command corrected, but Render was checking out `6675d38`, a commit
+   predating the `build` script — `Missing script: "build"`
+3. Fix merged to `main`, redeployed, **working**
+
+`NODE_VERSION=22` also took effect at step 2:
+
+```
+==> Requesting Node.js version 22
+==> Using Node.js version 22.23.2 via environment variable NODE_VERSION
+```
+
+Previously 20.8.2, below the `>=20.9.0` both workspaces declare.
+
+**The pattern, now three for three.** Render's `Missing script: "start"` at #2,
+Vercel failing to detect Next.js at #3, and this. **Every deployment reads
+`main`.** A fix that exists only on a branch cannot deploy, however correct the
+dashboard is. Dashboard settings and code changes have to land together, and the
+code has to land first.
+
+Corollary already recorded above: a green `/health` proves something is serving,
+not that the current commit deployed. From here, deploy verification checks the
+**commit SHA** and exercises a route that touches a real dependency.
