@@ -2333,7 +2333,10 @@ status codes shown : 0
 
 No status code or stack trace reaches the user (`docs/02` §2).
 
-### `[!]` Known trade-off: the not-found page returns HTTP 200
+### `[!]` Known limitation: the not-found page returns HTTP 200
+
+**Two fixes attempted, neither worked.** Recorded with what was actually tried,
+so #39 does not repeat it.
 
 Confirmed in a **production build**, not just dev: an unknown or suspended
 artist renders the correct not-found page but with a `200` status rather than
@@ -2348,13 +2351,167 @@ views"*, and the user-facing behaviour is correct either way: the page is
 readable and exposes no status code. What is affected is machine consumers —
 a crawler would keep a suspended artist's URL indexed.
 
-Recorded rather than quietly shipped. Revisit at #39, which owns user-facing
-failure handling across all three portals; the fix is either dropping the
-Suspense boundary on this route or resolving the artist in `generateMetadata`,
-which runs before streaming begins.
+**Attempt 1 — resolve the artist in `generateMetadata`.** It runs before the
+page component, so `notFound()` there should precede streaming. Verified in a
+production build: **still 200.** The call was kept anyway, because it is the
+right place to resolve the artist and it gives real page titles
+(`<title>DJ Ekene — Artist Escrow</title>`), with `getArtist` wrapped in React's
+`cache()` so the page component reuses the same request rather than doubling
+API traffic.
+
+**Attempt 2 — remove the Suspense boundary** by deleting `loading.tsx` from the
+route. Inconclusive: the test run was interrupted before producing a result, and
+it trades away a loading state this issue explicitly requires.
+
+**Left as is, deliberately.** The user-facing behaviour is already correct — the
+page is readable and exposes no status code. What is affected is machine
+consumers: a crawler would keep a suspended artist's URL indexed. That is worth
+fixing, but not worth further time during a feature issue.
+
+Carried to #39, which owns user-facing failure handling across all three
+portals. The remaining avenues are a route handler or proxy that resolves the
+artist before the page renders at all, or `dynamic = 'force-dynamic'` being the
+cause rather than the Suspense boundary — untested.
 
 ### Removed
 
 `app/backend-status.tsx`, the #3 bootstrap probe that called `/health` from the
 browser. It existed to prove the cross-origin path before any real page did.
 The grid now exercises the same path with real data, so the probe is redundant.
+
+---
+
+## #14 — feat(backend): fee computation service
+
+Branch `feat/14-fee-service`. Verified 2026-09-12.
+
+```
+$ node --test test/feeService.test.js
+# tests 17  # pass 17  # fail 0
+```
+
+Pure: no database, no network, no clock. Asserted by reading the module's own
+source and checking it contains no `require(`, `prisma`, `axios`, `Date.now` or
+`new Date` — so purity is enforced rather than merely intended, and #26 and #27
+can call it instead of reimplementing any of it.
+
+### `[x]` A ₦200,000 booking at 5% yields an artist net of ₦187,930
+
+```
+money-in    200,000 kobo   (capped at ₦2,000)
+commission  1,000,000      (5% of ₦200,000)
+money-out   7,000          (payout above ₦50,000)
+artist net  18,793,000     = ₦187,930
+```
+
+The figure #26 will be held to.
+
+### `[x]` Unit tests at both sides of each boundary
+
+`₦249,999 / ₦250,000 / ₦250,001` and `₦49,999 / ₦50,000 / ₦50,001`, as the
+issue lists — **plus the boundary the issue's list misses entirely.**
+
+**The ₦2,000 cap starts binding at ~₦126,667, not ₦250,000.** That is where
+`1.5% + ₦100` first exceeds ₦2,000. Below it the percentage governs and rounding
+is live; above it the fee is a flat constant. Testing only the ₦250,000 edge
+would never exercise the percentage region at all:
+
+```
+₦126,666 → 199,999   percentage governs
+₦126,667 → 200,000   floors to exactly the cap
+₦126,668 → 200,000   capped
+```
+
+**#14's technical note is wrong about the curve.** It calls the schedule
+non-monotonic around ₦250,000. It is not: ₦2,000 is precisely 0.8% of ₦250,000,
+so the two rules coincide there and the schedule is *continuous* — ₦260,000
+costs ₦2,080, an increase. Asserted directly. The tests the issue asks for are
+still worth having; only the stated reason was wrong. Recorded in `docs/05` §1.
+
+### `[x]` For every tested input, the parts sum to the total exactly
+
+The assertion that catches the widest class of financial bug. **16 amounts × 8
+commission rates**, including deliberately awkward values (`2,000,033`,
+`2,000,077`, `12,345,678`, `99,999,999`) chosen to produce fractional
+commissions:
+
+```js
+commission + moneyIn + moneyOut + artistNet === amountKobo   // every case
+```
+
+Every figure is also asserted to be an integer.
+
+### `[x]` A fractional commission assigns the remainder per the documented rule
+
+2,000,033 kobo at 5% = 100,001.65 → **floors to 100,001**, not 100,002. The
+0.65 kobo is absorbed by the artist, because the artist's net is computed as
+`total − everything else` rather than from its own percentage.
+
+That is R2 (`docs/05` §4): **the last share in any split is the residual.** The
+parts sum by construction rather than by luck. Computing both sides of a
+7000/3000 split from their own basis points is exactly what loses a kobo.
+
+### Cross-checked against the provider's own estimator
+
+Our arithmetic is not merely internally consistent — it agrees with EscrowPay
+to the kobo at every boundary, via `POST /fees/estimates`:
+
+| Amount | Ours | Provider |
+|---|---|---|
+| ₦20,000 | 40,000 | 40,000 |
+| ₦50,000 | 85,000 | 85,000 |
+| **₦126,667** | 200,000 | 200,000 |
+| ₦200,000 | 200,000 | 200,000 |
+| ₦250,000 | 200,000 | 200,000 |
+| ₦260,000 | 208,000 | 208,000 |
+| ₦3,000,000 | 2,400,000 | 2,400,000 |
+
+Seven for seven. This is why #17 kept their fee endpoints: their numbers are
+facts to read, and now the published schedule is confirmed rather than trusted.
+
+### Finding: the ₦0 refund floor is unreachable with the default tiers
+
+Measured rather than assumed, and it changes what #30 must handle.
+
+The floor triggers only when the client's share is smaller than the escrow fees.
+On the **smallest booking the provider accepts** (₦20,000), fees are ₦440 —
+while even the harshest default band returns the client ₦3,000:
+
+```
+day-of    share 300,000  fees 44,000  refund 256,000
+1-2 days  share 800,000  fees 44,000  refund 756,000
+```
+
+An order of magnitude apart. My first version of this test asserted the floor
+fired on a day-of cancellation of a minimum booking; the arithmetic says
+otherwise, and the test was wrong rather than the code.
+
+**It is reachable under a tier set an admin could create.** #8 permits any bps
+split, so a 1% refund band gives a ₦200 share against ₦440 of fees → **₦0
+refund, ₦240 unrecovered**. Both cases are now tested: that the default set
+never floors, and that a plausible custom set does.
+
+The shortfall is reported rather than hidden, and not chased — building
+collection logic for a sub-₦2,000 gap costs more than the gap. It must be shown
+before the client commits (#30), not discovered afterwards.
+
+### Fee-bearer resolution
+
+| Outcome | Bearer | Behaviour |
+|---|---|---|
+| Completes | Artist | commission + both escrow fees from the payout |
+| Client cancels | Client | fees from the client's share only; the artist's compensation is touched by commission alone |
+| Artist cancels | Artist | client refunded **100%**, fees fronted by the platform as a `FeeLiability` |
+
+The artist's compensation on a client cancellation is deliberately untouched by
+fees: they have already lost a date they cannot refill, and deducting a flat
+processing cost from a reduced payment would penalise them twice for someone
+else's decision.
+
+### Open item, implemented as a flag
+
+**Whether a refund leg incurs the money-out fee is unconfirmed** (`docs/00` §11).
+`REFUND_INCURS_MONEY_OUT` defaults to **charged** — the conservative reading. If
+we assumed it were free and it is not, every refund would be short by ₦40–₦70
+and the platform would silently absorb it. Tested in both positions, and the
+client is made whole either way: the flag only moves who bears a cost.

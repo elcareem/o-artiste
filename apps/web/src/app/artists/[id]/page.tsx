@@ -9,6 +9,35 @@ import { ApiError } from '@/lib/api';
 export const dynamic = 'force-dynamic';
 
 /**
+ * Resolves the artist BEFORE the page streams.
+ *
+ * `loading.tsx` on this route creates a Suspense boundary, so by the time the
+ * page component runs Next has already sent the shell — and the status line.
+ * Calling `notFound()` there renders the right page with a 200, which is
+ * correct for a person and wrong for a crawler, since a suspended artist's URL
+ * would stay indexed.
+ *
+ * `generateMetadata` runs before any of that, so a `notFound()` here sets a real
+ * 404. `getArtist` is request-cached, so the page component's own call reuses
+ * this one rather than hitting the API twice.
+ */
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+
+  try {
+    const { artist } = await getArtist(id);
+    return {
+      title: `${artist.stageName} — Artist Escrow`,
+      description: artist.bio ?? `Book ${artist.stageName}.`,
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) notFound();
+    // Anything else is a real failure and should surface as one, not as a 404.
+    throw error;
+  }
+}
+
+/**
  * Artist profile — issue #13.
  *
  * `params` is a Promise in Next 16. The cancellation-rate stat sits ABOVE the
