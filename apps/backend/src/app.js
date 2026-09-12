@@ -13,6 +13,7 @@ const { router: authRouter } = require('./routes/auth');
 const { router: adminRouter } = require('./routes/admin');
 const { router: verificationRouter } = require('./routes/verification');
 const { router: artistsRouter } = require('./routes/artists');
+const { router: bookingsRouter } = require('./routes/bookings');
 const { requireAuth, requireRole } = require('./middleware/auth');
 
 function createApp() {
@@ -39,6 +40,7 @@ function createApp() {
   app.use(adminRouter);
   app.use(verificationRouter);
   app.use(artistsRouter);
+  app.use(bookingsRouter);
 
   // Role-guarded endpoints. Each exists because a later issue needs it, and
   // each is the endpoint #9's "blocked from at least one endpoint above its
