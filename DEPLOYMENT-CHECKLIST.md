@@ -312,9 +312,37 @@ consumes nothing.
 
 - [x] Instance provisioned
 - [x] `REDIS_URL` set on the Render service and on the worker process
-- [ ] `RUN_WORKERS_IN_WEB=true` set on `o-artiste-api`
+- [x] `RUN_WORKERS_IN_WEB=true` set on `o-artiste-api`
 - [ ] A job scheduled 10 seconds out fires on the deployed host
 - [ ] A scheduled job survives a deployed-process restart
+
+**How to verify the last two.** Both need an `ADMIN` or `SUPER_ADMIN` login on
+the deployed instance — registration whitelists `CLIENT` and `ARTIST`, so one
+must be created directly against the deployed database.
+
+```
+# fires on the deployed host
+TOKEN=...   # an ADMIN login against https://o-artiste-api.onrender.com
+curl -sX POST https://o-artiste-api.onrender.com/admin/queue/echo \
+     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"delayMs":10000,"label":"deployed check"}'
+# wait ~15s, then, with the id it returned:
+curl -s https://o-artiste-api.onrender.com/admin/queue/echo/<id> \
+     -H "Authorization: Bearer $TOKEN"
+# state must be "completed" AND ranAt must be present — ranAt is produced
+# inside the worker, so it is what proves a worker ran it rather than the
+# queue merely accepting it.
+
+# survives a restart
+# schedule with delayMs 300000, restart the service in the Render dashboard,
+# then read the job back after it falls due.
+```
+
+**The deployed database must never be seeded.** `prisma/seed.ts` creates
+`super@artist-escrow.test` with a password that is committed to this
+repository. Confirmed on 2026-09-15 that the deployed API rejects those
+credentials, so the seed has not been run there — re-confirm before launch
+(#41).
 
 **Gates:** #5 — "executes at approximately the right time, locally **and on the deployed host**".
 

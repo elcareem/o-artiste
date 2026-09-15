@@ -167,6 +167,19 @@ The preview returns the applicable tier, the exact refund, the exact artist comp
 | `GET` | `/admin/disputes` | `ADMIN` |
 | `POST` | `/admin/disputes/:id/resolve` | `ADMIN` — written reason mandatory |
 | `POST` | `/admin/cancellations/:id/reclassify` | `ADMIN` — written reason mandatory |
+| `POST` | `/admin/queue/echo` | `ADMIN` | Schedules the do-nothing job; `delayMs` defaults to 10,000 |
+| `GET` | `/admin/queue/echo/:id` | `ADMIN` | Whether it ran, and when |
+| `GET` | `/admin/queue/dead-letter` | `ADMIN` | Jobs that exhausted every retry |
+
+### Queue diagnostics
+
+`echoJob` exists so that "is the queue running at all?" has an answer depending on nothing else. On a developer's machine that answer is a log line; on a deployed host it was a log line nobody could reach — which left two of #5's acceptance criteria unverifiable and would make the first question in any auto-release incident unanswerable.
+
+`ranAt` is generated **inside the worker process** and returned by the job. A `completed` state proves the queue finished the job; a timestamp from the processor proves a worker executed it, which is the question actually being asked on a deployed host.
+
+These are deliberately narrow. **There is no endpoint that enqueues an arbitrary job onto an arbitrary queue** — that would be a remote code path into the worker. The only job they can schedule is the one that logs and exits, and a `queue`, `name` or `data` field in the body is asserted by test to be inert rather than merely undocumented.
+
+`delayMs` is capped at one hour, so nothing can be parked in the queue indefinitely. Unspecified — absent, `null`, or an empty string — means the default, **not zero**: JSON carries neither `NaN` nor `Infinity`, so a client whose own delay calculation failed sends `null`, and reading that as "run now" would turn a broken input into a silently different schedule.
 | `GET` | `/admin/users/:id/strikes` | `ADMIN` |
 | `POST` | `/admin/strikes/:id/override` | `ADMIN` — written reason mandatory |
 | `PUT` | `/admin/config/commission` | **`SUPER_ADMIN`** |
