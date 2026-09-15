@@ -217,8 +217,7 @@ the public network, but is only reachable from inside Render.
 - [x] `REDIS_URL` set on `o-artiste-api` from the **Internal** string
 - [x] External traffic left **closed** — the internal URL carries no password,
       so exposing it would be a serious misconfiguration
-- [ ] Worker not yet running on Render; `o-artiste-api` runs the API only.
-      Decision due before #25, when the first business job exists.
+- [x] **Worker hosting decided — see "Running the workers" below.**
 
 > **Free-tier testing caveat.** Render's free Key Value instances hold data in
 > memory with no disk persistence. This does not affect #5's criterion as
@@ -227,8 +226,79 @@ the public network, but is only reachable from inside Render.
 > itself restarts, which that criterion does not test. A production deployment
 > needs a persistent instance.
 
-- [ ] Instance provisioned
-- [ ] `REDIS_URL` set on the Render service and on the worker process
+### Running the workers
+
+Two queues now need a consumer: `webhooks` (retry of failed webhook processing,
+#20 — **already merged and currently inert on the deployed host**) and
+`maintenance`. `#25` adds auto-release.
+
+**A separate Render Background Worker is the production answer, and it is not
+available on the current plan.** Background Workers are a paid service type, and
+the free plan's 750 instance-hours a month are already almost entirely consumed
+by one always-awake web service (~730). There is no room for a second free
+service.
+
+#### Now — workers inside the API process (free, testing)
+
+On `o-artiste-api` → **Environment** → add:
+
+| Key | Value |
+|---|---|
+| `RUN_WORKERS_IN_WEB` | `true` |
+
+Save. Render redeploys. The startup log then reads:
+
+```
+[backend] listening on :10000
+[backend] in-process workers ON
+[worker] listening on queues: maintenance, webhooks
+```
+
+Nothing else changes — `REDIS_URL` and `DATABASE_URL` are already set on this
+service, and the cron-job.org keepalive already prevents it spinning down.
+
+This is a real consumer, not a stand-in: jobs retry, exhausted jobs dead-letter,
+and `SIGTERM` waits for active jobs rather than killing them. Its one cost is
+that job processing competes with request handling on the same instance, which
+at testing volumes is immaterial.
+
+#### Later — a dedicated worker service (production)
+
+When on a paid plan, **New → Background Worker**:
+
+| Field | Value |
+|---|---|
+| Repository | `elcareem/o-artiste` |
+| Branch | `main` |
+| **Root Directory** | **leave BLANK** — the workspace lockfile and the `qs` override live at the repo root |
+| Runtime | Node |
+| Build Command | `npm install && npm run build --workspace apps/backend` |
+| Start Command | `npm run start:worker --workspace apps/backend` |
+
+Environment variables — the worker needs fewer than the API, because it serves
+no requests and verifies no signatures (it replays bytes already recorded):
+
+| Key | Source |
+|---|---|
+| `NODE_VERSION` | `22` |
+| `DATABASE_URL` | same Internal string as the API |
+| `REDIS_URL` | same Internal string as the API |
+| `QUEUE_PREFIX` | same value as the API, or both are unset |
+| `ESCROWPAY_BASE_URL` | same as the API — `transaction.funded` reads the escrow back |
+| `ESCROWPAY_API_KEY` | same as the API |
+
+Then set `RUN_WORKERS_IN_WEB=false` on `o-artiste-api`. Running both is safe —
+BullMQ claims jobs atomically, so two consumers share the queue rather than
+double-processing — but there is no reason to keep job load on the web instance
+once a dedicated worker exists.
+
+**`QUEUE_PREFIX` must match** across the API and the worker. It namespaces the
+queues, so a mismatch produces a worker that connects, reports healthy, and
+consumes nothing.
+
+- [x] Instance provisioned
+- [x] `REDIS_URL` set on the Render service and on the worker process
+- [ ] `RUN_WORKERS_IN_WEB=true` set on `o-artiste-api`
 - [ ] A job scheduled 10 seconds out fires on the deployed host
 - [ ] A scheduled job survives a deployed-process restart
 
