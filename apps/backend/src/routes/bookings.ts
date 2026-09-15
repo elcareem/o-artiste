@@ -16,6 +16,7 @@ const {
 } = require('../services/acknowledgementService.ts');
 const { createEscrowForBooking } = require('../services/escrowService.ts');
 const { codeForClient, redeem } = require('../services/checkInService.ts');
+const { confirm, claimNoShow } = require('../services/confirmationService.ts');
 
 const router = express.Router();
 
@@ -42,6 +43,15 @@ function publicBooking(booking: BookingRow) {
     // THIS booking, not whatever the current configuration says.
     commissionRateBpsSnapshot: booking.commissionRateBpsSnapshot,
     cancellationTiersSnapshot: booking.cancellationTiersSnapshot,
+
+    // Who has responded, and when (#24). Both parties see both, so the status
+    // page can say "waiting for the client" rather than leaving an artist
+    // wondering whether anything is happening. The client's written account of
+    // a no-show is NOT here — it is an accusation, and it belongs in the
+    // dispute record where the other party can answer it.
+    clientConfirmedAt: booking.clientConfirmedAt,
+    artistConfirmedAt: booking.artistConfirmedAt,
+    clientNoShowClaimedAt: booking.clientNoShowClaimedAt,
   };
 }
 
@@ -323,6 +333,63 @@ router.post(
         },
         booking: publicBooking(booking),
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /bookings/:id/confirm
+ *
+ * Either party confirms the event took place — issue #24, docs/04 §3.
+ *
+ * Open to CLIENT and ARTIST because both rows of the matrix that end in a
+ * release begin with a confirmation, and the two are recorded separately. The
+ * caller's part in the booking is resolved server-side from the token; there is
+ * no role in the request body to disagree with it.
+ *
+ * What happens next is the matrix's decision, not the caller's: a client's
+ * confirmation releases, an artist's alone waits for the grace period, because
+ * an artist confirming their own payment is not evidence of anything.
+ */
+router.post('/bookings/:id/confirm', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
+  try {
+    const result = await confirm({ bookingId: req.params.id, userId: req.user.id });
+    res.json({ confirmation: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /bookings/:id/claim-no-show
+ *
+ * The client reports that the artist did not perform.
+ *
+ * CLIENT only. An artist reporting their own absence is a cancellation (#28),
+ * not a claim about someone else's conduct.
+ *
+ * Uncontradicted, this refunds the client in full including the fee they paid
+ * at funding. Contradicted by a check-in, it opens a dispute and **nothing is
+ * decided automatically** — one of the two parties is not telling the truth,
+ * and the system cannot determine which (docs/04 §3).
+ */
+router.post(
+  '/bookings/:id/claim-no-show',
+  requireAuth,
+  requireRole('CLIENT'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { reason } = req.body ?? {};
+
+      const result = await claimNoShow({
+        bookingId: req.params.id,
+        clientUserId: req.user.id,
+        reason,
+      });
+
+      res.json({ confirmation: result });
     } catch (err) {
       next(err);
     }

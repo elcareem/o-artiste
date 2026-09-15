@@ -273,6 +273,27 @@ model Booking {
   checkInCodeValidFrom DateTime?
   checkInCodeValidTo   DateTime?
 
+  // --- Confirmation (docs/04 §3) -------------------------------------------
+  // Neither party may act before `eventEndAt`. Recorded as timestamps rather
+  // than booleans because #25's auto-release needs to know WHEN the window
+  // opened, and because "who responded and when" is the first thing asked in a
+  // dispute.
+
+  /// The client attesting the event happened. The strongest evidence in the
+  /// artist's favour there is, since it runs against the client's own interest.
+  clientConfirmedAt DateTime?
+
+  /// The artist confirming. On its own this releases nothing — an artist
+  /// confirming their own payment is not evidence, so it waits for the client
+  /// or for the grace period (docs/04 §3).
+  artistConfirmedAt DateTime?
+
+  /// The client asserting the artist did not perform. Mutually exclusive with
+  /// `clientConfirmedAt`: a booking carrying both is a contradiction, and the
+  /// service refuses the second of the two rather than storing it.
+  clientNoShowClaimedAt DateTime?
+  clientNoShowReason    String?
+
   fundedAt    DateTime?
   releasedAt  DateTime?
   refundedAt  DateTime?

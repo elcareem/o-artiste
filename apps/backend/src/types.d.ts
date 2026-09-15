@@ -476,3 +476,63 @@ interface CheckInRedemption {
   checkIn: CheckInRow;
   booking: BookingRow;
 }
+
+/** What `escrowService.refundBooking` reports (#24). */
+interface RefundSummary {
+  bookingId: string;
+  state: BookingState;
+  /** True when the booking was already REFUNDED and no provider call was made. */
+  alreadyRefunded: boolean;
+  clientRefundKobo: Kobo | null;
+  clientFeeReimbursementKobo: Kobo | null;
+  clientTotalReturnedKobo: Kobo | null;
+  /** Fronted by the platform, recovered from the artist at their next payout. */
+  feeLiabilityKobo: Kobo | null;
+  providerRefundId: string | null;
+}
+
+// ── Confirmation matrix (`services/confirmationService.ts`, issue #24) ───────
+
+/**
+ * What the matrix decides.
+ *
+ * `awaiting_auto_release` and `awaiting_response` are both "nothing happens
+ * now", and they are separate because only the first one has something that
+ * will ever happen on its own: #25's job fires only where a check-in exists.
+ */
+type ConfirmationOutcome =
+  | 'release'
+  | 'refund'
+  | 'dispute'
+  | 'awaiting_auto_release'
+  | 'awaiting_response';
+
+/** The matrix inputs. Facts, not a booking row, so `evaluate` needs no database. */
+interface ConfirmationFacts {
+  clientConfirmed: boolean;
+  clientClaimedNoShow: boolean;
+  artistConfirmed: boolean;
+  hasCheckIn: boolean;
+}
+
+interface ConfirmationVerdict {
+  outcome: ConfirmationOutcome;
+  /** Written for a person: it becomes the release reason or the dispute's opening statement. */
+  reason: string;
+}
+
+/** A booking with everything the matrix and its gates need. */
+type ConfirmableBooking = BookingRow & {
+  checkIn?: { id: string } | null;
+  client: ClientRow;
+  artist: ArtistRow;
+};
+
+interface ConfirmationResult extends ConfirmationVerdict {
+  bookingId: string;
+  state: BookingState;
+  actedBy: 'CLIENT' | 'ARTIST';
+  release?: ReleaseSummary;
+  refund?: RefundSummary;
+  disputeId?: string;
+}

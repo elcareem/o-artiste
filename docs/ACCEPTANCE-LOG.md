@@ -4330,3 +4330,140 @@ admin.
 The throwaway admin used for this was deleted from the development database
 afterwards; its password appears in this session's transcript and must never be
 reused.
+
+---
+
+## #24 — Two-sided confirmation endpoints
+
+Branch `feat/24-confirmation-matrix`, from `main` at `bd233ee`.
+
+### Acceptance criteria
+
+**- [x] Each row of the matrix is covered by a test**
+
+The matrix is a **pure function** of four booleans — client confirmed, client
+claimed a no-show, artist confirmed, check-in exists — returning an outcome and
+a reason. It knows nothing about booking state, roles or timing; those are gates
+applied by the caller. That is what makes every row a test needing no database,
+and it is why the row tests read as the table does:
+
+```
+confirms       | confirms     → release
+confirms       | silent       → release
+silent         | checked in   → awaiting_auto_release   (#25 decides)
+claims no-show | no check-in  → refund
+claims no-show | check-in     → dispute
+```
+
+Each of the five is then re-proven end to end over HTTP with a fake provider,
+asserting the money actually moved — or did not — the way the row says.
+
+**All sixteen combinations** are exercised, not only the five rows, and every
+one of the five outcomes is asserted reachable. An outcome no input produces is
+dead code pretending to be a rule.
+
+Two of the remaining eleven carry their own tests:
+
+- **An artist confirmation is never sufficient**, for every value of the other
+  inputs. An artist confirming is confirming their own payout.
+- **A booking carrying both a confirmation and a no-show claim is a dispute**,
+  never a guess. The service refuses the second statement, so this should be
+  unreachable; if something ever writes around that guard the answer is a
+  person, not a rule silently honouring whichever field it checked first.
+
+**- [x] A no-show claim against a recorded check-in opens a dispute rather than refunding**
+
+The test rigs the provider so that **both `release` and `refund` throw**. If
+either is reached, the test fails with a message saying so. Nothing may move in
+either direction on this path.
+
+The dispute is created `OPEN` with `resolvedAt` null, the check-in attached, and
+the client's written account carried into `openedReason` so the artist can
+answer it. No ledger entry of type `RELEASED` or `REFUNDED` exists afterwards.
+
+**- [x] An attempt to confirm before the event end time returns 409**
+
+Gated on `eventEndAt`, not `eventDate` — a confirmation taken mid-performance
+confirms something that has not happened yet, and it is the artist who would be
+asking for it. Tested for both parties and for the no-show claim, and the
+booking is asserted to carry no timestamp afterwards: the request is refused,
+not recorded and then ignored.
+
+**- [x] An illegal transition throws rather than proceeding**
+
+Two layers, tested separately. The service refuses `RELEASED`, `REFUNDED`,
+`CANCELLED` and `RESOLVED` with a message naming the conclusion rather than the
+state — and with the provider rigged to throw, so a refusal that leaked through
+would fail loudly rather than quietly double-paying. Underneath, the transition
+map is called directly with the gates bypassed and still refuses.
+
+### Verified by breaking it
+
+Inverting the dispute row — `hasCheckIn` to `!hasCheckIn` — turned four tests
+red, including both end-to-end money paths:
+
+```
+not ok 1  - every row of docs/04 §3 is decided the way the table says
+not ok 9  - client claims no-show, no check-in → the client is refunded in full
+not ok 10 - client claims no-show against a recorded check-in → DISPUTED, not refunded
+not ok 14 - a client cannot confirm and claim a no-show for the same booking
+```
+
+Reverted, 17/17.
+
+### What else this issue needed
+
+**`escrowService.refundBooking`.** The matrix has a refund row and no refund
+execution existed — #26 built release only. It lives in `escrowService` like
+everything that moves money, and follows the same ordering: **the provider is
+called before anything is recorded**, because a database failure after a
+successful refund is self-healing through a stable idempotency key, while the
+reverse leaves a client we believe we have repaid holding nothing.
+
+The economics are `computeArtistCancellation`, already built and tested at #14:
+the client gets the escrow back **plus the money-in fee they paid at funding**.
+Zero fee exposure means zero — they did nothing wrong, and passing them any part
+of the cost of the artist's absence would undermine the guarantee the platform
+exists to make. The reimbursement and the payout fee on the refund leg are
+fronted by the platform and accrued as a `FeeLiability` against the artist,
+which #26 settles from their next payout. Asserted, along with the ledger
+summing to zero.
+
+**Four nullable columns on `Booking`** — `clientConfirmedAt`,
+`artistConfirmedAt`, `clientNoShowClaimedAt`, `clientNoShowReason`. Timestamps
+rather than booleans because #25 needs to know when the window opened, and
+because "who responded and when" is the first question asked in a dispute.
+Additive and nullable, so the migration is safe on a live table.
+
+Confirming twice is idempotent and keeps the **first** timestamp. When a party
+responded is evidence; a double tap must not rewrite it.
+
+`publicBooking` now carries the three timestamps so the status page can say
+"waiting for the client" instead of leaving an artist wondering whether anything
+is happening. `clientNoShowReason` is deliberately **not** there: it is an
+accusation, and it belongs in the dispute record where the other party can
+answer it. Asserted.
+
+### A design point worth recording
+
+A confirmation moves the booking to `AWAITING_CONFIRMATION` before anything
+else. `FUNDED_HELD → RELEASED` is absent from the transition map on purpose, and
+this is what that absence means in practice: **a booking cannot be paid out
+without having passed through the window in which it could have been disputed.**
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 257  # pass 257  # fail 0   (240 + 17 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 10  failed 0  skipped 0
+npm run lint                  → clean
+```
+
+### Carried forward
+
+#25 implements the `awaiting_auto_release` outcome — the job, the grace period,
+and the rule that it fires only where a check-in exists. The outcome name and
+its separation from `awaiting_response` exist so that job has something precise
+to act on.

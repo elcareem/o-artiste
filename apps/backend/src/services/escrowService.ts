@@ -19,7 +19,12 @@ const { AppError } = require('../lib/errors.ts');
 const escrowpay = require('../lib/escrowpay.ts');
 const { assertAcknowledged } = require('./acknowledgementService.ts');
 const { assertCanTransact, assertTransition, transition } = require('./bookingService.ts');
-const { moneyInFee, computeCompletion, applyFeeLiabilities } = require('./feeService.ts');
+const {
+  moneyInFee,
+  computeCompletion,
+  computeArtistCancellation,
+  applyFeeLiabilities,
+} = require('./feeService.ts');
 const ledger = require('./ledgerService.ts');
 
 /**
@@ -314,6 +319,124 @@ async function releaseBooking({
 }
 
 /**
+ * Refunds the client in full, at the artist's cost — #24's uncontradicted
+ * no-show, and the shape #28's artist-fault reclassification reuses.
+ *
+ * ZERO FEE EXPOSURE FOR THE CLIENT. They get the escrow back AND the money-in
+ * fee they paid on top of it at funding. They did nothing wrong, and passing
+ * them any part of the cost of the artist's absence would undermine the
+ * guarantee the platform exists to make. The money-in reimbursement and the
+ * payout fee on the refund leg are fronted by the platform now and recovered
+ * from the artist later, as a `FeeLiability` (docs/05 §6).
+ *
+ * THE PROVIDER IS CALLED BEFORE ANYTHING IS RECORDED, for the same reason
+ * `releaseBooking` does it: a database failure after a successful refund is
+ * self-healing, because the reference is a stable idempotency key and a retry
+ * returns the original refund. The reverse order leaves a client we believe we
+ * have repaid holding nothing.
+ */
+async function refundBooking({
+  bookingId,
+  reason,
+}: {
+  bookingId: string;
+  reason?: string;
+}): Promise<RefundSummary> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { artist: { include: { user: true } } },
+  });
+
+  if (!booking) throw new AppError(404, 'Booking not found.');
+
+  // Idempotent at our level: an already-refunded booking reports what happened
+  // rather than instructing a second refund.
+  if (booking.state === 'REFUNDED') {
+    return refundSummaryFor(booking, { alreadyRefunded: true });
+  }
+
+  // Checked before the provider call as well as inside the transaction, so an
+  // illegal refund never reaches the provider at all.
+  assertTransition(booking.state, 'REFUNDED');
+
+  if (!booking.escrowId) {
+    throw new AppError(409, 'This booking was never funded, so there is nothing to refund.');
+  }
+
+  const breakdown = computeArtistCancellation({ amountKobo: booking.amountKobo });
+
+  // --- The irreversible step. ---------------------------------------------
+  const refund = await escrowpay.refund({
+    transactionId: booking.escrowId,
+    reference: `${booking.escrowReference}_refund`,
+    amountKobo: breakdown.clientRefundKobo,
+    reason: reason ?? 'Artist did not perform',
+  });
+
+  // --- Recorded now, in ONE transaction with the state change. -------------
+  const updated = await prisma.$transaction(async (tx: PrismaTx) => {
+    const next = await transition({
+      bookingId: booking.id,
+      to: 'REFUNDED',
+      client: tx,
+      data: { refundedAt: new Date() },
+    });
+
+    await ledger.recordArtistCancellation(tx, booking);
+
+    // The obligation is recorded as a row, not only as ledger entries: #26
+    // settles it against the artist's next payout, and it needs something to
+    // find and mark SETTLED.
+    if (breakdown.feeLiabilityKobo > 0) {
+      await tx.feeLiability.create({
+        data: {
+          artistUserId: booking.artist.userId,
+          originBookingId: booking.id,
+          amountKobo: breakdown.feeLiabilityKobo,
+          status: 'OUTSTANDING',
+        },
+      });
+    }
+
+    return next;
+  });
+
+  console.log(
+    `[escrow] refunded ${breakdown.clientTotalReturnedKobo} kobo to client for booking ${booking.id}` +
+      ` (${breakdown.feeLiabilityKobo} kobo accrued against the artist)`
+  );
+
+  return refundSummaryFor(updated, {
+    breakdown,
+    providerRefundId: refund?.id ?? null,
+  });
+}
+
+function refundSummaryFor(
+  booking: BookingRow,
+  {
+    breakdown = null,
+    providerRefundId = null,
+    alreadyRefunded = false,
+  }: {
+    breakdown?: ArtistCancellationBreakdown | null;
+    providerRefundId?: string | null;
+    alreadyRefunded?: boolean;
+  } = {}
+): RefundSummary {
+  return {
+    bookingId: booking.id,
+    state: booking.state,
+    alreadyRefunded,
+    clientRefundKobo: breakdown?.clientRefundKobo ?? null,
+    clientFeeReimbursementKobo: breakdown?.clientFeeReimbursementKobo ?? null,
+    clientTotalReturnedKobo: breakdown?.clientTotalReturnedKobo ?? null,
+    feeLiabilityKobo: breakdown?.feeLiabilityKobo ?? null,
+    providerRefundId,
+  };
+}
+
+/**
  * Outstanding liabilities that this payout can clear, oldest first.
  *
  * WHOLE LIABILITIES ONLY. `FeeLiability` has no partially-settled state — it is
@@ -407,4 +530,4 @@ async function withCheckoutSession(booking: BookingRow): Promise<FundingInstruct
   }
 }
 
-module.exports = { createEscrowForBooking, fundingInstructionFor, releaseBooking };
+module.exports = { createEscrowForBooking, fundingInstructionFor, releaseBooking, refundBooking };

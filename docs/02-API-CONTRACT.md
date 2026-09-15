@@ -126,6 +126,28 @@ A raw state name never reaches the artist. `PENDING_PAYMENT` tells them nothing 
 
 A missing `code` is `400`, not `409` — nothing about the booking is in conflict, the request is incomplete.
 
+### Confirmation — `POST /bookings/:id/confirm` and `POST /bookings/:id/claim-no-show`
+
+`confirm` is open to **both** parties; the caller's part in the booking is resolved server-side from the token, and there is no role field in the body to disagree with it. `claim-no-show` is `CLIENT` only — an artist reporting their own absence is a cancellation (#28), not a claim about someone else's conduct. A stranger gets `404` from both.
+
+Both return `{ confirmation: { outcome, reason, state, actedBy, … } }`, where `outcome` is one of:
+
+| Outcome | Meaning |
+|---|---|
+| `release` | Paid out. Carries a `release` summary |
+| `refund` | Client made whole. Carries a `refund` summary |
+| `dispute` | Opened and **not decided**. Carries `disputeId` |
+| `awaiting_auto_release` | A check-in exists; #25's job will release after the grace period |
+| `awaiting_response` | No check-in and no client response — **nothing will happen on its own** |
+
+The last two are separated deliberately. Both are "nothing now", but only the first has anything that will ever happen without a person, because #25 fires only where a check-in exists.
+
+`409` before `eventEndAt` — not `eventDate`. A confirmation taken mid-performance confirms something that has not happened yet, and it is the artist who would be asking for it.
+
+`409` on a booking that has already concluded, with a message naming the conclusion rather than the state (`"This booking has already been paid out."`). A client who has confirmed cannot then claim a no-show, and vice versa: the second statement is refused rather than stored, so a booking never carries a contradiction.
+
+Confirming twice is idempotent and **keeps the first timestamp**. When a party responded is evidence; a double tap must not rewrite it.
+
 ## 6. Verification
 
 | Method | Path | Auth | Notes |
