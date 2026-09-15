@@ -6,6 +6,11 @@
  * happy path, because the happy path is not what fails.
  */
 
+// Isolate this file's jobs the way db.ts isolates its schema. Funding now
+// enqueues a check-in code delivery (#22), so this file puts real jobs on a
+// real queue.
+process.env.QUEUE_PREFIX = `test-webhooks-${process.pid}`;
+
 const { prisma, hasDatabase, ready } = require('./db.ts')('webhooks');
 
 const test = require('node:test');
@@ -33,6 +38,9 @@ test.before(async () => {
 
 test.after(async () => {
   if (server) await server.close();
+  // Funding opens a queue connection (#22). Without closing it this process
+  // never exits and the suite hangs rather than failing.
+  await require('../src/lib/queue.ts').closeAll();
 });
 
 let seq = 0;

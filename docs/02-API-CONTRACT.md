@@ -78,6 +78,7 @@ Suspended, unverified, and incomplete-profile artists are excluded **at the quer
 | `GET` | `/bookings` | any | Caller's own bookings |
 | `POST` | `/bookings/:id/acknowledge-terms` | `CLIENT` (owner) | Must precede funding |
 | `POST` | `/bookings/:id/fund` | `CLIENT` (owner) | `409` without an acknowledgement |
+| `GET` | `/bookings/:id/check-in-code` | `CLIENT` (owner) | The code, its QR, and whether it is redeemable yet |
 | `POST` | `/bookings/:id/check-in` | `ARTIST` | Redeems the client's code |
 | `POST` | `/bookings/:id/confirm` | `CLIENT` or `ARTIST` | `409` before `eventEndAt` |
 | `POST` | `/bookings/:id/claim-no-show` | `CLIENT` | Refund or dispute, per `04` §2 |
@@ -87,6 +88,19 @@ Suspended, unverified, and incomplete-profile artists are excluded **at the quer
 ### Check-in code visibility
 
 The code is returned to the **client only**. No response body on any endpoint, for any role, ever includes `checkInCode` for an artist token — this is asserted by test in #22. Serialisation is role-aware at the boundary rather than relying on each handler to remember.
+
+`GET /bookings/:id/check-in-code` is the **only** endpoint in the system that returns it, and it is the one place the field is read. Two independent guards hold that line, because one is not enough for the mechanism the whole escrow rests on:
+
+- A test sweeps **every route the booking router registers** with an artist token and fails if the code's value, or the field name, appears in any byte of any response. A route added later is covered without anyone remembering to add it to a list.
+- `npm run check:rules` fails if `checkInCode` is named anywhere in `apps/backend/src` outside `checkInService.ts`, `checkInCodeJob.ts` and `types.d.ts`, or **anywhere at all** in `apps/web/src`. That catches what the sweep cannot: a module not yet mounted on that router.
+
+The response is `{ "checkIn": { code, qrDataUrl, validFrom, validTo, valid, reason, message } }`. `code` is hyphenated for reading aloud (`K7QX-M2F9`); `qrDataUrl` is a PNG data URL rendered server-side, so the code never reaches a third-party QR service.
+
+`valid` is `false` outside the window, with `reason` one of `too_early`, `expired` or `already_redeemed` — but **the code is still returned**. Visibility is not what is gated; redemption is. A client who cannot see their code until two hours before the event has no way to check they have it.
+
+Before funding the endpoint returns `409`, not an empty code: the client is told the code appears once payment is received.
+
+A caller who is not this booking's client gets `404`, never `403`. A `403` confirms the booking exists, and "this booking has a code you may not see" is worth nothing to a stranger and something to an artist probing for one.
 
 ## 6. Verification
 

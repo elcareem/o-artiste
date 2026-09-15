@@ -15,6 +15,7 @@ const {
   assertAcknowledged,
 } = require('../services/acknowledgementService.ts');
 const { createEscrowForBooking } = require('../services/escrowService.ts');
+const { codeForClient } = require('../services/checkInService.ts');
 
 const router = express.Router();
 
@@ -188,6 +189,38 @@ router.get('/bookings/:id/terms', requireAuth, requireRole('CLIENT'), async (req
     next(err);
   }
 });
+
+/**
+ * GET /bookings/:id/check-in-code
+ *
+ * The check-in code, its QR, and whether it is redeemable right now.
+ *
+ * `requireRole('CLIENT')` is the outer guard and ownership is checked inside
+ * the service, so an artist token cannot reach this handler at all and a client
+ * who is not THIS booking's client gets 404. This is the only endpoint in the
+ * system that returns `checkInCode` in any form (docs/02 §5) — every other
+ * booking response goes through `publicBooking()`, which does not carry it.
+ *
+ * 404 rather than 403 for a non-owner: a 403 confirms the booking exists, and
+ * "this booking has a code you may not see" is worth nothing to a stranger and
+ * something to an artist probing for one.
+ */
+router.get(
+  '/bookings/:id/check-in-code',
+  requireAuth,
+  requireRole('CLIENT'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const checkIn = await codeForClient({
+        bookingId: req.params.id,
+        userId: req.user.id,
+      });
+      res.json({ checkIn });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * POST /bookings/:id/terms/acknowledge

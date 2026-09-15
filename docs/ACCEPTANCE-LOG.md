@@ -3850,3 +3850,183 @@ Render.
 Backend only. The web app was already TypeScript; it gained a `typecheck`
 script and the one path fix above. Nothing in `docs/` changed, because nothing
 about the system's behaviour did.
+
+---
+
+## #22 — Check-in code generation
+
+Branch `feat/22-checkin-code`, based on `refactor/backend-typescript`.
+
+The code is what makes the escrow release credible: it is the only evidence
+that the two parties were physically together. Its entire value rests on the
+artist being unable to obtain it any way except from the client's hand, so the
+work here is mostly about closing paths rather than opening one.
+
+### Acceptance criteria
+
+**- [x] Codes are not predictable from a previously issued code**
+
+`crypto.randomInt` over a 30-character alphabet, eight characters — 30^8 ≈
+6.6e11. Three tests, because "random" is the kind of claim that passes by
+inspection and fails in production:
+
+```
+ten thousand codes collide with nobody and cover the whole alphabet
+consecutive codes share no structure a previous holder could exploit
+a booking id tells you nothing about its code
+```
+
+10,000 draws produce 10,000 distinct codes, every alphabet character appears,
+and each appears between 2,300 and 3,050 times out of 80,000 (expected ~2,667).
+That bound is chosen to catch a specific mistake: `randomBytes()[i] % 30` would
+push the first sixteen characters to ~3,137 and the rest to ~2,500, because 256
+is not a multiple of 30. `randomInt` is used precisely to avoid it, and the
+test is what keeps it that way.
+
+The transition test is the one that answers the criterion literally. For each
+of the eight positions it counts every predecessor→successor character pair
+across 500 consecutive codes and fails if any pair repeats more than 15 times
+out of 499 — chance is 1/30 ≈ 16.6. A counter, an LCG, or anything seeded from
+the clock shows up here.
+
+The alphabet excludes `0/O`, `1/I/L` and `U`, asserted. This gets read aloud
+across a noisy room: a code that is secure but mis-transcribed produces an
+artist who cannot check in, which is a worse failure than the one the entropy
+was protecting against.
+
+**- [x] An artist token calling any booking endpoint never receives the code**
+
+The test does not check a hand-picked list of endpoints. It enumerates
+`router.stack` — **every route the booking router registers** — calls each one
+with a real artist token over real HTTP, and fails if the response contains the
+bare code, the hyphenated code, or the field name. A route added in #23 or #27
+is covered without anyone remembering to extend a list.
+
+`npm run check:rules` gained a ninth rule as a second, independent guard:
+`checkInCode` may be named only in `checkInService.ts`, `checkInCodeJob.ts` and
+`types.d.ts`, and nowhere at all in `apps/web/src`. It catches what the sweep
+cannot — a module not yet mounted on that router.
+
+Both guards were verified by deliberately breaking the system: adding
+`checkInCode: booking.checkInCode` to `publicBooking()` and re-running.
+
+```
+check:rules → FAIL  apps/backend/src/routes/bookings.ts:39: checkInCode: booking.checkInCode,
+node --test → not ok 5 - no booking endpoint returns the code to an artist token
+              error: 'GET /bookings/:id returned the bare check-in code to an artist (200)'
+```
+
+Reverted, both green. A guard that has never been seen to fail is not evidence.
+
+The dedicated reader, `GET /bookings/:id/check-in-code`, is `CLIENT`-only by
+role and owner-only inside the service. A non-owner gets **404, not 403** — a
+403 confirms the booking exists.
+
+**- [x] The code is delivered by SMS ahead of the event, verified in the job log**
+
+Verified end to end against the real worker process, real Redis and real
+PostgreSQL — not by calling the processor directly:
+
+```
+$ npm run start:worker
+[worker] listening on queues: maintenance, webhooks, notifications
+[notifications] SMS (stubbed, #38 not yet implemented) → +234808***3140 [check-in-code:cmu36zbda000djp5e39quoegv]: Your o-artiste check-in code is 3N37-7NMC. Give it to Burna Test when they arrive. Do not share it before then.
+[check-in-code] booking cmu36zbda000djp5e39quoegv → +234808***3140 (stubbed, #38), 1 segment(s)
+```
+
+The phone number is masked even in our own logs — logs get shipped to third
+parties, and a phone number is personal data under the NDPR whether or not
+having it in full is convenient. One segment, so it costs one message;
+asserted by test rather than counted by eye.
+
+The code is written to the booking at **funding**, inside the same transaction
+as the `FUNDED_HELD` transition and the ledger entries. A funded booking with no
+code is a booking nobody can complete, so that must not be a state the database
+can hold, not even briefly.
+
+It is **sent** later — a configurable 24 hours before the event. Funding can
+happen months ahead, and a code received in June for a September wedding has
+been forwarded, screenshot and forgotten by the time it matters.
+
+**- [x] A code outside its validity window is rejected**
+
+`validityOf` returns `too_early`, `expired` or `already_redeemed`, each with its
+own message, tested at both boundaries inclusive. `already_redeemed` beats the
+window in both directions — single use.
+
+The distinct messages are not cosmetic: "wrong code" and "already used" send an
+artist standing at a venue to different next actions, and collapsing them into
+"invalid code" strands them (docs/04 §2, #39).
+
+The code is still **returned** outside its window, with `valid: false` and the
+reason. Visibility is not what is gated; redemption is. A client who cannot see
+their code until two hours before the event has no way to check they have it.
+
+### A defect the tests initially did not catch
+
+`schedule()` swallows its own failures by design — the code is already issued
+and visible in the portal, so losing the SMS is a degraded delivery, and turning
+it into a thrown error would leave a booking unfunded over a Redis blip.
+
+That design hid a real bug. The natural job id, `check-in-code:<bookingId>`,
+is **rejected by BullMQ** — a colon delimits its own Redis keys. Every booking
+failed to schedule, and said so only in a log line:
+
+```
+[check-in-code] COULD NOT QUEUE DELIVERY for booking cmu35us5u004yt70keo1ks2bo: Custom Id cannot contain :
+```
+
+Nineteen tests passed while this was broken, because every one of them called
+the job processor directly. Fixed to a hyphen, and the test that would have
+caught it added: it schedules against a real queue, reads the job back, asserts
+the delay puts the send ahead of the event by exactly the configured lead time,
+and schedules twice to prove a webhook redelivery cannot put two messages in a
+client's inbox.
+
+The general lesson, and the reason it is written down: **a swallowed failure
+needs a test that asserts the success, not the absence of a throw.**
+
+### Other decisions
+
+The QR encodes the **bare code, not a URL**, and is rendered server-side into a
+data URL. A URL would make the symbol actionable in any camera app and would
+leak the code into browser history, referrer headers and any scanner's
+telemetry; a client-side or hosted QR service would hand the code to a third
+party.
+
+`lib/notifications.ts` is the seam #38 fills. It logs and succeeds rather than
+throwing, so a scheduled job does not dead-letter over an unimplemented
+transport — which would bury this issue's own job log under noise. It returns
+`stubbed: true` so a caller, and #38's tests, can tell a stub from a send.
+Setting `SMS_API_KEY` before #38 lands makes sends **throw**, because a
+half-configured notifier that quietly drops messages is worse than an obviously
+absent one.
+
+The delivery job re-reads the booking rather than trusting its payload: it was
+scheduled weeks earlier and the booking may have been cancelled since. A
+non-`FUNDED_HELD` booking sends nothing, asserted.
+
+Two test files gained `closeAll()` teardown. Funding now opens a real queue
+connection, and without closing it the test process never exits — the suite
+would hang rather than fail, which is the worse of the two.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 215  # pass 215  # fail 0   (196 + 19 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 9   failed 0   skipped 0
+npm run lint                  → clean
+NODE_ENV=production npm run start:worker
+                              → [worker] listening on queues: maintenance, webhooks, notifications
+```
+
+### Carried forward
+
+`POST /bookings/:id/check-in` — redemption — is #23, next. `validityOf` and
+`normaliseCode` are written here for it to use, so the rejection reasons stay in
+one place.
+
+Real SMS delivery is #38. Until then the criterion is met by the job log, which
+is what the issue asks for.

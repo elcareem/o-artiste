@@ -160,6 +160,33 @@ absent "No raw stack traces or HTTP status codes rendered in the web app" \
        "apps/web/src" \
        '\{[^}]*\b(error|err|e|res|response|apiError)\.(stack|status)\b[^}]*\}'
 
+# ── Check-in code visibility — docs/02 §5, docs/04 §1, issue #22 ────────────
+# The code is the only evidence the two parties were physically together, and
+# that rests entirely on the artist being unable to obtain it except from the
+# client's hand.
+#
+# Exactly three modules may name the field. Everything else — a new route, a
+# serialiser, a debug log — is a path by which it reaches an artist token. The
+# window columns are not the secret and are not restricted.
+#
+# The test suite sweeps every registered booking route for the code's VALUE.
+# This rule catches what the sweep cannot: a module not mounted on that router,
+# and the web app, which must never receive the field at all.
+CHECKIN_ALLOWED='apps/backend/src/services/checkInService\.ts|apps/backend/src/jobs/checkInCodeJob\.ts|apps/backend/src/types\.d\.ts'
+if [ ! -d "apps/backend/src" ]; then
+  skip "checkInCode is named only by the check-in service, its delivery job and the types" "apps/backend/src not present yet"
+else
+  hits="$(grep -rnE 'checkInCode([^VA-Za-z]|$)' apps/backend/src apps/web/src 2>/dev/null \
+          | grep -vE "^($CHECKIN_ALLOWED):" \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
+  if [ -z "$hits" ]; then
+    pass "checkInCode is named only by the check-in service, its delivery job and the types"
+  else
+    fail "checkInCode is named only by the check-in service, its delivery job and the types" \
+         "The code must never reach an artist or the browser. Route it through checkInService.ts. docs/02-API-CONTRACT.md §5." "$hits"
+  fi
+fi
+
 echo
 printf 'passed %s   failed %s   skipped %s\n' "$PASS" "$FAIL" "$SKIP"
 echo
