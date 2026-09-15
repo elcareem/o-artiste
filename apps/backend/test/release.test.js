@@ -439,3 +439,107 @@ describe('reconciliation holds across the fee boundaries', async () => {
     assert.equal(r.byParty.ARTIST, result.artistPayoutKobo);
   }
 });
+
+// ── The payout preview must not under-disclose ──────────────────────────────
+
+describe('the payout preview discloses liabilities this payout would settle', async () => {
+  // #26 introduced the deduction; without this the preview says ₦190,000 and
+  // the artist receives ₦187,930, discovering the difference afterwards.
+  // docs/00 §7 requires them to see their net BEFORE agreeing, and a "net"
+  // that omits a known deduction is not a net.
+  const { createApp } = require('../src/app');
+  const { startServer } = require('./helpers');
+  const { signToken } = require('../src/lib/auth');
+
+  const artistUser = await makeUser('ARTIST');
+  const origin = await readyToRelease({ artistUser });
+
+  await prisma.feeLiability.create({
+    data: {
+      artistUserId: artistUser.id,
+      originBookingId: origin.booking.id,
+      amountKobo: N(2070),
+      status: 'OUTSTANDING',
+    },
+  });
+
+  const { booking } = await readyToRelease({ artistUser });
+  const server = await startServer(createApp());
+
+  try {
+    const res = await fetch(`${server.url}/bookings/${booking.id}/payout-preview`, {
+      headers: { Authorization: `Bearer ${signToken(artistUser)}` },
+    });
+    assert.equal(res.status, 200);
+    const { payout } = await res.json();
+
+    assert.equal(payout.artistNetKobo, N(190000), 'what the booking earns');
+    assert.equal(payout.outstandingLiabilityKobo, N(2070), 'what they owe');
+    assert.equal(payout.liabilitySettleableKobo, N(2070), 'what this payout can clear');
+    assert.equal(payout.estimatedPayoutKobo, N(187930), 'what would actually reach them');
+    assert.equal(payout.liabilities.length, 1, 'and which liability it is');
+
+    // Reported separately rather than folded into artistNetKobo: an earlier
+    // booking may settle it first, so the deduction is possible, not certain.
+    assert.notEqual(payout.artistNetKobo, payout.estimatedPayoutKobo);
+  } finally {
+    await server.close();
+  }
+});
+
+describe('a preview with no liabilities reports a payout equal to the net', async () => {
+  const { createApp } = require('../src/app');
+  const { startServer } = require('./helpers');
+  const { signToken } = require('../src/lib/auth');
+
+  const { booking, artistUser } = await readyToRelease();
+  const server = await startServer(createApp());
+
+  try {
+    const res = await fetch(`${server.url}/bookings/${booking.id}/payout-preview`, {
+      headers: { Authorization: `Bearer ${signToken(artistUser)}` },
+    });
+    const { payout } = await res.json();
+
+    assert.equal(payout.outstandingLiabilityKobo, 0);
+    assert.equal(payout.estimatedPayoutKobo, N(190000));
+    assert.equal(payout.estimatedPayoutKobo, payout.artistNetKobo);
+    assert.deepEqual(payout.liabilities, []);
+  } finally {
+    await server.close();
+  }
+});
+
+describe('a liability too large to settle is disclosed but not deducted', async () => {
+  const { createApp } = require('../src/app');
+  const { startServer } = require('./helpers');
+  const { signToken } = require('../src/lib/auth');
+
+  const artistUser = await makeUser('ARTIST');
+  const origin = await readyToRelease({ artistUser });
+  await prisma.feeLiability.create({
+    data: {
+      artistUserId: artistUser.id,
+      originBookingId: origin.booking.id,
+      amountKobo: N(500000),
+      status: 'OUTSTANDING',
+    },
+  });
+
+  const { booking } = await readyToRelease({ artistUser, amountKobo: N(20000) });
+  const server = await startServer(createApp());
+
+  try {
+    const res = await fetch(`${server.url}/bookings/${booking.id}/payout-preview`, {
+      headers: { Authorization: `Bearer ${signToken(artistUser)}` },
+    });
+    const { payout } = await res.json();
+
+    assert.equal(payout.outstandingLiabilityKobo, N(500000), 'the debt is shown in full');
+    assert.equal(payout.liabilitySettleableKobo, 0, 'but this payout cannot clear it');
+    assert.equal(payout.estimatedPayoutKobo, N(19000), 'so the payout is untouched');
+    assert.deepEqual(payout.liabilities, []);
+  } finally {
+    await server.close();
+  }
+});

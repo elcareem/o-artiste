@@ -744,6 +744,11 @@ The ledger test encodes the canonical worked example from `docs/01` §5 and
 asserts both that the five entries sum to zero and that the artist's line is
 exactly **18,793,000 kobo (₦187,930)**, the figure #14 and #26 will be held to.
 
+> **Superseded at #18.** The bearers were wrong: the artist's line is
+> **19,000,000 kobo (₦190,000)**, and the client's is −20,200,000. The test was
+> corrected at #26 — it had kept passing throughout, because a set of numbers
+> that sums to zero still sums to zero when the model behind them is wrong.
+
 ### `[x]` Managed Postgres provisioned, `DATABASE_URL` set on the deployed backend
 
 Render PostgreSQL 16, instance `o-artiste-db`, database `artist_escrow`, region
@@ -2455,7 +2460,10 @@ money-out   7,000          (payout above ₦50,000)
 artist net  18,793,000     = ₦187,930
 ```
 
-The figure #26 will be held to.
+> **Superseded at #18 — the artist nets ₦190,000.** The provider charges
+> money-in to the payer at funding and money-out to the platform at payout, so
+> the artist's share is reduced by commission alone. `#26` implements and
+> asserts the corrected figure; `docs/05` §1 carries the full correction.
 
 ### `[x]` Unit tests at both sides of each boundary
 
@@ -2588,6 +2596,9 @@ POST /bookings → 201
   tiers snapshot: 4 bands
 
 GET /bookings/:id/payout-preview → artist net 18,793,000 ✓ ₦187,930
+                                   (superseded at #18 → 19,000,000 / ₦190,000;
+                                    the endpoint reads feeService, so it
+                                    returns the corrected figure now)
 POST /bookings (past date)       → 400 "The event date must be in the future."
 ```
 
@@ -3711,3 +3722,30 @@ Corrected to the real shape. Worth recording as a lesson rather than a tidy-up:
 **reconciliation is necessary, not sufficient.** It catches a dropped or
 double-counted entry; it cannot catch a consistently wrong model. #26 asserts the
 figures themselves, computed by `feeService`, rather than only the sum.
+
+### Three follow-ups found while closing #26
+
+**1. `docs/00` §7 still stated the pre-#18 fee bearers.** The #18 correction
+covered `01`, `05`, `07` and `08` and missed the overview, which is the document
+someone reads first. It said the **artist** bears the escrow fees on completion;
+the provider charges money-in to the payer at funding and money-out to the
+business at payout. Corrected, with the money-in/money-out/commission split
+stated explicitly and the ₦202,000 client transfer called out.
+
+**2. The payout preview under-disclosed.** #26 introduced liability settlement,
+and `GET /bookings/:id/payout-preview` reported ₦190,000 while the artist would
+actually receive ₦187,930 — the deduction discoverable only afterwards. `docs/00`
+§7 requires an artist to see their net before agreeing, and a "net" that omits a
+known deduction is not a net.
+
+Now returns `outstandingLiabilityKobo`, `liabilitySettleableKobo`,
+`estimatedPayoutKobo` and the specific liabilities. **Reported separately rather
+than subtracted into `artistNetKobo`**, because an earlier booking may settle the
+liability first — the deduction is possible rather than certain, and a single
+blended figure could not say which. A liability too large for this payout is
+shown in full but not deducted.
+
+**3. Three forward-looking claims in this log said ₦187,930 was "the figure #26
+will be held to".** Annotated as superseded rather than rewritten — the log is a
+record of what was verified when, and editing history would hide that the
+correction happened at all.

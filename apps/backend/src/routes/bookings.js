@@ -131,7 +131,40 @@ router.get('/bookings/:id/payout-preview', requireAuth, async (req, res, next) =
       commissionBps: booking.commissionRateBpsSnapshot,
     });
 
-    res.json({ payout: breakdown });
+    // OUTSTANDING LIABILITIES ARE DISCLOSED HERE, because #26 nets them off
+    // this payout and an artist should not discover the deduction afterwards.
+    // docs/00 §7 requires them to see their net before agreeing to a booking,
+    // and "net" that omits a known deduction is not a net.
+    //
+    // Reported separately rather than subtracted into `artistNetKobo`: an
+    // earlier booking may settle the liability first, so the deduction is
+    // possible rather than certain, and a single blended figure could not say
+    // which. #26 settles whole liabilities only, so `willSettle` lists exactly
+    // those this payout could clear.
+    const outstanding = await prisma.feeLiability.findMany({
+      where: { artistUserId: booking.artist.userId, status: 'OUTSTANDING' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, amountKobo: true, originBookingId: true, createdAt: true },
+    });
+
+    const willSettle = [];
+    let settleableKobo = 0;
+    for (const liability of outstanding) {
+      if (settleableKobo + liability.amountKobo > breakdown.artistNetKobo) continue;
+      willSettle.push(liability);
+      settleableKobo += liability.amountKobo;
+    }
+
+    res.json({
+      payout: {
+        ...breakdown,
+        outstandingLiabilityKobo: outstanding.reduce((sum, l) => sum + l.amountKobo, 0),
+        liabilitySettleableKobo: settleableKobo,
+        /** What would actually reach the artist if this released now. */
+        estimatedPayoutKobo: breakdown.artistNetKobo - settleableKobo,
+        liabilities: willSettle,
+      },
+    });
   } catch (err) {
     next(err);
   }
