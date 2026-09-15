@@ -4263,3 +4263,70 @@ Checked while looking for one: the deployed API **rejects** the committed seed
 credentials (`super@artist-escrow.test`), so `prisma/seed.ts` has not been run
 against it. That is the right state — the seed password is in this repository —
 and it is now written into the checklist as something to re-confirm at #41.
+
+### Creating an administrator — the gap this uncovered
+
+Looking for an admin login to run the deployed check with turned up that there
+was no way to create one. `POST /auth/register` whitelists `CLIENT` and
+`ARTIST` deliberately (#9), which left two options on a deployed instance: run
+the development seed, whose password is committed to this repository, or
+hand-write a bcrypt hash into a SQL `INSERT`. The first is a vulnerability and
+the second is how a typo becomes an account nobody can log into and nobody can
+see.
+
+`npm run create-admin --workspace apps/backend` is now the supported way, and
+is needed for launch regardless of #5.
+
+- **`ADMIN` by default.** `--super` requires typing `CREATE SUPER_ADMIN` after
+  reading what the difference is. An admin resolves a dispute on one booking; a
+  super-admin changes the rate on every booking created afterwards.
+- **The password is never a command-line argument.** argv reaches shell history,
+  `ps` output for every user on the box, and any session recording. It is
+  prompted for with echo suppressed, and the script refuses to run at all
+  without a TTY rather than reading from a pipe.
+- **Refuses the committed seed password by value**, refuses an undeliverable
+  domain (`.test`, `.local`, `.invalid`, `.example`) because that address is how
+  a locked-out administrator is recovered, and refuses to overwrite an existing
+  account.
+- **The account and its `AuditLog` row commit together.** An administrator
+  created with no record of it is exactly the account an attacker would want.
+- Prints the host and database it is about to write to before asking anything,
+  with the credentials in the connection string stripped.
+
+Verified by driving it through a pseudo-terminal: the happy path creates the
+user with a bcrypt hash and the audit row, and each refusal was exercised —
+duplicate email, undeliverable domain, mismatched passwords, a 5-character
+password, the seed password, and `--super` without confirmation.
+
+**One bug found and fixed in the process.** The first version created a new
+readline interface per question and closed it. Closing one ends
+`process.stdin`, so the second prompt's callback never fired and the script
+**exited 0 having done nothing** — no account, no error, no clue. It now uses a
+single interface for the run and checks for a TTY before printing anything.
+
+### End-to-end, in the deployed shape
+
+Run locally against `RUN_WORKERS_IN_WEB=true` and `NODE_ENV=production`, which
+is exactly how `o-artiste-api` is now configured:
+
+```
+[worker] listening on queues: maintenance, webhooks, notifications
+[backend] in-process workers ON
+
+POST /admin/queue/echo  {"delayMs":10000}
+  → {"id":"2","expectedAt":"2026-09-15T22:17:17.523Z"}
+GET  /admin/queue/echo/2   (immediately)
+  → {"state":"delayed","ranAt":null}
+GET  /admin/queue/echo/2   (after)
+  → {"state":"completed","expectedAt":"...17.523Z","ranAt":"...17.585Z"}
+
+[echo] deployed-shape check (job 2, attempt 1)
+```
+
+62ms late on a ten-second delay. This is the evidence for #5's criterion in
+every respect except the host, which is the part that still needs a deployed
+admin.
+
+The throwaway admin used for this was deleted from the development database
+afterwards; its password appears in this session's transcript and must never be
+reused.

@@ -316,9 +316,29 @@ consumes nothing.
 - [ ] A job scheduled 10 seconds out fires on the deployed host
 - [ ] A scheduled job survives a deployed-process restart
 
-**How to verify the last two.** Both need an `ADMIN` or `SUPER_ADMIN` login on
-the deployed instance — registration whitelists `CLIENT` and `ARTIST`, so one
-must be created directly against the deployed database.
+**How to verify the last two.** Both need an `ADMIN` login on the deployed
+instance. Registration whitelists `CLIENT` and `ARTIST` on purpose (#9), so
+create one with the script — it is the only supported way:
+
+```
+DATABASE_URL="<the deployed External connection string>" \
+  npm run create-admin --workspace apps/backend
+```
+
+It prints the host and database it is about to write to before asking anything
+else. Check that line.
+
+| Field | What it should be |
+|---|---|
+| Role | **`ADMIN`**, not `SUPER_ADMIN`. `ADMIN` resolves disputes and moves money on one booking; `SUPER_ADMIN` changes the commission rate and cancellation tiers, which govern **every booking created afterwards**. The diagnostics need only `ADMIN`. Pass `--super` when a super-admin is genuinely required, and it will make you type a confirmation |
+| Email | A mailbox you actually control. Not `@artist-escrow.test` — it is how a locked-out administrator is recovered, and there is no reset flow until #38. The script refuses `.test`, `.local`, `.invalid` and `.example` |
+| Phone | E.164, a number you control |
+| Password | Generated, 16+ characters, straight into a password manager. `node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"` |
+
+**Never the seed password**, and never anything that has been pasted into a
+chat, an issue or a terminal that gets recorded. The script rejects the seed
+password by value, refuses to take a password as a command-line argument
+(argv reaches shell history and `ps`), and does not echo what you type.
 
 ```
 # fires on the deployed host

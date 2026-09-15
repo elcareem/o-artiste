@@ -13,6 +13,7 @@
     "start": "node src/index.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "seed": "node prisma/seed.ts",
+    "create-admin": "node scripts/create-admin.ts",
     "start:worker": "node src/worker.ts",
     "dev:worker": "node --watch src/worker.ts",
     "build": "prisma generate",
