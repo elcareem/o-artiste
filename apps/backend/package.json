@@ -6,7 +6,7 @@
   "type": "commonjs",
   "main": "src/index.ts",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.18.0"
   },
   "scripts": {
     "dev": "node --watch src/index.ts",
@@ -15,7 +15,7 @@
     "seed": "node prisma/seed.ts",
     "start:worker": "node src/worker.ts",
     "dev:worker": "node --watch src/worker.ts",
-    "build": "prisma generate && tsc --noEmit",
+    "build": "prisma generate",
     "postinstall": "prisma generate",
     "test:sandbox": "node --test \"test/**/*.sandbox.ts\"",
     "test:all": "npm run test && npm run test:sandbox",

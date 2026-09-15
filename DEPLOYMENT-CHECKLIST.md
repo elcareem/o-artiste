@@ -41,6 +41,20 @@ exists. Recorded in `docs/ACCEPTANCE-LOG.md` as a deliberate deviation.
 - [x] **Build `npm install && npm run build --workspace apps/backend`**
 - [x] Start `npm run start --workspace apps/backend`
 
+> **The backend is TypeScript, and neither command changes.** Node 22 strips
+> types at runtime (`process.features.typescript === 'strip'`), so `npm start`
+> runs `node src/index.ts` directly — there is no build output and no
+> transpiler on the deploy path.
+>
+> **`tsc` is deliberately NOT part of the build.** It is a devDependency, and a
+> host that omits devDependencies would fail a build that needed it — for no
+> gain, since the runtime never uses it. The type check is its own gate:
+> `npm run typecheck`, run alongside `npm run check:rules` before every commit.
+>
+> This requires **Node 22.18 or newer** (type stripping is off by default
+> before that). `NODE_VERSION=22` is already set, and `engines.node` is
+> `>=20.9.0` — tightened to `>=22.18.0` for the backend.
+
 **The build command must include `npm run build`.** `npm install` alone does not
 generate the Prisma client here: the install runs at the repository root while
 the schema lives at `apps/backend/prisma/schema.prisma`, and Prisma's implicit

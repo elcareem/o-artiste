@@ -50,7 +50,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-async function tokenFor(server, role = 'CLIENT') {
+async function tokenFor(server: TestServer, role = 'CLIENT') {
   const { user, password } = await makeUser(role);
   const res = await fetch(`${server.url}/auth/login`, {
     method: 'POST',
@@ -61,7 +61,7 @@ async function tokenFor(server, role = 'CLIENT') {
 }
 
 /** Replaces onboardParty for one call, restoring it afterwards. */
-async function withStub(impl, fn) {
+async function withStub(impl: (...args: any[]) => any, fn: () => any) {
   const original = escrowpay.onboardParty;
   escrowpay.onboardParty = impl;
   try {
@@ -80,8 +80,11 @@ const successResponse = (suffix = uniq()) => ({
   },
 });
 
-function providerError(code, message, status = 502) {
-  const err = new AppError(status, 'The payment provider could not complete that request.');
+function providerError(code: string, message: string, status = 502): AppErrorLike {
+  const err: AppErrorLike = new AppError(
+    status,
+    'The payment provider could not complete that request.'
+  );
   err.providerCode = code;
   err.providerMessage = message;
   return err;

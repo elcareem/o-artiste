@@ -43,7 +43,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-async function tokenFor(server, role) {
+async function tokenFor(server: TestServer, role: UserRole) {
   const { user, password } = await makeUser(role);
   const res = await fetch(`${server.url}/auth/login`, {
     method: 'POST',
@@ -54,7 +54,7 @@ async function tokenFor(server, role) {
   return { token, user };
 }
 
-const putRate = (server, body, token) =>
+const putRate = (server: TestServer, body?: unknown, token?: string) =>
   fetch(`${server.url}/admin/config/commission`, {
     method: 'PUT',
     headers: {

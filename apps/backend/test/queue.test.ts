@@ -23,7 +23,10 @@ const echoJob = require('../src/jobs/echoJob.ts');
 const BACKEND_ROOT = path.resolve(__dirname, '..');
 
 /** Polls until `check` returns a truthy value, or gives up. */
-async function until(check, { timeout = 20000, interval = 100 } = {}) {
+async function until<T>(
+  check: () => T,
+  { timeout = 20000, interval = 100 }: { timeout?: number; interval?: number } = {}
+): Promise<T | null> {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const result = await check();
@@ -40,9 +43,9 @@ const uniqueId = () => `t${Date.now()}${seq++}`;
 
 describe('a job scheduled 10 seconds out executes at approximately the right time', async () => {
   const queue = queueLib.getQueue(echoJob.QUEUE_NAME);
-  const ran = [];
+  const ran: any[] = [];
 
-  const worker = queueLib.registerWorker(echoJob.QUEUE_NAME, async (job) => {
+  const worker = queueLib.registerWorker(echoJob.QUEUE_NAME, async (job: import('bullmq').Job) => {
     ran.push({ id: job.id, at: Date.now() });
     return echoJob.process(job);
   });
@@ -62,7 +65,7 @@ describe('a job scheduled 10 seconds out executes at approximately the right tim
     const found = await until(() => ran.find((r) => r.id === job.id));
     assert.ok(found, 'the delayed job must eventually run');
 
-    const lateness = found.at - scheduledAt - DELAY;
+    const lateness = found!.at - scheduledAt - DELAY;
     assert.ok(lateness >= -50, `ran ${-lateness}ms early`);
     assert.ok(lateness < 5000, `ran ${lateness}ms late`);
   } finally {
@@ -72,9 +75,9 @@ describe('a job scheduled 10 seconds out executes at approximately the right tim
 
 describe('a job that throws is retried per the configured backoff', async () => {
   const queue = queueLib.getQueue(echoJob.QUEUE_NAME);
-  const attempts = [];
+  const attempts: any[] = [];
 
-  const worker = queueLib.registerWorker(echoJob.QUEUE_NAME, async (job) => {
+  const worker = queueLib.registerWorker(echoJob.QUEUE_NAME, async (job: import('bullmq').Job) => {
     attempts.push({ id: job.id, attempt: job.attemptsMade + 1, at: Date.now() });
     return echoJob.process(job);
   });
@@ -88,9 +91,9 @@ describe('a job that throws is retried per the configured backoff', async () => 
     const done = await until(() => (mine().length >= 3 ? mine() : null), { timeout: 25000 });
 
     assert.ok(done, `expected 3 attempts, saw ${mine().length}`);
-    assert.equal(done.length, 3);
+    assert.equal(done!.length, 3);
     assert.deepEqual(
-      done.map((a: any) => a.attempt),
+      done!.map((a: any) => a.attempt),
       [1, 2, 3],
       'attempts are numbered in order'
     );
@@ -98,8 +101,8 @@ describe('a job that throws is retried per the configured backoff', async () => 
     // Exponential backoff, so the second gap must exceed the first. Without
     // this the retries could be firing instantly and the test would still pass
     // on count alone.
-    const firstGap = done[1].at - done[0].at;
-    const secondGap = done[2].at - done[1].at;
+    const firstGap = done![1].at - done![0].at;
+    const secondGap = done![2].at - done![1].at;
     assert.ok(firstGap >= 900, `first retry waited only ${firstGap}ms`);
     assert.ok(secondGap > firstGap, `backoff did not grow: ${firstGap}ms then ${secondGap}ms`);
 
@@ -168,7 +171,7 @@ describe('scheduled jobs survive a process restart', async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  const output = [];
+  const output: string[] = [];
   worker.stdout.on('data', (d: any) => output.push(d.toString()));
   worker.stderr.on('data', (d: any) => output.push(d.toString()));
 

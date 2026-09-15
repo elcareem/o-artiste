@@ -37,7 +37,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-const post = (s, p, b) =>
+const post = (s: TestServer, p: string, b?: unknown) =>
   fetch(`${s.url}${p}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -45,7 +45,7 @@ const post = (s, p, b) =>
   });
 
 /** The write is best-effort and therefore asynchronous; give it a moment. */
-async function waitForAudit(where, attempts = 40) {
+async function waitForAudit(where: Record<string, unknown>, attempts = 40) {
   for (let i = 0; i < attempts; i++) {
     const row = await prisma.auditLog.findFirst({ where, orderBy: { createdAt: 'desc' } });
     if (row) return row;

@@ -76,7 +76,7 @@ async function configActor() {
   return makeUser('SUPER_ADMIN', { verified: false });
 }
 
-async function seedConfig(actorId, { bps = 500 } = {}) {
+async function seedConfig(actorId: string, { bps = 500 } = {}) {
   await prisma.commissionRate.create({
     data: { rateBasisPoints: bps, effectiveFrom: new Date(Date.now() - 86400000), setByUserId: actorId },
   });
@@ -103,7 +103,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-async function login(server, email) {
+async function login(server: TestServer, email: string) {
   const res = await fetch(`${server.url}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

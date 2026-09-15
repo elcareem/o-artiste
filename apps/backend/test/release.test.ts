@@ -112,7 +112,7 @@ async function readyToRelease({ amountKobo = N(200000), commissionBps = 500, art
 
 /** Replaces provider methods for the duration of a call. */
 async function withProvider(overrides: Record<string, any>, fn: () => any) {
-  const originals = {};
+  const originals: Record<string, any> = {};
   for (const [name, impl] of Object.entries(overrides)) {
     originals[name] = escrowpay[name];
     escrowpay[name] = impl;
@@ -127,7 +127,7 @@ async function withProvider(overrides: Record<string, any>, fn: () => any) {
 /** Records every release call so the amount and idempotency key can be asserted. */
 function recordingProvider(calls: any[], impl?: (args: any) => any) {
   return {
-    release: async (args) => {
+    release: async (args: any) => {
       calls.push(args);
       return impl ? impl(args) : { id: `REL_${calls.length}`, status: 'completed' };
     },
@@ -143,7 +143,7 @@ describe('a ₦200,000 booking at 5% disburses ₦190,000 to the artist', async 
   // artist's share is reduced by commission ALONE. docs/05 §1 and docs/08 §5
   // both carry the corrected figure.
   const { booking } = await readyToRelease();
-  const calls = [];
+  const calls: any[] = [];
 
   const result = await withProvider(recordingProvider(calls), () =>
     escrowService.releaseBooking({ bookingId: booking.id })
@@ -190,7 +190,7 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
   });
 
   const { booking } = await readyToRelease({ artistUser });
-  const calls = [];
+  const calls: any[] = [];
 
   const result = await withProvider(recordingProvider(calls), () =>
     escrowService.releaseBooking({ bookingId: booking.id })
@@ -243,7 +243,7 @@ describe('a liability larger than the payout is left outstanding rather than set
   });
 
   const { booking } = await readyToRelease({ artistUser, amountKobo: N(20000) });
-  const calls = [];
+  const calls: any[] = [];
 
   const result = await withProvider(recordingProvider(calls), () =>
     escrowService.releaseBooking({ bookingId: booking.id })
@@ -263,7 +263,7 @@ describe('several small liabilities settle oldest first, up to what the payout c
   const artistUser = await makeUser('ARTIST');
   const origin = await readyToRelease({ artistUser });
 
-  const made = [];
+  const made: any[] = [];
   for (const amountKobo of [N(2070), N(2070), N(2070)]) {
     made.push(
       await prisma.feeLiability.create({
@@ -303,7 +303,7 @@ describe('a booking created before a commission change pays out at its snapshott
   const live = await commissionService.resolveCommissionRate();
   assert.equal(live.rateBasisPoints, 900, 'live config really did change');
 
-  const calls = [];
+  const calls: any[] = [];
   const result = await withProvider(recordingProvider(calls), () =>
     escrowService.releaseBooking({ bookingId: booking.id })
   );
@@ -338,7 +338,7 @@ describe('the provider is called before anything is recorded, and a failure reco
 
 describe('a retry after a recording failure reuses the same idempotency key', async () => {
   const { booking } = await readyToRelease();
-  const calls = [];
+  const calls: any[] = [];
 
   await withProvider(recordingProvider(calls), () => escrowService.releaseBooking({ bookingId: booking.id }));
 

@@ -24,7 +24,7 @@ const describe = hasDatabase ? test : test.skip;
 const SECRET = 'whsec_test_0123456789abcdef';
 process.env.ESCROWPAY_WEBHOOK_SECRET = SECRET;
 
-let server;
+let server: TestServer;
 
 test.before(async () => {
   if (ready) await ready;
@@ -104,7 +104,21 @@ async function fundableBooking({ amountKobo = N(200000) } = {}) {
 }
 
 /** Builds a delivery exactly as the provider does — docs/provider §Webhooks. */
-function delivery({ type, objectId, eventId = `WHEV_${uniq()}`, secret = SECRET, t = null, body = null }) {
+function delivery({
+  type,
+  objectId,
+  eventId = `WHEV_${uniq()}`,
+  secret = SECRET,
+  t = null,
+  body = null,
+}: {
+  type?: string;
+  objectId?: string | null;
+  eventId?: string;
+  secret?: string;
+  t?: number | null;
+  body?: Record<string, unknown> | null;
+}) {
   const payload = body ?? {
     id: eventId,
     type,
@@ -135,7 +149,10 @@ function delivery({ type, objectId, eventId = `WHEV_${uniq()}`, secret = SECRET,
 }
 
 /** POSTs a delivery over real HTTP, through the real body-parser stack. */
-async function post(d, { headers = {}, raw = null } = {}) {
+async function post(
+  d: { raw: Buffer; eventId: string; headers: Record<string, string> },
+  { headers = {}, raw = null }: { headers?: Record<string, string>; raw?: Buffer | null } = {}
+) {
   const res = await fetch(`${server.url}/webhooks/escrowpay`, {
     method: 'POST',
     headers: { ...d.headers, ...headers },
@@ -146,7 +163,7 @@ async function post(d, { headers = {}, raw = null } = {}) {
 
 /** Replaces provider methods for the duration of a call. */
 async function withProvider(overrides: Record<string, any>, fn: () => any) {
-  const originals = {};
+  const originals: Record<string, any> = {};
   for (const [name, impl] of Object.entries(overrides)) {
     originals[name] = escrowpay[name];
     escrowpay[name] = impl;
@@ -179,7 +196,7 @@ function documentedEventTypes() {
   return types;
 }
 
-const fundedTransaction = (booking) => async () => ({
+const fundedTransaction = (booking: BookingRow) => async () => ({
   id: booking.escrowId,
   status: 'funded',
   funded_minor: booking.amountKobo,
@@ -227,9 +244,9 @@ describe('concurrent deliveries of the same event are decided by the unique cons
     Promise.all([post(d), post(d), post(d), post(d), post(d)])
   );
 
-  assert.deepEqual(results.map((r) => r.status), [200, 200, 200, 200, 200]);
+  assert.deepEqual(results.map((r: any) => r.status), [200, 200, 200, 200, 200]);
   assert.equal(
-    results.filter((r) => r.body.duplicate).length,
+    results.filter((r: any) => r.body.duplicate).length,
     4,
     'exactly one delivery wins the claim'
   );
@@ -323,7 +340,7 @@ describe('a handler that throws mid-processing results in a queued retry, not a 
   const booking = await fundableBooking();
   const d = delivery({ type: 'transaction.funded', objectId: booking.escrowId });
 
-  const queued = [];
+  const queued: any[] = [];
   const res = await withProvider(
     {
       getEscrow: async () => {
@@ -334,7 +351,7 @@ describe('a handler that throws mid-processing results in a queued retry, not a 
       webhookService.receive({
         rawBody: d.raw,
         headers: d.headers,
-        queueRetry: async (id) => queued.push(id),
+        queueRetry: async (id: string) => queued.push(id),
       })
   );
 
@@ -590,7 +607,7 @@ describe('the raw body survives the middleware stack byte for byte', async () =>
 describe('a signed payload that is not JSON is a 400, and a signed payload with no id cannot be deduplicated', async () => {
   const notJson = Buffer.from('this is signed but it is not json', 'utf8');
   const ts = Math.floor(Date.now() / 1000);
-  const sign = (buf) =>
+  const sign = (buf: Buffer) =>
     crypto.createHmac('sha256', SECRET).update(Buffer.concat([Buffer.from(`${ts}.`), buf])).digest('hex');
 
   let res = await fetch(`${server.url}/webhooks/escrowpay`, {

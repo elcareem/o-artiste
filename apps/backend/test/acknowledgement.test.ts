@@ -108,7 +108,7 @@ async function scenario() {
  *
  * Stubbing keeps this file testing one thing, and keeps it deterministic.
  */
-async function withStubbedProvider(fn) {
+async function withStubbedProvider(fn: () => any) {
   const originals = {
     createEscrow: escrowpay.createEscrow,
     activateEscrow: escrowpay.activateEscrow,
@@ -146,7 +146,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-async function login(server, email) {
+async function login(server: TestServer, email: string) {
   const res = await fetch(`${server.url}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

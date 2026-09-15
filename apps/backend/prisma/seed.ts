@@ -120,7 +120,7 @@ async function seedUsers() {
           email: spec.email,
           phone: spec.phone,
           passwordHash,
-          role: spec.role,
+          role: spec.role as UserRole,
           // Test clients and artists are pre-verified so later phases have
           // something to work against without running the provider flow.
           // Admins are not: they never transact.
@@ -208,7 +208,7 @@ function assertRatesAreFundable() {
     if (rate === undefined) continue;
     if (rate < MIN_RATE_KOBO || rate > MAX_RATE_KOBO) {
       throw new Error(
-        `${spec.artist.stageName}: rate ${rate} kobo is outside the permitted ` +
+        `${spec.artist!.stageName}: rate ${rate} kobo is outside the permitted ` +
           `₦20,000–₦3,000,000 range and could never be funded.`
       );
     }

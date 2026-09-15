@@ -5,13 +5,13 @@
  * close function. Port 0 lets the OS pick, so tests never collide with a dev
  * server or with each other.
  */
-function startServer(app) {
-  return new Promise((resolve) => {
+function startServer(app: import('express').Express): Promise<TestServer> {
+  return new Promise<TestServer>((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
+      const { port } = server.address() as import('node:net').AddressInfo;
       resolve({
         url: `http://127.0.0.1:${port}`,
-        close: () => new Promise((done) => server.close(done)),
+        close: () => new Promise<void>((done) => server.close(() => done())),
       });
     });
   });

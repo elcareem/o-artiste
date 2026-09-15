@@ -51,7 +51,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-async function login(server, email) {
+async function login(server: TestServer, email: string) {
   const res = await fetch(`${server.url}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

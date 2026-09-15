@@ -14,6 +14,7 @@ interface TestServer {
 
 /** The per-file schema harness from `test/db.ts`. */
 interface TestDb {
+  /** `null` when DATABASE_URL is unset — the caller then skips its tests. */
   prisma: import('@prisma/client').PrismaClient;
   hasDatabase: boolean;
   schema: string | null;

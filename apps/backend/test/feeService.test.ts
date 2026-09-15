@@ -113,7 +113,7 @@ test('R2 — the parts sum to the whole for every amount, with no kobo unaccount
       );
 
       assert.equal(
-        r.parts.reduce((t, p) => t + p.kobo, 0),
+        r.parts.reduce((t: Kobo, p: FeePart) => t + p.kobo, 0),
         r.clientPaysKobo,
         `${amountKobo} @ ${bps}bps: parts list must also reconcile`
       );
@@ -200,7 +200,7 @@ test('the ₦0 floor is UNREACHABLE with the default tiers — measured, not ass
       amountKobo: N(20000), // the provider's minimum
       commissionBps: 500,
       clientRefundBps: bps,
-      artistCompensationBps: 10000 - bps,
+      artistCompensationBps: 10000 - Number(bps),
     });
     assert.ok(
       r.clientRefundKobo > 0,

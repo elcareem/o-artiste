@@ -40,10 +40,10 @@ const BASE_URL = process.env.DATABASE_URL;
 /**
  * @param {string} name Short identifier, unique per test file.
  */
-module.exports = function useTestSchema(name) {
+module.exports = function useTestSchema(name: string): TestDb {
   if (!BASE_URL) {
     // No database configured: the caller skips its database-dependent tests.
-    return { prisma: null, hasDatabase: false, schema: null };
+    return { prisma: null as unknown as TestDb['prisma'], hasDatabase: false, schema: null };
   }
 
   const schema = `test_${name}`;
@@ -92,16 +92,16 @@ module.exports = function useTestSchema(name) {
  * TRUNCATE rather than per-table deletes so foreign keys do not dictate the
  * order, and RESTART IDENTITY so sequences do not drift between runs.
  */
-async function truncate(prisma, schema) {
-  const tables = await prisma.$queryRawUnsafe(
+async function truncate(prisma: any, schema: string) {
+  const tables: any[] = await prisma.$queryRawUnsafe(
     `select tablename from pg_tables where schemaname = $1`,
     schema
   );
 
   const names = tables
     .map((t: any) => t.tablename)
-    .filter((name) => name !== '_prisma_migrations')
-    .map((name) => `"${schema}"."${name}"`);
+    .filter((name: string) => name !== '_prisma_migrations')
+    .map((name: string) => `"${schema}"."${name}"`);
 
   if (names.length === 0) return;
 

@@ -20,7 +20,7 @@ const SECRET = 'whsec_test_secret_value';
 const OTHER_SECRET = 'whsec_a_different_secret';
 
 /** Signs exactly as the provider does. */
-function sign(rawBody, secret, t) {
+function sign(rawBody: Buffer | string, secret: string, t: number) {
   const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody, 'utf8');
   const message = Buffer.concat([Buffer.from(`${t}.`, 'ascii'), body]);
   const v1 = crypto.createHmac('sha256', secret).update(message).digest('hex');

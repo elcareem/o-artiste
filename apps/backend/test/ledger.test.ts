@@ -89,7 +89,7 @@ async function makeBooking({ amountKobo = N(200000), commissionBps = 500 } = {})
 }
 
 /** Runs recorders inside one transaction, the way every caller must. */
-const inTx = (fn) => prisma.$transaction(fn);
+const inTx = (fn: (tx: PrismaTx) => any): Promise<any> => prisma.$transaction(fn);
 
 // ── Criterion: summing a completed booking reconciles to zero ────────────────
 
@@ -134,23 +134,23 @@ describe('every terminal outcome reconciles to zero', async () => {
   const outcomes = [
     {
       name: 'release on completion',
-      run: async (tx, b) => ledger.recordRelease(tx, b),
+      run: async (tx: PrismaTx, b: BookingRow) => ledger.recordRelease(tx, b),
     },
     {
       name: 'client cancellation, full-refund tier',
-      run: async (tx, b) => ledger.recordClientCancellation(tx, b, DEFAULT_TIERS[0]),
+      run: async (tx: PrismaTx, b: BookingRow) => ledger.recordClientCancellation(tx, b, DEFAULT_TIERS[0]),
     },
     {
       name: 'client cancellation, 70/30 tier',
-      run: async (tx, b) => ledger.recordClientCancellation(tx, b, DEFAULT_TIERS[1]),
+      run: async (tx: PrismaTx, b: BookingRow) => ledger.recordClientCancellation(tx, b, DEFAULT_TIERS[1]),
     },
     {
       name: 'client cancellation, day-of tier',
-      run: async (tx, b) => ledger.recordClientCancellation(tx, b, DEFAULT_TIERS[3]),
+      run: async (tx: PrismaTx, b: BookingRow) => ledger.recordClientCancellation(tx, b, DEFAULT_TIERS[3]),
     },
     {
       name: 'artist cancellation',
-      run: async (tx, b) => ledger.recordArtistCancellation(tx, b),
+      run: async (tx: PrismaTx, b: BookingRow) => ledger.recordArtistCancellation(tx, b),
     },
   ];
 

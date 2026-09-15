@@ -61,8 +61,8 @@ function accountNumber() {
   return `${head}${last}`;
 }
 
-async function registerPayoutAccount(partyId, attempts = 5) {
-  let lastError;
+async function registerPayoutAccount(partyId: string, attempts = 5) {
+  let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       return await ep.createPayoutAccount({
@@ -72,7 +72,7 @@ async function registerPayoutAccount(partyId, attempts = 5) {
         reference: ref('payout_acct'),
       });
     } catch (err) {
-      if (err.providerCode !== 'payout_account_exists') throw err;
+      if ((err as ThrownError).providerCode !== 'payout_account_exists') throw err;
       lastError = err;
     }
   }
@@ -80,8 +80,8 @@ async function registerPayoutAccount(partyId, attempts = 5) {
 }
 
 /** Same story for identities, which are also unique per environment. */
-async function onboardVerifiedParty(label, attempts = 5) {
-  let lastError;
+async function onboardVerifiedParty(label: string, attempts = 5) {
+  let lastError: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       return await ep.onboardParty({
@@ -91,7 +91,7 @@ async function onboardVerifiedParty(label, attempts = 5) {
         reference: ref(label),
       });
     } catch (err) {
-      if (err.providerCode !== 'identity_already_exists') throw err;
+      if ((err as ThrownError).providerCode !== 'identity_already_exists') throw err;
       lastError = err;
     }
   }
@@ -103,7 +103,9 @@ function verifiedNin() {
   return `${head}${[0, 2, 4, 6, 8][Math.floor(Math.random() * 5)]}`;
 }
 
-const state = {};
+// Accumulated across the ordered sandbox steps: each one records the ids the
+// next depends on.
+const state: Record<string, any> = {};
 
 describe('credential context confirms the key is on the test book', async () => {
   const ctx = await ep.credentialContext();
@@ -140,8 +142,8 @@ describe('an odd-digit identifier fails verification with a reason, not a crash'
         reference: ref('fail'),
       }),
     (err: ThrownError) => {
-      assert.equal(err.providerCode, 'identity_verification_failed');
-      assert.match(err.providerMessage, /data_mismatch/);
+      assert.equal((err as ThrownError).providerCode, 'identity_verification_failed');
+      assert.match((err as ThrownError).providerMessage, /data_mismatch/);
       return true;
     }
   );
@@ -239,9 +241,9 @@ describe('release and refund reject an unfunded transaction rather than half-act
     ['refund', () => ep.refund({ transactionId: state.transactionId, reference: ref('ref'), amountKobo: 1000000 })],
   ]) {
     await assert.rejects(fn, (err: ThrownError) => {
-      assert.equal(err.status, 502, `${name} surfaces as a provider error`);
-      assert.ok(err.providerCode || err.providerMessage, `${name} carries diagnostics`);
-      assert.ok(!JSON.stringify(err).includes(process.env.ESCROWPAY_API_KEY), 'never leaks the key');
+      assert.equal((err as ThrownError).status, 502, `${name} surfaces as a provider error`);
+      assert.ok((err as ThrownError).providerCode || (err as ThrownError).providerMessage, `${name} carries diagnostics`);
+      assert.ok(!JSON.stringify(err).includes(process.env.ESCROWPAY_API_KEY ?? '\u0000'), 'never leaks the key');
       return true;
     });
   }

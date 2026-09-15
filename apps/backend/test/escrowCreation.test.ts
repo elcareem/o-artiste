@@ -102,7 +102,7 @@ async function readyToFund({ acknowledge = true, clientParty = true, artistParty
 
 /** Replaces the provider client for one call. */
 async function withProvider(overrides: Record<string, any>, fn: () => any) {
-  const originals = {};
+  const originals: Record<string, any> = {};
   for (const [name, impl] of Object.entries(overrides)) {
     originals[name] = escrowpay[name];
     escrowpay[name] = impl;
@@ -114,7 +114,7 @@ async function withProvider(overrides: Record<string, any>, fn: () => any) {
   }
 }
 
-const happyProvider = (txId = `TXN_${uniq()}`) => ({
+const happyProvider = (txId = `TXN_${uniq()}`): Record<string, any> => ({
   createEscrow: async () => ({ id: txId, status: 'draft', version: 1 }),
   activateEscrow: async () => ({ id: txId, status: 'pending_funding', version: 2 }),
   createCheckoutSession: async () => ({
@@ -134,8 +134,11 @@ const happyProvider = (txId = `TXN_${uniq()}`) => ({
   }),
 });
 
-function providerError(code, message, status = 502) {
-  const err = new AppError(status, 'The payment provider could not complete that request.');
+function providerError(code: string, message: string, status = 502): AppErrorLike {
+  const err: AppErrorLike = new AppError(
+    status,
+    'The payment provider could not complete that request.'
+  );
   err.providerCode = code;
   err.providerMessage = message;
   err.providerStatus = status;
@@ -214,9 +217,9 @@ describe('a provider error leaves the booking in PENDING_PAYMENT with no orphane
 describe('a retry after a failure reuses the same reference', async () => {
   const { clientUser, booking } = await readyToFund();
 
-  const seen = [];
+  const seen: any[] = [];
   const failing = happyProvider();
-  failing.createEscrow = async ({ reference }) => {
+  failing.createEscrow = async ({ reference }: any) => {
     seen.push(reference);
     throw providerError('provider_unreachable', 'timeout');
   };
@@ -229,7 +232,7 @@ describe('a retry after a failure reuses the same reference', async () => {
 
   const succeeding = happyProvider();
   const original = succeeding.createEscrow;
-  succeeding.createEscrow = async (args) => {
+  succeeding.createEscrow = async (args: any) => {
     seen.push(args.reference);
     return original(args);
   };
@@ -281,7 +284,7 @@ describe('calling funding twice returns the same escrow rather than creating a s
   let created = 0;
   const counting = happyProvider(`TXN_should_not_be_used_${uniq()}`);
   const originalCreate = counting.createEscrow;
-  counting.createEscrow = async (args) => {
+  counting.createEscrow = async (args: any) => {
     created++;
     return originalCreate(args);
   };
@@ -299,7 +302,7 @@ describe('a party without an escrow identity cannot fund, and the provider is no
   for (const [label, opts, pattern] of [
     ['client', { clientParty: false }, /verify your identity/i],
     ['artist', { artistParty: false }, /cannot receive payments/i],
-  ]) {
+  ] as [string, Record<string, boolean>, RegExp][]) {
     const { clientUser, booking } = await readyToFund(opts);
 
     let called = false;
@@ -431,7 +434,7 @@ describe('a returning client gets the account number back, not an empty instruct
   // call returned bankTransfer: null — a funding page with nothing to pay into.
   const { clientUser, booking } = await readyToFund();
 
-  const calls = [];
+  const calls: any[] = [];
   const session = {
     allowed_channels: ['bank_transfer'],
     payment_instructions: {
@@ -447,7 +450,7 @@ describe('a returning client gets the account number back, not an empty instruct
     {
       createEscrow: async () => ({ id: 'TXN_return', version: 1 }),
       activateEscrow: async () => ({ status: 'pending_funding' }),
-      createCheckoutSession: async (args) => {
+      createCheckoutSession: async (args: any) => {
         calls.push(args.reference);
         return session;
       },
@@ -460,7 +463,7 @@ describe('a returning client gets the account number back, not an empty instruct
   const second = await withProvider(
     {
       createEscrow: async () => assert.fail('a second escrow must not be created'),
-      createCheckoutSession: async (args) => {
+      createCheckoutSession: async (args: any) => {
         calls.push(args.reference);
         return session;
       },

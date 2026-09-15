@@ -55,7 +55,7 @@ async function withServer(fn: (server: TestServer) => Promise<void>) {
   }
 }
 
-async function tokenFor(server, role) {
+async function tokenFor(server: TestServer, role: UserRole) {
   const { user, password } = await makeUser(role);
   const res = await fetch(`${server.url}/auth/login`, {
     method: 'POST',
@@ -65,7 +65,7 @@ async function tokenFor(server, role) {
   return { ...(((await res.json()) as any)), user };
 }
 
-const putTiers = (server, body, token) =>
+const putTiers = (server: TestServer, body?: unknown, token?: string) =>
   fetch(`${server.url}/admin/config/cancellation-tiers`, {
     method: 'PUT',
     headers: {
@@ -76,7 +76,13 @@ const putTiers = (server, body, token) =>
   });
 
 /** Asserts a 400 whose message actually names the problem. */
-async function rejectsNaming(server, token, tiers, pattern, label) {
+async function rejectsNaming(
+  server: TestServer,
+  token: string,
+  tiers: unknown,
+  pattern: RegExp,
+  label: string
+) {
   const res = await putTiers(server, { tiers, reason: 'test' }, token);
   assert.equal(res.status, 400, `${label}: expected 400`);
   const { error } = ((await res.json()) as any);
@@ -205,7 +211,7 @@ describe('rows are validated individually before the set is considered', async (
       [[{ minDaysBefore: -1, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 }], /0 or more/i, 'negative day'],
       [[{ minDaysBefore: 5, maxDaysBefore: 2, clientRefundBps: 10000, artistCompensationBps: 0 }], /ends at day 2 but starts at day 5/i, 'inverted band'],
       [[], /at least one/i, 'empty set'],
-    ];
+    ] as [unknown, RegExp, string][];
 
     for (const [tiers, pattern, label] of cases) {
       await rejectsNaming(server, token, tiers, pattern, label);

@@ -19,7 +19,7 @@ function probeApp() {
   const app = express();
   app.use(bodyParsers());
 
-  const report = (req, res) =>
+  const report = (req: Req, res: Res) =>
     res.json({
       isBuffer: Buffer.isBuffer(req.body),
       // Round-tripped so the test can prove the bytes survived untouched.
