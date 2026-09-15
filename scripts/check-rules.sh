@@ -88,15 +88,15 @@ absent "No ledger update or delete path" \
 # structural rather than a review habit — the same argument as escrowService.
 SRC="apps/backend/src"
 if [ ! -d "$SRC" ]; then
-  skip "ledgerService.js is the sole writer of ledger entries" "$SRC not present yet"
+  skip "ledgerService.ts is the sole writer of ledger entries" "$SRC not present yet"
 else
   hits="$(grep -rnE '\.ledgerEntry\.' "$SRC" 2>/dev/null \
-          | grep -vE 'services/ledgerService\.js' || true)"
+          | grep -vE 'services/ledgerService\.(js|ts)' || true)"
   if [ -z "$hits" ]; then
-    pass "ledgerService.js is the sole writer of ledger entries"
+    pass "ledgerService.ts is the sole writer of ledger entries"
   else
-    fail "ledgerService.js is the sole writer of ledger entries" \
-         "All ledger writes go through services/ledgerService.js, which requires a transaction client. docs/01-DATA-MODEL.md §5." \
+    fail "ledgerService.ts is the sole writer of ledger entries" \
+         "All ledger writes go through services/ledgerService.ts, which requires a transaction client. docs/01-DATA-MODEL.md §5." \
          "$hits"
   fi
 fi
@@ -109,15 +109,15 @@ fi
 # have survived later middleware changes; this is that verification, mechanised.
 SRC="apps/backend/src"
 if [ ! -d "$SRC" ]; then
-  skip "express.json() is confined to lib/bodyParsers.js" "$SRC not present yet"
+  skip "express.json() is confined to lib/bodyParsers.ts" "$SRC not present yet"
 else
   hits="$(grep -rnE 'express\.json\s*\(' "$SRC" 2>/dev/null \
-          | grep -vE 'lib/bodyParsers\.js' \
+          | grep -vE 'lib/bodyParsers\.(js|ts)' \
           | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
   if [ -z "$hits" ]; then
-    pass "express.json() is confined to lib/bodyParsers.js"
+    pass "express.json() is confined to lib/bodyParsers.ts"
   else
-    fail "express.json() is confined to lib/bodyParsers.js" \
+    fail "express.json() is confined to lib/bodyParsers.ts" \
          "Body parsing is decided in one place so the /webhooks raw-body exception cannot be broken by a mount elsewhere. docs/03-ESCROW-FLOW.md §6." \
          "$hits"
   fi
@@ -126,15 +126,15 @@ fi
 # ── Single money-moving module — docs/03 §5, issue #26 ──────────────────────
 SRC="apps/backend/src"
 if [ ! -d "$SRC" ]; then
-  skip "escrowService.js is the sole caller of release/refund" "$SRC not present yet"
+  skip "escrowService.ts is the sole caller of release/refund" "$SRC not present yet"
 else
   hits="$(grep -rnE 'escrowpay\.(release|refund)|(release|refund)\s*\(' "$SRC" 2>/dev/null \
-          | grep -vE '(services/escrowService\.js|lib/escrowpay\.js)' || true)"
+          | grep -vE '(services/escrowService\.(js|ts)|lib/escrowpay\.(js|ts))' || true)"
   if [ -z "$hits" ]; then
-    pass "escrowService.js is the sole caller of release/refund"
+    pass "escrowService.ts is the sole caller of release/refund"
   else
-    fail "escrowService.js is the sole caller of release/refund" \
-         "Only escrowService.js may instruct a money movement. docs/03-ESCROW-FLOW.md §5." "$hits"
+    fail "escrowService.ts is the sole caller of release/refund" \
+         "Only escrowService.ts may instruct a money movement. docs/03-ESCROW-FLOW.md §5." "$hits"
   fi
 fi
 
