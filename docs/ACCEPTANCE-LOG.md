@@ -3514,3 +3514,74 @@ not.
 
 #11 through #21 are all closed. The remaining open item is #5's queue timing on
 the deployed host, which needs a worker process on Render and is due before #25.
+
+---
+
+## #5 — worker hosting on the deployed host (deferred box closed)
+
+Branch `chore/5-worker-hosting`. Verified 2026-09-15.
+
+#5's last open box was *"executes at approximately the right time, locally **and
+on the deployed host**"*. It was recorded as blocked on a worker process
+existing on Render.
+
+**#20 turned this from a pending item into a live gap.** Webhook retry is
+merged: a delivery whose processing fails is recorded `FAILED` and queued — and
+on the deployed host nothing was draining that queue. The retry path was inert
+in production while passing every test locally.
+
+### The constraint
+
+A dedicated Render **Background Worker is a paid service type**, and the free
+plan's 750 instance-hours a month are already almost entirely consumed by the
+one always-awake web service (~730, per the keepalive arrangement recorded at
+#2). There is no room for a second free service.
+
+### Resolution — `RUN_WORKERS_IN_WEB`
+
+The API process optionally registers the same workers, via the **same
+`startWorkers()`** the dedicated entry point uses. Not a parallel code path: one
+implementation, two hosts.
+
+Verified against real Redis by spawning the actual entry point:
+
+```
+1. Workers OFF — the API leaves the queue alone
+   startup reports workers off                        PASS
+   the job is still queued                            1 waiting
+2. Workers ON — the API drains it
+   startup reports workers on                         PASS
+   the queued job was processed                       0 left
+   and it actually ran                                echo logged
+3. A job queued while it is running is picked up      PASS
+4. A job that fails twice still succeeds              PASS
+5. SIGTERM exits rather than hanging on open queues   PASS
+```
+
+Step 1 is the one that makes the rest meaningful: with the flag off the process
+does not touch the queue at all, so step 2 is proving the flag, not proving that
+Redis works.
+
+### Why this is a resolution and not a workaround
+
+- It is a **real consumer**: jobs retry, exhausted jobs dead-letter, and
+  `SIGTERM` waits for active jobs rather than killing them — which matters when
+  an active job may have already instructed a payment.
+- Moving to a dedicated worker later is **one environment variable on each
+  service**, not a rewrite, because `src/worker.js` already exists and is what
+  this calls.
+- Running both is **safe**: BullMQ claims jobs atomically, so two consumers share
+  a queue rather than double-processing. The flag is turned off afterwards
+  because there is no reason to keep job load on the web instance, not because
+  correctness depends on it.
+
+Its one real cost — job processing competing with request handling on one
+instance — is immaterial at testing volumes and is why the flag is **opt-in**
+rather than the default.
+
+### Still open
+
+The deployed verification itself: `RUN_WORKERS_IN_WEB=true` has to be set on
+`o-artiste-api`, after which the two remaining boxes (a job firing on the
+deployed host, and surviving a deployed-process restart) can be ticked. Both
+setups are written up in `DEPLOYMENT-CHECKLIST.md` under "Running the workers".
