@@ -1,0 +1,297 @@
+/**
+ * Shared domain types — the vocabulary the money code is written in.
+ *
+ * This file declares GLOBAL types deliberately. Every backend module is
+ * CommonJS (`require`/`module.exports`) with no top-level `import`, which makes
+ * each one a script rather than a module in TypeScript's view — so declarations
+ * here are visible everywhere without adding an import to 57 files and without
+ * changing a single line of runtime code.
+ *
+ * Nothing here emits anything. Node strips types at runtime; this file is never
+ * loaded at all.
+ */
+
+/**
+ * An integer number of kobo. ONE HUNDRED KOBO TO THE NAIRA.
+ *
+ * Every monetary value in this system is kobo: in the database, in service
+ * code, and in every API payload. Naira exists only in `formatNaira()` output
+ * at the moment a number is shown to a person (docs/00 §6).
+ */
+type Kobo = number;
+
+/**
+ * Basis points — one hundredth of one percent. 500 bps is 5%.
+ *
+ * Percentages are integers here for the same reason money is: a float
+ * percentage applied to a kobo amount reintroduces exactly the rounding error
+ * the integer discipline exists to prevent.
+ */
+type Bps = number;
+
+/** Prisma's interactive transaction client. */
+type PrismaTx = Omit<
+  import('@prisma/client').PrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'
+>;
+
+/** Either the base client or a transaction client, for callers that accept both. */
+type PrismaLike = import('@prisma/client').PrismaClient | PrismaTx;
+
+type BookingState = import('@prisma/client').BookingState;
+type LedgerParty = import('@prisma/client').LedgerParty;
+type LedgerEntryType = import('@prisma/client').LedgerEntryType;
+type UserRole = import('@prisma/client').UserRole;
+type VerificationStatus = import('@prisma/client').VerificationStatus;
+type AccountStanding = import('@prisma/client').AccountStanding;
+type FeeLiabilityStatus = import('@prisma/client').FeeLiabilityStatus;
+
+type BookingRow = import('@prisma/client').Booking;
+type UserRow = import('@prisma/client').User;
+type ArtistRow = import('@prisma/client').Artist;
+type ClientRow = import('@prisma/client').Client;
+type LedgerEntryRow = import('@prisma/client').LedgerEntry;
+type FeeLiabilityRow = import('@prisma/client').FeeLiability;
+type WebhookEventRow = import('@prisma/client').WebhookEvent;
+
+/** A cancellation tier as frozen onto a booking (`cancellationTiersSnapshot`). */
+interface CancellationTierSnapshot {
+  minDaysBefore: number;
+  maxDaysBefore: number | null;
+  clientRefundBps: Bps;
+  artistCompensationBps: Bps;
+}
+
+/** The authenticated caller, attached to the request by `requireAuth`. */
+interface AuthenticatedUser {
+  id: string;
+  email: string;
+  role: UserRole;
+  verificationStatus: VerificationStatus;
+  accountStanding: AccountStanding;
+  [key: string]: unknown;
+}
+
+declare namespace Express {
+  interface Request {
+    user?: AuthenticatedUser;
+  }
+}
+
+/** Express aliases, so handler signatures stay readable. */
+type Req = import('express').Request;
+type Res = import('express').Response;
+type Next = import('express').NextFunction;
+
+/** The claims carried by a session token (`lib/auth.ts`). */
+interface TokenPayload {
+  sub: string;
+  role: UserRole;
+  iat?: number;
+  exp?: number;
+}
+
+/** A row destined for `AuditLog`. */
+type AuditEntry = import('@prisma/client').Prisma.AuditLogUncheckedCreateInput;
+
+// ── Fee computation results (`services/feeService.ts`) ──────────────────────
+
+/** Who bears a given fee. */
+type FeeBearer = 'CLIENT' | 'ARTIST' | 'PLATFORM';
+
+/** One party's share of a settled booking, used for reconciliation. */
+interface FeePart {
+  party: LedgerParty;
+  kobo: Kobo;
+}
+
+/** A booking that completes and releases — `computeCompletion`. */
+interface CompletionBreakdown {
+  amountKobo: Kobo;
+  /** What the client actually transfers: amount PLUS the money-in fee. */
+  clientPaysKobo: Kobo;
+  commissionKobo: Kobo;
+  moneyInFeeKobo: Kobo;
+  moneyOutFeeKobo: Kobo;
+  artistNetKobo: Kobo;
+  platformNetKobo: Kobo;
+  moneyInBearer: FeeBearer;
+  moneyOutBearer: FeeBearer;
+  commissionBearer: FeeBearer;
+  parts: FeePart[];
+}
+
+/** A client-initiated cancellation — `computeClientCancellation`. */
+interface ClientCancellationBreakdown {
+  amountKobo: Kobo;
+  clientShareKobo: Kobo;
+  artistShareKobo: Kobo;
+  moneyInFeeKobo: Kobo;
+  moneyOutFeeKobo: Kobo;
+  clientSunkFeeKobo: Kobo;
+  clientRefundKobo: Kobo;
+  unrecoveredShortfallKobo: Kobo;
+  commissionKobo: Kobo;
+  artistCompensationKobo: Kobo;
+  moneyInBearer: FeeBearer;
+  moneyOutBearer: FeeBearer;
+}
+
+/** An artist-initiated cancellation — `computeArtistCancellation`. */
+interface ArtistCancellationBreakdown {
+  amountKobo: Kobo;
+  clientRefundKobo: Kobo;
+  clientFeeReimbursementKobo: Kobo;
+  clientTotalReturnedKobo: Kobo;
+  moneyInFeeKobo: Kobo;
+  moneyOutFeeKobo: Kobo;
+  feeLiabilityKobo: Kobo;
+  artistCompensationKobo: Kobo;
+  commissionKobo: Kobo;
+  feeBearer: FeeBearer;
+}
+
+/** The result of netting liabilities off a payout — `applyFeeLiabilities`. */
+interface LiabilitySettlement {
+  payoutKobo: Kobo;
+  settledKobo: Kobo;
+  remainingLiabilityKobo: Kobo;
+}
+
+/** One leg of a money movement, as written to the ledger. */
+interface LedgerLeg {
+  entryType: LedgerEntryType;
+  party: LedgerParty;
+  amountKobo: Kobo;
+  description?: string | null;
+  offsetsEntryId?: string | null;
+}
+
+/** A full ledger entry, including the booking it belongs to. */
+interface LedgerEntryInput extends LedgerLeg {
+  bookingId: string;
+}
+
+/** The result of summing a booking's ledger — `ledgerService.reconcile`. */
+interface Reconciliation {
+  bookingId: string;
+  entryCount: number;
+  sumKobo: Kobo;
+  balanced: boolean;
+  byParty: Record<LedgerParty, Kobo>;
+  entries: LedgerEntryRow[];
+}
+
+// ── Escrow (`services/escrowService.ts`) ────────────────────────────────────
+
+/** Bank transfer details a client pays into. */
+interface BankTransferInstruction {
+  accountNumber: string;
+  accountName: string;
+  bankCode?: string | null;
+  provider?: string | null;
+  expiresAt?: string | null;
+}
+
+/** What the client portal shows while a booking awaits payment (#21). */
+interface FundingInstruction {
+  bookingId: string;
+  escrowReference: string;
+  escrowId: string | null;
+  state: BookingState;
+  escrowState: string | null;
+  bookingAmountKobo: Kobo;
+  providerFeeKobo: Kobo;
+  amountToTransferKobo: Kobo;
+  channels: string[];
+  bankTransfer: BankTransferInstruction | null;
+}
+
+/** What a release did — `escrowService.releaseBooking`. */
+interface ReleaseSummary {
+  bookingId: string;
+  state: BookingState;
+  amountKobo: Kobo;
+  commissionRateBpsSnapshot: Bps;
+  commissionKobo: Kobo;
+  moneyOutFeeKobo: Kobo;
+  artistNetKobo: Kobo;
+  artistPayoutKobo: Kobo;
+  liabilitySettledKobo: Kobo;
+  liabilityRemainingKobo: Kobo;
+  platformNetKobo: Kobo;
+  alreadyReleased: boolean;
+  providerReleaseId: string | null;
+}
+
+/** Extra context passed into `releaseSummaryFor`. */
+interface ReleaseSummaryExtra {
+  completion?: CompletionBreakdown;
+  settlement?: LiabilitySettlement;
+  liabilities?: FeeLiabilityRow[];
+  alreadyReleased?: boolean;
+  providerReleaseId?: string | null;
+}
+
+/** A provider checkout session, as far as we rely on it. */
+interface CheckoutSession {
+  allowed_channels?: string[];
+  payment_instructions?: {
+    amount_minor?: Kobo;
+    account_number: string;
+    account_name: string;
+    bank_code?: string | null;
+    provider?: string | null;
+    expires_at?: string | null;
+  };
+  [key: string]: unknown;
+}
+
+/** A provider transaction, as far as we rely on it. */
+interface ProviderTransaction {
+  id: string;
+  status?: string;
+  version?: number;
+  amount_minor?: Kobo;
+  funded_minor?: Kobo;
+  released_minor?: Kobo;
+  refunded_minor?: Kobo;
+  [key: string]: unknown;
+}
+
+// ── Webhooks (`services/webhookService.ts`) ─────────────────────────────────
+
+/** A provider webhook body. */
+interface WebhookPayload {
+  id?: string;
+  type?: string;
+  api_version?: string;
+  created_at?: string;
+  object?: string;
+  object_id?: string;
+  data?: Record<string, unknown> & { transaction_id?: string };
+  [key: string]: unknown;
+}
+
+/** What one delivery produced. */
+interface WebhookOutcome {
+  status: number;
+  body: Record<string, unknown>;
+  outcome:
+    | 'processed'
+    | 'duplicate'
+    | 'rejected'
+    | 'malformed'
+    | 'retry_queued'
+    | 'acknowledged'
+    | 'unknown_type';
+  result?: WebhookHandlerResult;
+}
+
+/** What a single event handler reports back. */
+interface WebhookHandlerResult {
+  note?: string;
+  bookingId?: string;
+}
+
+type WebhookHandler = (payload: WebhookPayload) => Promise<WebhookHandlerResult>;

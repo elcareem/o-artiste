@@ -4,21 +4,22 @@
   "private": true,
   "description": "Express + Prisma REST API server",
   "type": "commonjs",
-  "main": "src/index.js",
+  "main": "src/index.ts",
   "engines": {
     "node": ">=20.9.0"
   },
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "test": "node --test \"test/**/*.test.js\"",
-    "seed": "node prisma/seed.js",
-    "start:worker": "node src/worker.js",
-    "dev:worker": "node --watch src/worker.js",
-    "build": "prisma generate",
+    "dev": "node --watch src/index.ts",
+    "start": "node src/index.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "seed": "node prisma/seed.ts",
+    "start:worker": "node src/worker.ts",
+    "dev:worker": "node --watch src/worker.ts",
+    "build": "prisma generate && tsc --noEmit",
     "postinstall": "prisma generate",
-    "test:sandbox": "node --test \"test/**/*.sandbox.js\"",
-    "test:all": "npm run test && npm run test:sandbox"
+    "test:sandbox": "node --test \"test/**/*.sandbox.ts\"",
+    "test:all": "npm run test && npm run test:sandbox",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -32,6 +33,15 @@
     "prisma": "^5.22.0"
   },
   "prisma": {
-    "seed": "node prisma/seed.js"
+    "seed": "node prisma/seed.ts"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^26.6.0",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^7.0.2"
   }
 }
