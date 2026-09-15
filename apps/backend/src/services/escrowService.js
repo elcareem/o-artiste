@@ -18,6 +18,7 @@ const prisma = require('../lib/prisma');
 const { AppError } = require('../lib/errors');
 const escrowpay = require('../lib/escrowpay');
 const { assertAcknowledged } = require('./acknowledgementService');
+const { assertCanTransact } = require('./bookingService');
 const { moneyInFee } = require('./feeService');
 
 /**
@@ -53,14 +54,38 @@ async function createEscrowForBooking({ bookingId, clientUserId }) {
   // future caller cannot reach escrow creation around it.
   await assertAcknowledged(booking.id);
 
+  // RE-CHECKED AT FUNDING, not only at booking creation.
+  //
+  // Standing and verification are checked when the booking is made (#15), but
+  // a booking can sit in PENDING_PAYMENT for days, and an artist can be
+  // suspended or have their verification revoked in that window. Escrowing a
+  // client's money to a beneficiary we have since suspended is the failure
+  // #10's "an unverified artist cannot accept a booking" is really about — and
+  // the booking-creation gate alone does not cover it.
+  //
+  // Refusing leaves the booking in PENDING_PAYMENT, which is right: the client
+  // has not paid, and can cancel.
+  assertCanTransact(booking.client.user, 'client');
+  assertCanTransact(booking.artist.user, 'artist');
+
   if (booking.state !== 'PENDING_PAYMENT') {
     throw new AppError(409, 'This booking has already been paid for.');
   }
 
   // Idempotent at our level too: if the escrow already exists, return its
   // instruction rather than creating a second one.
+  //
+  // THE SESSION IS RE-FETCHED, NOT OMITTED. Bank transfer funding is
+  // out-of-band: the client leaves to make the transfer and comes back, often
+  // on another device, and the account number lives only on the checkout
+  // session (see the masking note below). Returning the booking alone would
+  // hand a returning client a funding page with nothing to pay into.
+  //
+  // The call carries the same `_checkout` idempotency key as the original, so
+  // the provider returns THE SAME session rather than opening a second one with
+  // a different destination account.
   if (booking.escrowId) {
-    return fundingInstructionFor(booking);
+    return withCheckoutSession(booking);
   }
 
   const payerPartyId = booking.client.user.escrowPartyId;
@@ -148,6 +173,27 @@ function fundingInstructionFor(booking, session, activated) {
         }
       : null,
   };
+}
+
+/**
+ * Re-reads the funding instruction for an escrow that already exists.
+ *
+ * If the provider cannot be reached the booking details are still returned,
+ * with `bankTransfer: null` — a status page that shows the amount and the state
+ * is more useful than an error page, and #21 renders the missing-account case
+ * explicitly rather than pretending it has one.
+ */
+async function withCheckoutSession(booking) {
+  try {
+    const session = await escrowpay.createCheckoutSession({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_checkout`,
+    });
+    return fundingInstructionFor(booking, session);
+  } catch (err) {
+    console.error(`[escrow] could not re-read funding session for ${booking.id}: ${err.message}`);
+    return fundingInstructionFor(booking);
+  }
 }
 
 module.exports = { createEscrowForBooking, fundingInstructionFor };

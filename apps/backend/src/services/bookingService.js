@@ -235,6 +235,7 @@ function validateEventWindow(eventDate, eventEndAt) {
 
 module.exports = {
   createBooking,
+  assertCanTransact,
   transition,
   assertTransition,
   canTransition,
