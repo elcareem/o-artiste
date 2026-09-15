@@ -47,7 +47,7 @@ function startInProcessWorkers() {
     // A queue that will not start must not take the API down with it: the API
     // still accepts webhooks and records them, which keeps them replayable.
     // Loud, because nothing is draining the queues until this is fixed.
-    console.error(`[backend] IN-PROCESS WORKERS FAILED TO START: ${err.message}`);
+    console.error(`[backend] IN-PROCESS WORKERS FAILED TO START: ${(err as Error).message}`);
     return null;
   }
 }

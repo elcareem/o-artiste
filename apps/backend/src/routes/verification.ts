@@ -19,7 +19,7 @@ const router = express.Router();
  *
  * The identifier is used for this call and never stored.
  */
-router.post('/me/verification', requireAuth, async (req, res, next) => {
+router.post('/me/verification', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const { method, identifier } = req.body ?? {};
     const result = await verifyUser({ userId: req.user.id, method, identifier });
@@ -30,7 +30,7 @@ router.post('/me/verification', requireAuth, async (req, res, next) => {
 });
 
 /** GET /me/verification — current status, and whether a retry is worth offering. */
-router.get('/me/verification', requireAuth, async (req, res, next) => {
+router.get('/me/verification', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
   try {
     res.json({ verification: await getStatus(req.user.id) });
   } catch (err) {

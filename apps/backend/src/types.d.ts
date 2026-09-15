@@ -295,3 +295,60 @@ interface WebhookHandlerResult {
 }
 
 type WebhookHandler = (payload: WebhookPayload) => Promise<WebhookHandlerResult>;
+
+// ── Provider transport (`lib/escrowpay.ts`) ─────────────────────────────────
+
+/** One request to the provider's Merchant API. */
+interface ProviderRequest {
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  path: string;
+  body?: unknown;
+  /** Sent as `Idempotency-Key`. Our own reference, never the provider's. */
+  idempotencyKey?: string;
+  retries?: number;
+}
+
+/** The verdict of checking a webhook signature. */
+interface SignatureVerdict {
+  valid: boolean;
+  reason?:
+    | 'missing_signature'
+    | 'malformed_signature'
+    | 'timestamp_outside_tolerance'
+    | 'signature_mismatch';
+}
+
+/**
+ * An `AppError` as seen from a module that pulled it in with `require`.
+ *
+ * A CommonJS destructure produces a value binding, not a type, so the class
+ * name cannot be used as a type at the call site. This alias describes the same
+ * shape without depending on the import.
+ */
+type AppErrorLike = Error & {
+  status: number;
+  expected: boolean;
+  providerStatus?: number;
+  providerCode?: string;
+  providerMessage?: string;
+  requestId?: string;
+};
+
+/** An axios response from the provider, as far as we read it. */
+interface ProviderResponse {
+  status: number;
+  data?: any;
+  headers?: Record<string, any>;
+  config?: { method?: string; url?: string; [key: string]: unknown };
+}
+
+/**
+ * A request that has passed `requireAuth`.
+ *
+ * Distinct from `Req` deliberately: `user` is optional on a plain request
+ * because a public route genuinely does not have one, and a handler that reads
+ * `req.user` should have to say it sits behind the guard. Annotating with this
+ * is the claim "requireAuth runs before me", checked by the reader rather than
+ * by a non-null assertion scattered through the body.
+ */
+type AuthedReq = Req & { user: AuthenticatedUser };

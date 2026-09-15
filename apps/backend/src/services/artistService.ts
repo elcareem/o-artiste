@@ -24,7 +24,7 @@ const EDITABLE = ['stageName', 'bio', 'category', 'location', 'baseRateKobo', 'm
  * The message NAMES the limit. "Invalid rate" leaves an artist guessing at a
  * bound they have no way to discover.
  */
-function validateBaseRate(kobo) {
+function validateBaseRate(kobo: unknown): Kobo | null {
   if (kobo === null || kobo === undefined) return null;
 
   if (typeof kobo !== 'number' || !Number.isInteger(kobo)) {
@@ -51,13 +51,13 @@ function validateBaseRate(kobo) {
  * else's profile is a 403 rather than a silent no-op — a silent no-op hides an
  * attempt worth seeing.
  */
-async function updateOwnProfile({ userId, patch }) {
+async function updateOwnProfile({ userId, patch }: { userId: string; patch: Record<string, unknown> }) {
   const artist = await prisma.artist.findUnique({ where: { userId } });
   if (!artist) {
     throw new AppError(403, 'Only artists can edit an artist profile.');
   }
 
-  const data = {};
+  const data: Record<string, unknown> = {};
   for (const field of EDITABLE) {
     if (patch[field] === undefined) continue;
     data[field] = field === 'baseRateKobo' ? validateBaseRate(patch[field]) : patch[field];
@@ -71,7 +71,7 @@ async function updateOwnProfile({ userId, patch }) {
     throw new AppError(400, 'Enter a stage name.');
   }
 
-  const merged = { ...artist, ...data };
+  const merged = { ...artist, ...data } as Record<string, unknown>;
   data.profileComplete = REQUIRED_FOR_COMPLETE.every(
     (f) => merged[f] !== null && merged[f] !== undefined && String(merged[f]).trim() !== ''
   );
@@ -86,7 +86,15 @@ async function updateOwnProfile({ userId, patch }) {
  * server-side at the endpoint — hiding the edit button is a courtesy to the
  * honest user, not a permission check (docs/07 §2).
  */
-async function updateProfileAsOwner({ artistId, userId, patch }) {
+async function updateProfileAsOwner({
+  artistId,
+  userId,
+  patch,
+}: {
+  artistId: string;
+  userId: string;
+  patch: Record<string, unknown>;
+}) {
   const artist = await prisma.artist.findUnique({ where: { id: artistId } });
   if (!artist) throw new AppError(404, 'Artist not found.');
 
@@ -113,7 +121,7 @@ function listabilityFilter() {
   };
 }
 
-async function isListable(artistId) {
+async function isListable(artistId: string): Promise<boolean> {
   const found = await prisma.artist.findFirst({
     where: { id: artistId, ...listabilityFilter() },
     select: { id: true },

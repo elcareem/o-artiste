@@ -22,7 +22,7 @@ const { AppError } = require('../lib/errors.ts');
 
 const router = express.Router();
 
-router.post('/webhooks/escrowpay', async (req, res, next) => {
+router.post('/webhooks/escrowpay', async (req: Req, res: Res, next: Next) => {
   try {
     if (!Buffer.isBuffer(req.body)) {
       // The raw-body exception has been broken by a middleware change. Fail

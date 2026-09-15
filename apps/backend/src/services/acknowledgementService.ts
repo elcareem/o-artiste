@@ -26,7 +26,13 @@ const TIER_FIELDS = ['minDaysBefore', 'maxDaysBefore', 'clientRefundBps', 'artis
  * that will actually govern their booking, not the table that happens to be
  * current.
  */
-async function getTermsForBooking({ bookingId, clientUserId }) {
+async function getTermsForBooking({
+  bookingId,
+  clientUserId,
+}: {
+  bookingId: string;
+  clientUserId: string;
+}) {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
     include: { client: true, termsAcknowledgement: true },
@@ -56,7 +62,21 @@ async function getTermsForBooking({ bookingId, clientUserId }) {
  * disagree, the client was shown something other than what governs the booking,
  * and the acknowledgement is refused rather than recorded as if it were sound.
  */
-async function acknowledgeTerms({ bookingId, clientUserId, acknowledged, tiersAsDisplayed, ipAddress, userAgent }) {
+async function acknowledgeTerms({
+  bookingId,
+  clientUserId,
+  acknowledged,
+  tiersAsDisplayed,
+  ipAddress,
+  userAgent,
+}: {
+  bookingId: string;
+  clientUserId: string;
+  acknowledged: unknown;
+  tiersAsDisplayed: unknown;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
   // An active act. A pre-ticked box or a passive T&C acceptance does not
   // satisfy the disclosure requirement, so the flag must be explicitly true.
   if (acknowledged !== true) {
@@ -105,7 +125,7 @@ async function acknowledgeTerms({ bookingId, clientUserId, acknowledged, tiersAs
  * request cannot cause a spurious mismatch — while a genuine difference in any
  * percentage or day range still fails.
  */
-function assertMatchesSnapshot(displayed, snapshot) {
+function assertMatchesSnapshot(displayed: unknown, snapshot: unknown): void {
   if (!Array.isArray(displayed)) {
     throw new AppError(400, 'Accept the cancellation terms as they were shown to you.');
   }
@@ -121,14 +141,15 @@ function assertMatchesSnapshot(displayed, snapshot) {
   }
 }
 
-function normaliseTiers(tiers) {
-  return [...tiers]
+function normaliseTiers(tiers: unknown) {
+  const rows = (Array.isArray(tiers) ? tiers : []) as Record<string, unknown>[];
+  return rows
     .map((t) => {
-      const out = {};
-      for (const field of TIER_FIELDS) out[field] = t[field] ?? null;
+      const out: Record<string, unknown> = {};
+      for (const field of TIER_FIELDS) out[field] = t?.[field] ?? null;
       return out;
     })
-    .sort((x, y) => x.minDaysBefore - y.minDaysBefore);
+    .sort((x, y) => Number(x.minDaysBefore) - Number(y.minDaysBefore));
 }
 
 /**
@@ -137,7 +158,7 @@ function normaliseTiers(tiers) {
  * Throws 409 rather than 403: nothing is forbidden, a required step simply has
  * not happened yet.
  */
-async function assertAcknowledged(bookingId, client = prisma) {
+async function assertAcknowledged(bookingId: string, client: PrismaLike = prisma) {
   const record = await client.termsAcknowledgement.findUnique({ where: { bookingId } });
   if (!record) {
     throw new AppError(
@@ -149,7 +170,7 @@ async function assertAcknowledged(bookingId, client = prisma) {
 }
 
 /** For the admin booking detail view (#37) and dispute defence. */
-function getAcknowledgement(bookingId, client = prisma) {
+function getAcknowledgement(bookingId: string, client: PrismaLike = prisma) {
   return client.termsAcknowledgement.findUnique({ where: { bookingId } });
 }
 

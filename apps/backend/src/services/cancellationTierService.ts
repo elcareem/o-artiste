@@ -34,7 +34,7 @@ const TOTAL_BPS = 10000;
  * immediate feedback, but the server stays authoritative: a tier table with a
  * gap must be unsaveable regardless of which path the request arrives by.
  */
-function validateTierSet(tiers) {
+function validateTierSet(tiers: CancellationTierSnapshot[]): CancellationTierSnapshot[] {
   if (!Array.isArray(tiers) || tiers.length === 0) {
     throw new AppError(400, 'Provide at least one cancellation band.');
   }
@@ -69,7 +69,9 @@ function validateTierSet(tiers) {
   for (let i = 1; i < sorted.length; i++) {
     const previous = sorted[i - 1];
     const current = sorted[i];
-    const previousEnd = previous.maxDaysBefore;
+    // The open-ended band sorts last, so a null here means every later band
+    // would be unreachable — treated as infinity rather than skipped.
+    const previousEnd = previous.maxDaysBefore ?? Number.POSITIVE_INFINITY;
 
     if (current.minDaysBefore <= previousEnd) {
       throw new AppError(
@@ -92,7 +94,7 @@ function validateTierSet(tiers) {
   return sorted;
 }
 
-function validateRow(tier, index) {
+function validateRow(tier: CancellationTierSnapshot, index: number): void {
   const label = `Band ${index + 1}`;
 
   if (!isNonNegativeInteger(tier?.minDaysBefore)) {
@@ -104,7 +106,7 @@ function validateRow(tier, index) {
     if (!isNonNegativeInteger(tier.maxDaysBefore)) {
       throw new AppError(400, `${label}: the band end must be a whole number of days, or empty for no upper limit.`);
     }
-    if (tier.maxDaysBefore < tier.minDaysBefore) {
+    if ((tier.maxDaysBefore as number) < tier.minDaysBefore) {
       throw new AppError(
         400,
         `${label}: the band ends at day ${tier.maxDaysBefore} but starts at day ${tier.minDaysBefore}.`
@@ -112,7 +114,7 @@ function validateRow(tier, index) {
     }
   }
 
-  for (const field of ['clientRefundBps', 'artistCompensationBps']) {
+  for (const field of ['clientRefundBps', 'artistCompensationBps'] as const) {
     if (!isNonNegativeInteger(tier?.[field]) || tier[field] > TOTAL_BPS) {
       throw new AppError(
         400,
@@ -133,7 +135,7 @@ function validateRow(tier, index) {
   }
 }
 
-function describe(tier) {
+function describe(tier: CancellationTierSnapshot): string {
   const end =
     tier.maxDaysBefore === null || tier.maxDaysBefore === undefined
       ? 'and above'
@@ -141,7 +143,7 @@ function describe(tier) {
   return `day ${tier.minDaysBefore} ${end}`;
 }
 
-function isNonNegativeInteger(value) {
+function isNonNegativeInteger(value: unknown): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
@@ -149,12 +151,22 @@ function isNonNegativeInteger(value) {
  * Saves a validated set as a NEW version. Prior versions are never touched and
  * remain queryable forever.
  */
-async function setCancellationTiers({ tiers, effectiveFrom, actorUserId, reason }) {
+async function setCancellationTiers({
+  tiers,
+  effectiveFrom,
+  actorUserId,
+  reason,
+}: {
+  tiers: CancellationTierSnapshot[];
+  effectiveFrom?: Date | string;
+  actorUserId: string;
+  reason?: string | null;
+}) {
   const validated = validateTierSet(tiers);
   const from = validateEffectiveFrom(effectiveFrom);
   const versionId = `tiers_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: PrismaTx) => {
     const previousVersionId = await currentVersionId(new Date(), tx);
 
     await tx.cancellationTier.createMany({
@@ -196,7 +208,7 @@ async function setCancellationTiers({ tiers, effectiveFrom, actorUserId, reason 
 }
 
 /** The version id in force at `at`, or null if none. */
-async function currentVersionId(at = new Date(), client = prisma) {
+async function currentVersionId(at: Date = new Date(), client: PrismaLike = prisma) {
   const latest = await client.cancellationTier.findFirst({
     where: { effectiveFrom: { lte: at } },
     orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
@@ -211,7 +223,7 @@ async function currentVersionId(at = new Date(), client = prisma) {
  * This is what #15 copies onto a booking at creation. Every later cancellation
  * calculation reads that snapshot, never this (docs/07 §4).
  */
-async function resolveTierSet(at = new Date(), client = prisma) {
+async function resolveTierSet(at: Date = new Date(), client: PrismaLike = prisma) {
   const versionId = await currentVersionId(at, client);
   if (!versionId) {
     throw new AppError(
@@ -227,7 +239,7 @@ async function resolveTierSet(at = new Date(), client = prisma) {
 }
 
 /** Every version, newest first, each as a grouped set. */
-async function listTierVersions(client = prisma) {
+async function listTierVersions(client: PrismaLike = prisma) {
   const rows = await client.cancellationTier.findMany({
     orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { minDaysBefore: 'asc' }],
   });
@@ -246,13 +258,15 @@ async function listTierVersions(client = prisma) {
   }
 
   for (const version of byVersion.values()) {
-    version.tiers.sort((a, b) => a.minDaysBefore - b.minDaysBefore);
+    version.tiers.sort(
+      (a: CancellationTierSnapshot, b: CancellationTierSnapshot) => a.minDaysBefore - b.minDaysBefore
+    );
   }
 
   return [...byVersion.values()];
 }
 
-function publicTier(row) {
+function publicTier(row: CancellationTierSnapshot & { id?: string }) {
   return {
     minDaysBefore: row.minDaysBefore,
     maxDaysBefore: row.maxDaysBefore,
@@ -261,9 +275,9 @@ function publicTier(row) {
   };
 }
 
-function validateEffectiveFrom(value) {
+function validateEffectiveFrom(value: unknown): Date {
   if (value === undefined || value === null) return new Date();
-  const date = new Date(value);
+  const date = new Date(value as string | number | Date);
   if (Number.isNaN(date.getTime())) {
     throw new AppError(400, 'Effective-from must be a valid date.');
   }

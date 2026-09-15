@@ -19,7 +19,7 @@ const {
 const router = express.Router();
 
 /** The artist shape safe to return. An allowlist, so a column added later is private by default. */
-function publicArtist(artist) {
+function publicArtist(artist: ArtistRow & Record<string, any>) {
   return {
     id: artist.id,
     stageName: artist.stageName,
@@ -52,7 +52,7 @@ const MAX_PAGE_SIZE = 100;
  * and not "N/A", which draws attention to an absence and reads as a warning
  * (docs/06 §4).
  */
-function publicListing(artist) {
+function publicListing(artist: ArtistRow & Record<string, any>) {
   return {
     id: artist.id,
     stageName: artist.stageName,
@@ -73,7 +73,7 @@ function publicListing(artist) {
  * artists are excluded **at the query level** rather than filtered afterwards —
  * a suspended artist appearing in a listing, even briefly, is a trust failure.
  */
-router.get('/artists', async (req, res, next) => {
+router.get('/artists', async (req: Req, res: Res, next: Next) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(req.query.limit) || DEFAULT_PAGE_SIZE));
@@ -115,7 +115,7 @@ router.get('/artists', async (req, res, next) => {
  * confirm the account exists, which is information a suspended artist's
  * would-be clients have no business receiving.
  */
-router.get('/artists/:id', async (req, res, next) => {
+router.get('/artists/:id', async (req: Req, res: Res, next: Next) => {
   try {
     const artist = await prisma.artist.findFirst({
       where: { id: req.params.id, ...listabilityFilter() },
@@ -129,7 +129,7 @@ router.get('/artists/:id', async (req, res, next) => {
 });
 
 /** GET /me/artist-profile — the calling artist's own profile. */
-router.get('/me/artist-profile', requireAuth, requireRole('ARTIST'), async (req, res, next) => {
+router.get('/me/artist-profile', requireAuth, requireRole('ARTIST'), async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const artist = await prisma.artist.findUnique({ where: { userId: req.user.id } });
     if (!artist) throw new AppError(404, 'Artist profile not found.');
@@ -147,7 +147,7 @@ router.get('/me/artist-profile', requireAuth, requireRole('ARTIST'), async (req,
 });
 
 /** PUT /artists/:id — ownership enforced server-side at the endpoint. */
-router.put('/artists/:id', requireAuth, requireRole('ARTIST'), async (req, res, next) => {
+router.put('/artists/:id', requireAuth, requireRole('ARTIST'), async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const artist = await updateProfileAsOwner({
       artistId: req.params.id,

@@ -18,7 +18,7 @@
 const QUEUE_NAME = 'webhooks';
 const JOB_NAME = 'webhook-retry';
 
-async function process(job) {
+async function process(job: import('bullmq').Job) {
   const { providerEventId } = job.data;
   if (!providerEventId) throw new Error('webhook-retry job has no providerEventId');
 

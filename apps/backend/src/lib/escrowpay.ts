@@ -77,7 +77,7 @@ function config() {
  * (`sk_test_…` vs `sk_live_…`). There is no second hostname to switch to, so
  * environment selection is purely a matter of which key is configured.
  */
-function isTestKey(apiKey = process.env.ESCROWPAY_API_KEY || '') {
+function isTestKey(apiKey: string = process.env.ESCROWPAY_API_KEY || ''): boolean {
   return apiKey.startsWith('sk_test_') || apiKey.includes('_test_');
 }
 
@@ -103,7 +103,13 @@ function client() {
  *   calls. Always our self-generated reference, never a random value — a random
  *   key on a retry would defeat the entire purpose.
  */
-async function request({ method, path, body, idempotencyKey, retries = DEFAULT_RETRIES }) {
+async function request({
+  method,
+  path,
+  body,
+  idempotencyKey,
+  retries = DEFAULT_RETRIES,
+}: ProviderRequest): Promise<any> {
   const http = client();
   const headers = idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {};
 
@@ -137,10 +143,10 @@ async function request({ method, path, body, idempotencyKey, retries = DEFAULT_R
   throw providerUnreachable(lastError);
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Exponential, with jitter so simultaneous failures do not retry in lockstep. */
-function backoffFor(attempt) {
+function backoffFor(attempt: number): number {
   return RETRY_BASE_DELAY_MS * 2 ** attempt + Math.floor(Math.random() * RETRY_JITTER_MS);
 }
 
@@ -156,15 +162,15 @@ function backoffFor(attempt) {
  * admin views, but is never what a client sees by default — their copy is
  * written for an integrator, not for someone booking a saxophonist.
  */
-function providerError(response) {
+function providerError(response: ProviderResponse): AppErrorLike {
   const detail = response.data?.detail;
-  let providerMessage;
-  let providerCode;
+  let providerMessage: string | undefined;
+  let providerCode: string | undefined;
 
   if (Array.isArray(detail)) {
     providerCode = 'validation_error';
     providerMessage = detail
-      .map((d) => `${(d.loc || []).join('.')}: ${d.msg}`)
+      .map((d: { loc?: unknown[]; msg?: string }) => `${(d.loc || []).join('.')}: ${d.msg}`)
       .join('; ');
   } else if (detail && typeof detail === 'object') {
     providerCode = detail.code;
@@ -173,7 +179,10 @@ function providerError(response) {
     providerMessage = typeof detail === 'string' ? detail : 'Unknown provider error.';
   }
 
-  const error = new AppError(502, 'The payment provider could not complete that request.');
+  const error: AppErrorLike = new AppError(
+    502,
+    'The payment provider could not complete that request.'
+  );
   error.providerStatus = response.status;
   error.providerCode = providerCode;
   error.providerMessage = providerMessage;
@@ -193,12 +202,15 @@ function providerError(response) {
   return error;
 }
 
-function providerUnreachable(cause) {
-  const error = new AppError(502, 'Could not reach the payment provider. Please try again.');
+function providerUnreachable(cause: unknown): AppErrorLike {
+  const error: AppErrorLike = new AppError(
+    502,
+    'Could not reach the payment provider. Please try again.'
+  );
   error.providerCode = 'provider_unreachable';
   // `cause.message` may carry a URL but never a credential — the key travels in
   // a header, and axios does not include headers in error messages.
-  error.providerMessage = cause?.message ?? 'no response';
+  error.providerMessage = (cause as Error | null)?.message ?? 'no response';
   return error;
 }
 
@@ -224,7 +236,15 @@ async function createEscrow({
   payoutAccountId,
   description,
   metadata,
-}) {
+}: {
+  reference: string;
+  amountKobo: Kobo;
+  payerPartyId: string;
+  beneficiaryPartyId: string;
+  payoutAccountId?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<ProviderTransaction> {
   assertInteger(amountKobo, 'amountKobo');
 
   return request({
@@ -258,7 +278,15 @@ async function createEscrow({
 }
 
 /** Moves a draft transaction to active. */
-function activateEscrow({ transactionId, version, reference }) {
+function activateEscrow({
+  transactionId,
+  version,
+  reference,
+}: {
+  transactionId: string;
+  version?: number;
+  reference: string;
+}): Promise<ProviderTransaction> {
   return request({
     method: 'POST',
     path: `/transactions/${transactionId}/activate`,
@@ -275,7 +303,17 @@ function activateEscrow({ transactionId, version, reference }) {
  * an artist is unrecoverable, which is the exact risk escrow exists to remove
  * (docs/03 §2).
  */
-function createPaymentAccount({ transactionId, reference, expectedAmountKobo, currency = 'NGN' }) {
+function createPaymentAccount({
+  transactionId,
+  reference,
+  expectedAmountKobo,
+  currency = 'NGN',
+}: {
+  transactionId: string;
+  reference: string;
+  expectedAmountKobo?: Kobo;
+  currency?: string;
+}): Promise<any> {
   return request({
     method: 'POST',
     path: `/transactions/${transactionId}/payment-accounts`,
@@ -299,7 +337,13 @@ function createPaymentAccount({ transactionId, reference, expectedAmountKobo, cu
  * `["bank_transfer"]` — the provider enforces bank-transfer-only on their side,
  * independently of us never building a card path.
  */
-function createCheckoutSession({ transactionId, reference }) {
+function createCheckoutSession({
+  transactionId,
+  reference,
+}: {
+  transactionId: string;
+  reference: string;
+}): Promise<CheckoutSession> {
   return request({
     method: 'POST',
     path: `/transactions/${transactionId}/checkout-sessions`,
@@ -308,7 +352,7 @@ function createCheckoutSession({ transactionId, reference }) {
   });
 }
 
-function getEscrow(transactionId) {
+function getEscrow(transactionId: string): Promise<ProviderTransaction> {
   return request({ method: 'GET', path: `/transactions/${transactionId}` });
 }
 
@@ -318,7 +362,19 @@ function getEscrow(transactionId) {
  * Partial releases are supported, so `amountKobo` is explicit rather than
  * implied — #32's split resolutions depend on it.
  */
-async function release({ transactionId, reference, amountKobo, milestoneId, reason }) {
+async function release({
+  transactionId,
+  reference,
+  amountKobo,
+  milestoneId,
+  reason,
+}: {
+  transactionId: string;
+  reference: string;
+  amountKobo: Kobo;
+  milestoneId?: string;
+  reason?: string;
+}): Promise<any> {
   assertInteger(amountKobo, 'amountKobo');
   return request({
     method: 'POST',
@@ -337,7 +393,21 @@ async function release({ transactionId, reference, amountKobo, milestoneId, reas
  * correct source for money still in escrow; the wallet and reserve sources
  * exist for corrections and are not used by the booking flows.
  */
-async function refund({ transactionId, reference, amountKobo, source = 'escrow_held', fundingRecordId, reason }) {
+async function refund({
+  transactionId,
+  reference,
+  amountKobo,
+  source = 'escrow_held',
+  fundingRecordId,
+  reason,
+}: {
+  transactionId: string;
+  reference: string;
+  amountKobo: Kobo;
+  source?: string;
+  fundingRecordId?: string;
+  reason?: string;
+}): Promise<any> {
   assertInteger(amountKobo, 'amountKobo');
   return request({
     method: 'POST',
@@ -362,7 +432,19 @@ async function refund({ transactionId, reference, amountKobo, source = 'escrow_h
  * In the test book this runs against EscrowPay's simulator, never Prembly:
  * an identifier ending in an even digit verifies, an odd one fails.
  */
-function onboardParty({ type, identifier, email, reference, consent = true }) {
+function onboardParty({
+  type,
+  identifier,
+  email,
+  reference,
+  consent = true,
+}: {
+  type: string;
+  identifier: string;
+  email?: string;
+  reference: string;
+  consent?: boolean;
+}): Promise<any> {
   return request({
     method: 'POST',
     path: '/parties/onboard',
@@ -371,12 +453,24 @@ function onboardParty({ type, identifier, email, reference, consent = true }) {
   });
 }
 
-function getParty(partyId) {
+function getParty(partyId: string): Promise<any> {
   return request({ method: 'GET', path: `/parties/${partyId}` });
 }
 
 /** An artist needs one of these before any release can reach them. */
-function createPayoutAccount({ partyId, bankCode, accountNumber, reference, isDefault = true }) {
+function createPayoutAccount({
+  partyId,
+  bankCode,
+  accountNumber,
+  reference,
+  isDefault = true,
+}: {
+  partyId: string;
+  bankCode: string;
+  accountNumber: string;
+  reference: string;
+  isDefault?: boolean;
+}): Promise<any> {
   return request({
     method: 'POST',
     path: '/payout-accounts',
@@ -396,7 +490,15 @@ function listBanks() {
 }
 
 /** Their fees, read rather than predicted. Feeds #14. */
-async function estimateFees({ amountKobo, currency = 'NGN', feeType }) {
+async function estimateFees({
+  amountKobo,
+  currency = 'NGN',
+  feeType,
+}: {
+  amountKobo: Kobo;
+  currency?: string;
+  feeType?: string;
+}): Promise<any> {
   assertInteger(amountKobo, 'amountKobo');
   return request({
     method: 'POST',
@@ -405,7 +507,7 @@ async function estimateFees({ amountKobo, currency = 'NGN', feeType }) {
   });
 }
 
-function getTransactionFees(transactionId) {
+function getTransactionFees(transactionId: string): Promise<any> {
   return request({ method: 'GET', path: `/transactions/${transactionId}/fees` });
 }
 
@@ -445,7 +547,14 @@ function verifyWebhookSignature({
   previousSecret = process.env.ESCROWPAY_WEBHOOK_SECRET_PREVIOUS,
   toleranceSeconds = SIGNATURE_TOLERANCE_SECONDS,
   nowSeconds = Math.floor(Date.now() / 1000),
-}) {
+}: {
+  rawBody: Buffer | string;
+  signatureHeader?: string;
+  secret?: string;
+  previousSecret?: string;
+  toleranceSeconds?: number;
+  nowSeconds?: number;
+}): SignatureVerdict {
   if (!secret) throw new Error('ESCROWPAY_WEBHOOK_SECRET is not set. Webhooks cannot be verified.');
   if (!signatureHeader) return { valid: false, reason: 'missing_signature' };
 
@@ -471,21 +580,21 @@ function verifyWebhookSignature({
   return { valid: false, reason: 'signature_mismatch' };
 }
 
-function parseSignatureHeader(header) {
+function parseSignatureHeader(header: string): { t: number; v1: string } | null {
   const parts = String(header).split(',');
-  let t;
-  let v1;
+  let t: number | undefined;
+  let v1: string | undefined;
   for (const part of parts) {
     const [key, value] = part.split('=');
     if (key?.trim() === 't') t = Number(value);
     if (key?.trim() === 'v1') v1 = value?.trim();
   }
-  if (!Number.isFinite(t) || !v1) return null;
+  if (t === undefined || !Number.isFinite(t) || !v1) return null;
   return { t, v1 };
 }
 
 /** Constant-time comparison, as the provider's guide requires. */
-function timingSafeEqualHex(a, b) {
+function timingSafeEqualHex(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(String(b), 'utf8');
   // timingSafeEqual throws on a length mismatch, which would itself leak the
@@ -499,7 +608,7 @@ function timingSafeEqualHex(a, b) {
  * other failure. A synchronous throw from an otherwise-async API is a trap for
  * callers using .catch().
  */
-function assertInteger(value, name) {
+function assertInteger(value: unknown, name: string): asserts value is number {
   if (!Number.isInteger(value)) {
     throw new AppError(500, `${name} must be an integer number of kobo.`);
   }

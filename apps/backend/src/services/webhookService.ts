@@ -69,8 +69,16 @@ const KNOWN_EVENT_TYPES = new Set([
  * an event we have already durably recorded. Retrying is OUR job once the event
  * is in the table.
  */
-async function receive({ rawBody, headers = {}, queueRetry = enqueueRetry }) {
-  const signatureHeader = headers[SIGNATURE_HEADER];
+async function receive({
+  rawBody,
+  headers = {},
+  queueRetry = enqueueRetry,
+}: {
+  rawBody: Buffer | string;
+  headers?: Record<string, string | string[] | undefined>;
+  queueRetry?: (providerEventId: string) => Promise<void>;
+}): Promise<WebhookOutcome> {
+  const signatureHeader = headers[SIGNATURE_HEADER] as string | undefined;
 
   // ── Step 2: verify before anything is written ──────────────────────────
   const verdict = escrowpay.verifyWebhookSignature({ rawBody, signatureHeader });
@@ -82,7 +90,7 @@ async function receive({ rawBody, headers = {}, queueRetry = enqueueRetry }) {
     return { status: 401, body: { error: 'Invalid signature.' }, outcome: 'rejected' };
   }
 
-  let payload;
+  let payload: WebhookPayload;
   try {
     payload = JSON.parse(Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody));
   } catch {
@@ -96,7 +104,7 @@ async function receive({ rawBody, headers = {}, queueRetry = enqueueRetry }) {
   // event id and gets a new DELIVERY id. Deduplicating on the delivery id would
   // treat every retry as a fresh event, which is the exact double-processing
   // failure this endpoint exists to prevent.
-  const providerEventId = headers[EVENT_ID_HEADER] || payload?.id;
+  const providerEventId = (headers[EVENT_ID_HEADER] as string | undefined) || payload?.id;
   if (!providerEventId) {
     console.error('[webhook] signed delivery carries no event id — cannot deduplicate');
     return { status: 400, body: { error: 'Missing event id.' }, outcome: 'malformed' };
@@ -105,7 +113,7 @@ async function receive({ rawBody, headers = {}, queueRetry = enqueueRetry }) {
   const eventType = payload?.type ?? 'unknown';
 
   // ── Step 3: claim the id atomically ────────────────────────────────────
-  let event;
+  let event: WebhookEventRow;
   try {
     event = await prisma.webhookEvent.create({
       data: {
@@ -135,11 +143,19 @@ async function receive({ rawBody, headers = {}, queueRetry = enqueueRetry }) {
  * Shared by the live path and the retry job, so a retry takes exactly the same
  * code path as the original delivery rather than a parallel one that can drift.
  */
-async function runHandler({ event, payload, queueRetry = enqueueRetry }) {
+async function runHandler({
+  event,
+  payload,
+  queueRetry = enqueueRetry,
+}: {
+  event: WebhookEventRow;
+  payload: WebhookPayload;
+  queueRetry?: (providerEventId: string) => Promise<void>;
+}): Promise<WebhookOutcome> {
   const eventType = event.eventType;
 
   try {
-    const handler = HANDLERS[eventType];
+    const handler = HANDLERS[eventType as keyof typeof HANDLERS] as WebhookHandler | undefined;
 
     if (!handler) {
       // Acknowledged, not rejected. A non-2xx tells the provider to retry, and
@@ -167,14 +183,14 @@ async function runHandler({ event, payload, queueRetry = enqueueRetry }) {
   } catch (err) {
     // A webhook is NEVER silently dropped. The event row already exists, so the
     // failure is visible and replayable rather than lost.
-    console.error(`[webhook] processing ${eventType} failed: ${err.message}`);
+    console.error(`[webhook] processing ${eventType} failed: ${(err as Error).message}`);
 
     const updated = await prisma.webhookEvent.update({
       where: { id: event.id },
       data: {
         processingStatus: 'FAILED',
         attempts: { increment: 1 },
-        lastError: String(err.message).slice(0, 500),
+        lastError: String((err as Error).message).slice(0, 500),
       },
     });
 
@@ -187,7 +203,10 @@ async function runHandler({ event, payload, queueRetry = enqueueRetry }) {
 }
 
 /** Re-runs a recorded event from its stored bytes. Used by the retry job. */
-async function reprocess(providerEventId, { queueRetry = noopQueue } = {}) {
+async function reprocess(
+  providerEventId: string,
+  { queueRetry = noopQueue }: { queueRetry?: (id: string) => Promise<void> } = {}
+): Promise<WebhookOutcome> {
   const event = await prisma.webhookEvent.findUnique({ where: { providerEventId } });
   if (!event) throw new Error(`No webhook event recorded for ${providerEventId}`);
 
@@ -199,7 +218,7 @@ async function reprocess(providerEventId, { queueRetry = noopQueue } = {}) {
   return runHandler({ event, payload, queueRetry });
 }
 
-function markProcessed(id, note) {
+function markProcessed(id: string, note?: string | null) {
   return prisma.webhookEvent.update({
     where: { id },
     data: {
@@ -226,7 +245,7 @@ function markProcessed(id, note) {
  * then is anything written. It also means an out-of-order or stale delivery
  * cannot fund a booking the provider no longer considers funded.
  */
-async function handleTransactionFunded(payload) {
+async function handleTransactionFunded(payload: WebhookPayload): Promise<WebhookHandlerResult> {
   const booking = await bookingForEscrow(payload);
   if (!booking) return { note: 'no booking for this escrow' };
 
@@ -246,7 +265,7 @@ async function handleTransactionFunded(payload) {
     );
   }
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: PrismaTx) => {
     await bookingService.transition({ bookingId: booking.id, to: 'FUNDED_HELD', client: tx });
     await ledger.recordFunding(tx, booking);
   });
@@ -262,7 +281,7 @@ async function handleTransactionFunded(payload) {
  * the client believes they have paid, and the gap is something a human needs to
  * see. #21 shows the shortfall; the booking stays in `PENDING_PAYMENT`.
  */
-async function handlePartiallyFunded(payload) {
+async function handlePartiallyFunded(payload: WebhookPayload): Promise<WebhookHandlerResult> {
   const booking = await bookingForEscrow(payload);
   if (!booking) return { note: 'no booking for this escrow' };
 
@@ -279,7 +298,7 @@ async function handlePartiallyFunded(payload) {
  * fresh instruction. It stays in `PENDING_PAYMENT` rather than being cancelled
  * out from under them on a provider timer.
  */
-async function handleTransactionExpired(payload) {
+async function handleTransactionExpired(payload: WebhookPayload): Promise<WebhookHandlerResult> {
   const booking = await bookingForEscrow(payload);
   if (!booking) return { note: 'no booking for this escrow' };
 
@@ -288,7 +307,7 @@ async function handleTransactionExpired(payload) {
 }
 
 /** `transaction.cancelled` — the escrow was cancelled before funding. */
-async function handleTransactionCancelled(payload) {
+async function handleTransactionCancelled(payload: WebhookPayload): Promise<WebhookHandlerResult> {
   const booking = await bookingForEscrow(payload);
   if (!booking) return { note: 'no booking for this escrow' };
 
@@ -317,8 +336,8 @@ async function handleTransactionCancelled(payload) {
  * arriving at one anyway means their records and ours disagree — which is worth
  * recording rather than acting on.
  */
-function confirmationHandler(expectedState) {
-  return async (payload) => {
+function confirmationHandler(expectedState: BookingState): WebhookHandler {
+  return async (payload: WebhookPayload) => {
     const booking = await bookingForEscrow(payload);
     if (!booking) return { note: 'no booking for this escrow' };
 
@@ -342,8 +361,8 @@ function confirmationHandler(expectedState) {
  * operation on each; #26 owns invoking it. This makes the failure loud and
  * recorded.
  */
-function failureHandler(what) {
-  return async (payload) => {
+function failureHandler(what: string): WebhookHandler {
+  return async (payload: WebhookPayload) => {
     const booking = await bookingForEscrow(payload);
     const where = booking ? `booking ${booking.id} (${booking.state})` : `escrow ${objectId(payload)}`;
     console.error(`[webhook] ${what} FAILED for ${where} — money did not move`);
@@ -358,7 +377,7 @@ function failureHandler(what) {
  * the `manual` payout preference those are genuinely different moments, and the
  * booking is not advanced here: `RELEASED` already describes our side.
  */
-async function handlePayoutCompleted(payload) {
+async function handlePayoutCompleted(payload: WebhookPayload): Promise<WebhookHandlerResult> {
   const booking = await bookingForEscrow(payload);
   if (!booking) return { note: 'no booking for this escrow' };
 
@@ -367,14 +386,14 @@ async function handlePayoutCompleted(payload) {
 }
 
 /** `reconciliation.issue_detected` — the provider thinks our books disagree. */
-async function handleReconciliationIssue(payload) {
+async function handleReconciliationIssue(payload: WebhookPayload): Promise<WebhookHandlerResult> {
   console.error(
     `[webhook] PROVIDER REPORTS A RECONCILIATION ISSUE on ${objectId(payload)} — needs a human`
   );
   return { note: 'reconciliation issue reported by provider' };
 }
 
-const HANDLERS = {
+const HANDLERS: Record<string, WebhookHandler> = {
   'transaction.funded': handleTransactionFunded,
   'transaction.partially_funded': handlePartiallyFunded,
   'transaction.expired': handleTransactionExpired,
@@ -390,11 +409,11 @@ const HANDLERS = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function objectId(payload) {
+function objectId(payload: WebhookPayload): string | null {
   return payload?.object_id ?? payload?.data?.transaction_id ?? null;
 }
 
-async function bookingForEscrow(payload) {
+async function bookingForEscrow(payload: WebhookPayload): Promise<BookingRow | null> {
   const escrowId = objectId(payload);
   if (!escrowId) return null;
 
@@ -408,8 +427,8 @@ async function bookingForEscrow(payload) {
 }
 
 /** Prisma's unique-constraint violation. */
-function isUniqueViolation(err) {
-  return err?.code === 'P2002';
+function isUniqueViolation(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === 'P2002';
 }
 
 /**
@@ -417,7 +436,7 @@ function isUniqueViolation(err) {
  * a Redis connection — the route needs the service, and the API process must
  * still answer webhooks when the queue is the thing that is down.
  */
-async function enqueueRetry(providerEventId) {
+async function enqueueRetry(providerEventId: string): Promise<void> {
   try {
     const { getQueue } = require('../lib/queue.ts');
     const { QUEUE_NAME, JOB_NAME } = require('../jobs/webhookRetryJob.ts');
@@ -426,7 +445,9 @@ async function enqueueRetry(providerEventId) {
   } catch (err) {
     // The event row is already FAILED with its error recorded, so it remains
     // replayable by hand. Losing the queue must not also lose the record.
-    console.error(`[webhook] COULD NOT QUEUE RETRY for ${providerEventId}: ${err.message}`);
+    console.error(
+      `[webhook] COULD NOT QUEUE RETRY for ${providerEventId}: ${(err as Error).message}`
+    );
   }
 }
 

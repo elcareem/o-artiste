@@ -28,7 +28,7 @@ const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
  * SUPER_ADMIN, and an attempt to claim one is rejected with 403 rather than
  * quietly downgraded — a silent downgrade hides an attempt worth seeing.
  */
-router.post('/auth/register', async (req, res, next) => {
+router.post('/auth/register', async (req: Req, res: Res, next: Next) => {
   try {
     const { email, phone, password, role, displayName, stageName } = req.body ?? {};
 
@@ -71,7 +71,7 @@ router.post('/auth/register', async (req, res, next) => {
       throw new AppError(409, 'An account already exists with those details.');
     }
 
-    const user = await prisma.$transaction(async (tx) => {
+    const user = await prisma.$transaction(async (tx: PrismaTx) => {
       const created = await tx.user.create({
         data: {
           email: normalisedEmail,
@@ -104,7 +104,7 @@ router.post('/auth/register', async (req, res, next) => {
 });
 
 /** POST /auth/login */
-router.post('/auth/login', async (req, res, next) => {
+router.post('/auth/login', async (req: Req, res: Res, next: Next) => {
   try {
     const { email, password } = req.body ?? {};
 
@@ -137,7 +137,7 @@ router.post('/auth/login', async (req, res, next) => {
 });
 
 /** GET /me — profile and verification status. */
-router.get('/me', requireAuth, async (req, res, next) => {
+router.get('/me', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const profile =
       req.user.role === 'ARTIST'
@@ -160,7 +160,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
  * business on a client. Allowlisting means a column added later is private by
  * default rather than exposed until someone notices.
  */
-function publicUser(user) {
+function publicUser(user: Partial<UserRow> & Record<string, any>) {
   return {
     id: user.id,
     email: user.email,

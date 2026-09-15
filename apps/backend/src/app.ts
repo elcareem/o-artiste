@@ -33,7 +33,7 @@ function createApp() {
    * answer while a dependency is down, or it cannot distinguish a dead process
    * from a dead dependency. docs/02-API-CONTRACT.md §11.
    */
-  app.get('/health', (req, res) => {
+  app.get('/health', (req: Req, res: Res) => {
     res.json({ status: 'ok' });
   });
 
@@ -49,7 +49,7 @@ function createApp() {
   // Role-guarded endpoints. Each exists because a later issue needs it, and
   // each is the endpoint #9's "blocked from at least one endpoint above its
   // level" criterion is verified against.
-  app.get('/admin/ping', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), (req, res) => {
+  app.get('/admin/ping', requireAuth, requireRole('ADMIN', 'SUPER_ADMIN'), (req: AuthedReq, res: Res) => {
     res.json({ status: 'ok', role: req.user.role });
   });
 

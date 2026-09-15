@@ -26,7 +26,7 @@ const router = express.Router();
  * Serialising it here would leak it to the artist, which would defeat the
  * entire mechanism (docs/04 §1).
  */
-function publicBooking(booking) {
+function publicBooking(booking: BookingRow) {
   return {
     id: booking.id,
     state: booking.state,
@@ -55,7 +55,7 @@ router.post(
   requireAuth,
   requireRole('CLIENT'),
   requireVerified,
-  async (req, res, next) => {
+  async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { artistId, amountKobo, eventDate, eventEndAt, eventLocation } = req.body ?? {};
 
@@ -83,7 +83,7 @@ router.post(
  * Visible to the booking's own client and artist only. A stranger gets 404
  * rather than 403 — confirming a booking exists is itself information.
  */
-router.get('/bookings/:id', requireAuth, async (req, res, next) => {
+router.get('/bookings/:id', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const booking = await prisma.booking.findUnique({
       where: { id: req.params.id },
@@ -114,7 +114,7 @@ router.get('/bookings/:id', requireAuth, async (req, res, next) => {
  * commission and escrow fees before agreeing to a booking. Reading the snapshot
  * rather than live configuration is the whole point of #15.
  */
-router.get('/bookings/:id/payout-preview', requireAuth, async (req, res, next) => {
+router.get('/bookings/:id/payout-preview', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const booking = await prisma.booking.findUnique({
       where: { id: req.params.id },
@@ -158,7 +158,7 @@ router.get('/bookings/:id/payout-preview', requireAuth, async (req, res, next) =
     res.json({
       payout: {
         ...breakdown,
-        outstandingLiabilityKobo: outstanding.reduce((sum, l) => sum + l.amountKobo, 0),
+        outstandingLiabilityKobo: outstanding.reduce((sum: Kobo, l: { amountKobo: Kobo }) => sum + l.amountKobo, 0),
         liabilitySettleableKobo: settleableKobo,
         /** What would actually reach the artist if this released now. */
         estimatedPayoutKobo: breakdown.artistNetKobo - settleableKobo,
@@ -177,7 +177,7 @@ router.get('/bookings/:id/payout-preview', requireAuth, async (req, res, next) =
  * own snapshot. Rendered at checkout as a distinct step — not a link, and not
  * buried in general terms (docs/05 §8).
  */
-router.get('/bookings/:id/terms', requireAuth, requireRole('CLIENT'), async (req, res, next) => {
+router.get('/bookings/:id/terms', requireAuth, requireRole('CLIENT'), async (req: AuthedReq, res: Res, next: Next) => {
   try {
     const terms = await getTermsForBooking({
       bookingId: req.params.id,
@@ -200,7 +200,7 @@ router.post(
   '/bookings/:id/terms/acknowledge',
   requireAuth,
   requireRole('CLIENT'),
-  async (req, res, next) => {
+  async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { acknowledged, tiersAsDisplayed } = req.body ?? {};
 
@@ -237,7 +237,7 @@ router.post(
  * the check lives at the endpoint — so calling this directly, without visiting
  * the checkout step, fails exactly as it would through the UI.
  */
-router.post('/bookings/:id/funding', requireAuth, requireRole('CLIENT'), async (req, res, next) => {
+router.post('/bookings/:id/funding', requireAuth, requireRole('CLIENT'), async (req: AuthedReq, res: Res, next: Next) => {
   try {
     // Escrow creation lives in escrowService — the only module permitted to
     // talk to the provider about money. The acknowledgement gate is enforced

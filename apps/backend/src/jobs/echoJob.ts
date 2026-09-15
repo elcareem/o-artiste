@@ -14,7 +14,7 @@ const JOB_NAME = 'echo';
  * Deliberately able to fail on demand, so the retry and dead-letter paths can
  * be exercised without inventing a broken business job.
  */
-async function process(job) {
+async function process(job: import('bullmq').Job) {
   if (job.data?.failTimes && job.attemptsMade < job.data.failTimes) {
     throw new Error(`echo: deliberate failure ${job.attemptsMade + 1} of ${job.data.failTimes}`);
   }

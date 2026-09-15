@@ -27,7 +27,15 @@ const METHODS = Object.freeze(['NIN', 'BVN']);
  *
  * @returns {{status, method, verifiedAt, partyId, cached: boolean}}
  */
-async function verifyUser({ userId, method, identifier }) {
+async function verifyUser({
+  userId,
+  method,
+  identifier,
+}: {
+  userId: string;
+  method: string;
+  identifier: string;
+}) {
   const normalisedMethod = String(method || '').toUpperCase();
   if (!METHODS.includes(normalisedMethod)) {
     throw new AppError(400, 'Choose either NIN or BVN.');
@@ -77,12 +85,12 @@ async function verifyUser({ userId, method, identifier }) {
       reference: `verify_${userId}`,
     });
   } catch (err) {
-    return handleProviderFailure({ user, method: normalisedMethod, err });
+    return handleProviderFailure({ user, method: normalisedMethod, err: err as AppErrorLike });
   }
 
   return recordSuccess({
     user,
-    method: normalisedMethod,
+    method: normalisedMethod as import('@prisma/client').VerificationMethod,
     partyId: result.party.id,
     identityId: result.identity?.id ?? null,
     chargeable: true,
@@ -93,7 +101,15 @@ async function verifyUser({ userId, method, identifier }) {
  * Distinguishes the three ways a provider call can fail. Collapsing them would
  * lock a legitimate user out over a network blip.
  */
-async function handleProviderFailure({ user, method, err }) {
+async function handleProviderFailure({
+  user,
+  method,
+  err,
+}: {
+  user: UserRow;
+  method: string;
+  err: AppErrorLike;
+}): Promise<any> {
   const code = err.providerCode;
 
   // ALREADY VERIFIED ELSEWHERE — not a failure.
@@ -104,7 +120,7 @@ async function handleProviderFailure({ user, method, err }) {
   if (code === 'identity_already_exists') {
     return recordSuccess({
       user,
-      method,
+      method: method as import('@prisma/client').VerificationMethod,
       partyId: null,
       identityId: null,
       chargeable: false,
@@ -171,8 +187,22 @@ async function handleProviderFailure({ user, method, err }) {
  * exposure with no operational benefit — and the provider masks it on their
  * side too, so neither party holds it.
  */
-async function recordSuccess({ user, method, partyId, identityId, chargeable, note }) {
-  return prisma.$transaction(async (tx) => {
+async function recordSuccess({
+  user,
+  method,
+  partyId,
+  identityId,
+  chargeable,
+  note,
+}: {
+  user: UserRow;
+  method: import('@prisma/client').VerificationMethod;
+  partyId: string | null;
+  identityId?: string | null;
+  chargeable?: boolean;
+  note?: string | null;
+}) {
+  return prisma.$transaction(async (tx: PrismaTx) => {
     const updated = await tx.user.update({
       where: { id: user.id },
       data: {
@@ -210,7 +240,7 @@ async function recordSuccess({ user, method, partyId, identityId, chargeable, no
 }
 
 /** Current status, for the portal and for `GET /me`. */
-async function getStatus(userId) {
+async function getStatus(userId: string) {
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
     select: {

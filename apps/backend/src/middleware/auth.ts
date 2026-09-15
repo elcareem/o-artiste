@@ -21,7 +21,7 @@ const { recordAuditSafe, actorContext } = require('../lib/audit.ts');
  * its claims would let them keep acting on a standing they no longer have.
  * Tokens last days; account standing changes in seconds.
  */
-async function requireAuth(req, res, next) {
+async function requireAuth(req: Req, _res: Res, next: Next) {
   try {
     const header = req.get('authorization') || '';
     const [scheme, token] = header.split(' ');
@@ -53,8 +53,8 @@ async function requireAuth(req, res, next) {
  * "ADMIN plus more" in code: if an endpoint should accept both, it says so.
  * Implicit rank is how a permission ends up somewhere nobody intended.
  */
-function requireRole(...roles) {
-  return function roleGuard(req, res, next) {
+function requireRole(...roles: UserRole[]) {
+  return function roleGuard(req: Req, _res: Res, next: Next) {
     if (!req.user) {
       return next(new AppError(401, 'You need to be logged in to do that.'));
     }
@@ -81,7 +81,7 @@ function requireRole(...roles) {
  * Requires a verified identity. Written here in #10's spirit but enforced from
  * #15 onward, where the endpoints it guards exist.
  */
-function requireVerified(req, res, next) {
+function requireVerified(req: Req, _res: Res, next: Next) {
   if (!req.user) {
     return next(new AppError(401, 'You need to be logged in to do that.'));
   }

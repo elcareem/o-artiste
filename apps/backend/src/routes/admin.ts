@@ -32,7 +32,7 @@ router.get(
   '/admin/config/commission',
   requireAuth,
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req, res, next) => {
+  async (req: Req, res: Res, next: Next) => {
     try {
       const [current, history] = await Promise.all([
         resolveCommissionRate(),
@@ -58,7 +58,7 @@ router.put(
   '/admin/config/commission',
   requireAuth,
   requireRole('SUPER_ADMIN'),
-  async (req, res, next) => {
+  async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { rateBasisPoints, effectiveFrom, reason } = req.body ?? {};
 
@@ -95,7 +95,7 @@ router.get(
   '/admin/config/cancellation-tiers',
   requireAuth,
   requireRole('ADMIN', 'SUPER_ADMIN'),
-  async (req, res, next) => {
+  async (req: Req, res: Res, next: Next) => {
     try {
       const [current, history] = await Promise.all([resolveTierSet(), listTierVersions()]);
       res.json({ current, history });
@@ -119,7 +119,7 @@ router.put(
   '/admin/config/cancellation-tiers',
   requireAuth,
   requireRole('SUPER_ADMIN'),
-  async (req, res, next) => {
+  async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { tiers, effectiveFrom, reason } = req.body ?? {};
 

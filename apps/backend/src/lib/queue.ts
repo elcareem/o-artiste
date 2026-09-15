@@ -43,7 +43,7 @@ const DEFAULT_JOB_OPTIONS = {
   removeOnFail: false,
 };
 
-function redisUrl() {
+function redisUrl(): string {
   const url = process.env.REDIS_URL;
   if (!url) {
     throw new Error('REDIS_URL is not set. The job queue cannot start without Redis.');
@@ -73,7 +73,7 @@ const queues = new Map();
 const workers = new Map();
 
 /** Returns the named queue, creating it once per process. */
-function getQueue(name) {
+function getQueue(name: string): import('bullmq').Queue {
   if (!queues.has(name)) {
     queues.set(
       name,
@@ -95,7 +95,11 @@ function getQueue(name) {
  * indistinguishable from one that never existed — and on this system the job
  * that vanished might have been the one releasing an artist's payment.
  */
-function registerWorker(name, processor, options = {}) {
+function registerWorker(
+  name: string,
+  processor: (job: import('bullmq').Job) => Promise<unknown>,
+  options: Partial<import('bullmq').WorkerOptions> = {}
+): import('bullmq').Worker {
   const worker = new Worker(name, processor, {
     prefix: PREFIX,
     connection: connectionOptions(),
@@ -103,7 +107,7 @@ function registerWorker(name, processor, options = {}) {
     ...options,
   });
 
-  worker.on('failed', async (job, err) => {
+  worker.on('failed', async (job: import('bullmq').Job | undefined, err: Error) => {
     if (!job) return;
 
     const exhausted = job.attemptsMade >= (job.opts.attempts ?? 1);
@@ -134,11 +138,13 @@ function registerWorker(name, processor, options = {}) {
     } catch (dlqError) {
       // Last resort. If even this fails the job is genuinely lost, so say so
       // loudly rather than swallowing it.
-      console.error(`[queue] FAILED TO DEAD-LETTER ${name}/${job.name}: ${dlqError.message}`);
+      console.error(
+        `[queue] FAILED TO DEAD-LETTER ${name}/${job.name}: ${(dlqError as Error).message}`
+      );
     }
   });
 
-  worker.on('error', (err) => {
+  worker.on('error', (err: Error) => {
     console.error(`[queue] worker ${name} error: ${err.message}`);
   });
 
@@ -147,7 +153,7 @@ function registerWorker(name, processor, options = {}) {
 }
 
 /** Jobs currently sitting in the dead-letter queue. */
-async function deadLetterJobs(limit = 100) {
+async function deadLetterJobs(limit: number = 100) {
   const queue = getQueue(DEAD_LETTER_QUEUE);
   return queue.getJobs(['waiting', 'delayed', 'active', 'completed', 'failed'], 0, limit - 1);
 }

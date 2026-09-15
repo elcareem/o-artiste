@@ -51,7 +51,7 @@ let warnedAboutDefault = false;
  * @param {Date} at Defaults to now.
  * @param {object} client Prisma client or transaction.
  */
-async function resolveCommissionRate(at = new Date(), client = prisma) {
+async function resolveCommissionRate(at: Date = new Date(), client: PrismaLike = prisma) {
   const record = await client.commissionRate.findFirst({
     where: { effectiveFrom: { lte: at } },
     // createdAt breaks ties deterministically when two records share an
@@ -90,7 +90,7 @@ function defaultRate() {
 }
 
 /** Convenience for callers that only need the number. */
-async function resolveCommissionBps(at = new Date(), client = prisma) {
+async function resolveCommissionBps(at: Date = new Date(), client: PrismaLike = prisma): Promise<Bps> {
   return (await resolveCommissionRate(at, client)).rateBasisPoints;
 }
 
@@ -101,11 +101,21 @@ async function resolveCommissionBps(at = new Date(), client = prisma) {
  * than best-effort: if the change cannot be attributed, the change must not
  * happen (docs/07 §5).
  */
-async function setCommissionRate({ rateBasisPoints, effectiveFrom, actorUserId, reason }) {
+async function setCommissionRate({
+  rateBasisPoints,
+  effectiveFrom,
+  actorUserId,
+  reason,
+}: {
+  rateBasisPoints: Bps;
+  effectiveFrom?: Date | string;
+  actorUserId: string;
+  reason?: string | null;
+}) {
   const bps = validateBps(rateBasisPoints);
   const from = validateEffectiveFrom(effectiveFrom);
 
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: PrismaTx) => {
     const previous = await tx.commissionRate.findFirst({
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
@@ -131,13 +141,13 @@ async function setCommissionRate({ rateBasisPoints, effectiveFrom, actorUserId, 
 }
 
 /** Full history, newest first. Prior records remain queryable forever. */
-function listCommissionRates(client = prisma) {
+function listCommissionRates(client: PrismaLike = prisma) {
   return client.commissionRate.findMany({
     orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
   });
 }
 
-function validateBps(value) {
+function validateBps(value: unknown): Bps {
   // Rejects 5.5, "500", NaN and Infinity alike. Basis points are integers so
   // that 0.05 can never enter a money calculation (docs/00 §6).
   if (typeof value !== 'number' || !Number.isInteger(value)) {
@@ -149,10 +159,10 @@ function validateBps(value) {
   return value;
 }
 
-function validateEffectiveFrom(value) {
+function validateEffectiveFrom(value: unknown): Date {
   if (value === undefined || value === null) return new Date();
 
-  const date = new Date(value);
+  const date = new Date(value as string | number | Date);
   if (Number.isNaN(date.getTime())) {
     throw new AppError(400, 'Effective-from must be a valid date.');
   }
