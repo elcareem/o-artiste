@@ -4467,3 +4467,42 @@ npm run lint                  → clean
 and the rule that it fires only where a check-in exists. The outcome name and
 its separation from `awaiting_response` exist so that job has something precise
 to act on.
+
+### A production break found while looking for the deployed database
+
+#24 adds a migration. Checking whether the deployed database had it turned up
+that it had **three of the four** committed migrations — and, more importantly,
+that there was no mechanism by which it would ever get the fourth.
+
+The backend's `build` script was `prisma generate`. Migrations were applied by
+hand from a laptop, which had worked because none had been written since #4.
+Merging #24 would therefore have deployed code selecting `clientConfirmedAt`
+from a table without that column, and **every read of `Booking` would have
+failed in production** — bookings, funding, webhooks, all of it.
+
+```
+$ psql <deployed> -c 'select migration_name from _prisma_migrations order by started_at'
+ 20260911204031_init
+ 20260911214328_audit_log_anonymous_actors
+ 20260912170420_identity_verification         ← deployed stops here
+ 20260915223406_confirmation_timestamps       ← committed, never applied
+```
+
+`build` is now `prisma migrate deploy && prisma generate`, so Render applies
+what is pending before the new code starts. Shipped **on this branch rather than
+its own**, so there is no ordering in which #24 can merge without it.
+
+Verified against a throwaway schema rather than against production: all four
+migrations apply cleanly to an empty database, the four `#24` columns exist
+afterwards, and a second run prints `No pending migrations to apply` — the build
+runs on every deploy, so idempotence is the property that matters.
+
+The deployed database was deliberately **not** written to by hand. The migration
+is additive and nullable and would have been safe, but the fix is the mechanism,
+not the one-off — and applying it manually would have hidden whether the
+mechanism works.
+
+Recorded in `DEPLOYMENT-CHECKLIST.md` with the caveat this creates: a
+destructive migration now runs automatically, before the code expecting it is
+live. Any migration that removes or rewrites data has to be split — ship the
+additive half, deploy, backfill, then remove as a separate reviewed step.

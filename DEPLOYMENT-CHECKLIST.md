@@ -196,13 +196,40 @@ a `NEXT_PUBLIC_` prefix.
       service**, Ohio)
 - [ ] `DATABASE_URL` set on the `o-artiste-api` service — use the **Internal**
       connection string, not the external one
-- [ ] `npx prisma migrate deploy` run **against the deployed database**, not only locally
+- [x] `npx prisma migrate deploy` run **against the deployed database**, not only locally — now part of the build, so every deploy applies what is pending
 
-### How to apply the migration
+### How the migration is applied
 
-The migration is committed at `apps/backend/prisma/migrations/`. Point
-`DATABASE_URL` at the managed instance and run **`migrate deploy`**, never
-`migrate dev`:
+**Automatically, as part of the deploy.** The backend's `build` script is
+`prisma migrate deploy && prisma generate`, so Render applies every committed
+migration before the new code starts.
+
+This is not a convenience. Migrations were previously applied by hand from a
+laptop while the build ran `prisma generate` alone, which meant any pull request
+carrying a migration would deploy code selecting columns the database did not
+have — and the first symptom would be every read of that table failing in
+production. Found at #24, whose migration was sitting unapplied against a
+deployed API that was about to be given code that needed it.
+
+`migrate deploy` only applies what is already committed. It never generates a
+migration and never resets, which is the only behaviour that should touch an
+instance holding real data — `migrate dev` can do both and must never run
+against one.
+
+It is idempotent: a deploy with nothing pending prints `No pending migrations to
+apply` and moves on. Verified by applying all four migrations to an empty schema
+and then running it again.
+
+> **A destructive migration must not ride in on this.** Dropping or renaming a
+> column now happens automatically, before the code that expects the change is
+> live. Any migration that removes or rewrites data has to be split: ship the
+> additive half, deploy, backfill, then remove — with the removal as a
+> deliberate, separately reviewed step.
+
+### Applying one by hand
+
+Only needed to repair a database that has fallen behind, or to bootstrap one
+before a service exists:
 
 ```bash
 DATABASE_URL="<render external connection string>" \
@@ -286,7 +313,7 @@ When on a paid plan, **New → Background Worker**:
 | Branch | `main` |
 | **Root Directory** | **leave BLANK** — the workspace lockfile and the `qs` override live at the repo root |
 | Runtime | Node |
-| Build Command | `npm install && npm run build --workspace apps/backend` |
+| Build Command | `npm install && npm run build --workspace apps/backend` — `build` is `prisma migrate deploy && prisma generate`, so migrations apply here |
 | Start Command | `npm run start:worker --workspace apps/backend` |
 
 Environment variables — the worker needs fewer than the API, because it serves
