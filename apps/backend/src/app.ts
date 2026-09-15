@@ -14,6 +14,7 @@ const { router: adminRouter } = require('./routes/admin.ts');
 const { router: verificationRouter } = require('./routes/verification.ts');
 const { router: artistsRouter } = require('./routes/artists.ts');
 const { router: bookingsRouter } = require('./routes/bookings.ts');
+const { router: queueRouter } = require('./routes/queue.ts');
 const { router: webhooksRouter } = require('./routes/webhooks.ts');
 const { requireAuth, requireRole } = require('./middleware/auth.ts');
 
@@ -42,6 +43,7 @@ function createApp() {
   app.use(verificationRouter);
   app.use(artistsRouter);
   app.use(bookingsRouter);
+  app.use(queueRouter);
 
   // Raw-bodied, signature-authenticated. See routes/webhooks.js.
   app.use(webhooksRouter);

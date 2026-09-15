@@ -4172,3 +4172,94 @@ The confirmation matrix (#24) reads `booking.checkIn` to decide between
 auto-release and dispute. That relationship is what this issue populates, and
 the `CHECKED_IN` → `AWAITING_CONFIRMATION` transition is already in the state
 machine.
+
+---
+
+## #5 (reopened) — Queue diagnostics, so the deployed criteria can be verified
+
+Branch `chore/5-queue-diagnostics`, from `main` at `6f0bba1`.
+
+`RUN_WORKERS_IN_WEB=true` is now set on `o-artiste-api`, which unblocks #5's two
+remaining criteria — "executes at approximately the right time, locally **and on
+the deployed host**" and "scheduled jobs survive a process restart".
+
+Unblocks, but does not close them. Both were unverifiable for a reason that had
+nothing to do with the environment variable: `echoJob` was built so that "is the
+queue running at all?" has an answer depending on nothing else, and on a
+deployed host that answer was a log line nobody could reach. The same gap would
+make the first question in any future auto-release incident unanswerable.
+
+### What was added
+
+Three `ADMIN`-only endpoints:
+
+```
+POST /admin/queue/echo          schedules the do-nothing job, delayMs default 10,000
+GET  /admin/queue/echo/:id      state, attemptsMade, expectedAt, finishedAt, ranAt
+GET  /admin/queue/dead-letter   jobs that exhausted every retry
+```
+
+`ranAt` is the load-bearing field. It is generated **inside the worker process**
+and returned by the job, so a `completed` state proves the queue finished the
+job while `ranAt` proves a worker executed it — which is the question actually
+being asked on a deployed host. The test asserts the job is `delayed` before a
+worker exists and only then starts one, so it cannot pass against an endpoint
+that simply reports success.
+
+### Deliberately narrow
+
+**There is no endpoint that enqueues an arbitrary job onto an arbitrary queue.**
+That would be a remote code path into the worker process. The only job these can
+schedule is the one that logs and exits.
+
+Asserted behaviourally rather than by documentation: a request carrying `queue`,
+`queueName`, `name`, `jobName`, `data` and `bookingId` still lands on
+`maintenance` as `echo`, and the stored payload's keys are exactly
+`['message', 'scheduledAt']`.
+
+`delayMs` is capped at one hour so nothing can be parked in the queue
+indefinitely.
+
+### Two input-handling defects found by the tests
+
+Both came from a bare `Number()`:
+
+- **`Number('')` is 0.** An empty string is a blank form field, and reading it
+  as "run now" is a silently different schedule, not a validation failure.
+- **`Number(true)` is 1 and `Number([])` is 0.** A boolean was being accepted as
+  a one-millisecond delay and an array as an immediate one.
+
+Both now go through `parseDelay`, which treats absent / `null` / `''` as
+unspecified and rejects anything that is not a number or a numeric string. The
+`null` case matters more than it looks: JSON carries neither `NaN` nor
+`Infinity`, so a client whose own delay calculation failed sends `null` — and
+defaulting is the only reading that does not turn a broken input into a
+different schedule.
+
+My first attempt at the narrowness test was a regex over the route's source
+text. It failed on formatting rather than on substance, and was replaced with
+the behavioural test above. A test that reads source is occasionally the right
+answer — #21's does, for good reason — but not when the property can be
+observed directly.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 240  # pass 240  # fail 0   (232 + 8 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 10  failed 0  skipped 0
+npm run lint                  → clean
+```
+
+### Still open, and why
+
+The two deployed-host boxes stay **unticked**. They need an `ADMIN` or
+`SUPER_ADMIN` login against `o-artiste-api`, and registration whitelists
+`CLIENT` and `ARTIST` — so one must be created directly against the deployed
+database. The exact commands are in `DEPLOYMENT-CHECKLIST.md` under #5.
+
+Checked while looking for one: the deployed API **rejects** the committed seed
+credentials (`super@artist-escrow.test`), so `prisma/seed.ts` has not been run
+against it. That is the right state — the seed password is in this repository —
+and it is now written into the checklist as something to re-confirm at #41.
