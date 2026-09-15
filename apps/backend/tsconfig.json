@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    // Node 22 strips types at runtime rather than compiling, so nothing is
+    // emitted and the files that run are the files on disk — stack traces point
+    // at real line numbers and there is no dist/ to keep in step.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+
+    // Type stripping ERASES types, it does not transform code. Anything that
+    // needs a runtime transform — enum, namespace, parameter properties,
+    // constructor overloads — is rejected here rather than at `node src/…` on
+    // the deployed host.
+    "erasableSyntaxOnly": true,
+
+    "target": "ES2023",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "lib": ["ES2023"],
+    "types": ["node"],
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "prisma/**/*.ts"],
+  "exclude": ["node_modules"]
+}

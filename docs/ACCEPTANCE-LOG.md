@@ -3749,3 +3749,104 @@ shown in full but not deducted.
 will be held to".** Annotated as superseded rather than rewritten — the log is a
 record of what was verified when, and editing history would hide that the
 correction happened at all.
+
+---
+
+## Backend migrated to TypeScript
+
+Branch `refactor/backend-typescript`. Verified 2026-09-15. Not an issue in the
+backlog — requested directly, on the grounds that a system where every value is
+integer kobo and basis points should not be relying on discipline alone.
+
+```
+$ npm run typecheck
+0 errors across 57 files (src, test, prisma)
+
+$ npm run test:backend
+# tests 196  # pass 196  # fail 0        unchanged
+
+$ npm test --workspace apps/web
+# tests 14   # pass 14   # fail 0
+
+$ npm run check:rules
+passed 8    failed 0    skipped 0
+```
+
+### Why JavaScript in the first place
+
+A toolchain decision recorded at planning time — `node:test` with zero
+dependencies and native CommonJS — not a considered call about type safety. For
+this system that was the wrong trade, and it is corrected here.
+
+### No build step, and no runtime change
+
+Node 22 strips types rather than compiling them
+(`process.features.typescript === 'strip'`), so **the code that runs is the code
+on disk**. `npm start` is still `node src/index.ts`. There is no `dist/`, no
+source maps to keep in step, and stack traces point at real line numbers.
+
+That is also what makes "without changing anything" literally true: type
+stripping erases annotations and emits nothing else, so the 196 tests passed
+**before a single annotation was added** — 192 of them on the very first run,
+with the four failures being hardcoded `.js` paths in test fixtures, not
+behaviour.
+
+`erasableSyntaxOnly` is set, so anything needing a runtime transform — `enum`,
+`namespace`, parameter properties — is rejected by `tsc` here rather than by
+`node` on the deployed host.
+
+### What the types actually buy
+
+Domain vocabulary, declared once in `src/types.d.ts` as **global** types.
+Every backend module is CommonJS with no top-level `import`, which makes each a
+script rather than a module in TypeScript's view — so the declarations reach all
+57 files without adding an import to any of them.
+
+```
+Kobo        an integer number of kobo
+Bps         basis points; 500 bps is 5%
+PrismaTx    an interactive transaction client, distinct from the base one
+AuthedReq   a request that has passed requireAuth
+```
+
+`AuthedReq` is the one worth calling out. `req.user` is **optional** on a plain
+request, because a public route genuinely has none. A handler that reads it must
+annotate itself as sitting behind the guard, which is a claim a reviewer can
+check — rather than a non-null assertion scattered through the body. 21 handlers
+now carry it; the public ones do not.
+
+`CompletionBreakdown`, `ClientCancellationBreakdown` and
+`ArtistCancellationBreakdown` name every figure the fee service returns, so a
+caller reaching for `artistNetKobo` when it wanted `artistPayoutKobo` — the
+gross-versus-net distinction #26 turns on — is now a compile error.
+
+### Two things the migration itself caught
+
+**A test coupled to source text.** #21's web test parses the backend's
+`ALLOWED_TRANSITIONS` map out of the source file, so the frontend's terminal
+states provably match the backend's. Annotating that declaration broke the
+parse — the test failed loudly, which is what it is for. It is now tolerant of a
+type annotation between the name and the `=`.
+
+**`tsc` must stay off the deploy path.** It is a devDependency, and a host that
+omits devDependencies would fail a build that needed it — for no gain, since the
+runtime never uses it. `build` remains `prisma generate`; the type check is its
+own gate, `npm run typecheck`, run alongside `check:rules` before every commit.
+
+Both deploy entry points were booted the way Render will, with
+`NODE_ENV=production`:
+
+```
+npm run start        → /health {"status":"ok"}
+npm run start:worker → [worker] listening on queues: maintenance, webhooks
+```
+
+`engines.node` on the backend is tightened to **`>=22.18.0`**, the first release
+where type stripping is on by default. `NODE_VERSION=22` is already set on
+Render.
+
+### Scope
+
+Backend only. The web app was already TypeScript; it gained a `typecheck`
+script and the one path fix above. Nothing in `docs/` changed, because nothing
+about the system's behaviour did.

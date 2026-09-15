@@ -23,11 +23,19 @@ function backendStates(): { all: string[]; terminal: string[] } {
   const source = fs.readFileSync(
     path.resolve(
       import.meta.dirname,
-      '../../../backend/src/services/bookingService.js'
+      '../../../backend/src/services/bookingService.ts'
     ),
     'utf8'
   );
-  const map = source.split('ALLOWED_TRANSITIONS = Object.freeze({')[1].split('});')[0];
+  // Tolerant of a type annotation between the name and the `=`: the backend is
+  // TypeScript, and this test failing because a declaration gained a type would
+  // be noise rather than signal.
+  const start = source.indexOf('ALLOWED_TRANSITIONS');
+  const open = source.indexOf('Object.freeze({', start);
+  if (start === -1 || open === -1) {
+    throw new Error('Could not find ALLOWED_TRANSITIONS in bookingService — has it been renamed?');
+  }
+  const map = source.slice(open).split('});')[0];
 
   const all: string[] = [];
   const terminal: string[] = [];
