@@ -102,6 +102,17 @@ Each row encodes a specific piece of reasoning:
 
 Transitions are validated against the explicit allowed-transition map in `01` §4. An illegal transition throws.
 
+### How it is implemented
+
+The matrix is a **pure function** taking four booleans — did the client confirm, did the client claim a no-show, did the artist confirm, does a check-in exist — and returning an outcome and a reason. It knows nothing about booking state, roles or timing; those are gates applied by the caller. That is what lets every row, and every combination that is not a row, be tested without a database.
+
+All sixteen combinations are covered, not just the five rows. Two of the remaining eleven matter:
+
+- **An artist confirmation is never sufficient.** Asserted directly, for every value of the other inputs. An artist confirming is confirming their own payout.
+- **A booking carrying both a confirmation and a no-show claim is a dispute**, never a guess. The service refuses the second statement so this should be unreachable; if something ever writes around that guard, the answer is a person, not a rule silently honouring whichever field it checked first.
+
+A confirmation moves a booking to `AWAITING_CONFIRMATION` before anything else. `FUNDED_HELD` cannot go straight to `RELEASED` in the transition map, on purpose: **a booking cannot be paid out without having passed through the window in which it could have been disputed.**
+
 ## 4. Auto-release
 
 A BullMQ job scheduled at funding, firing at `eventEndAt` + grace period.
@@ -127,7 +138,7 @@ OPEN ──► UNDER_REVIEW ──┬──► RESOLVED_RELEASE
 
 ### Rules
 
-- Opened **automatically** on a no-show claim contradicted by a check-in record.
+- Opened **automatically** on a no-show claim contradicted by a check-in record. The check-in is attached to the dispute, because it is the whole substance of this kind of dispute and an admin should not have to go looking for it. The client's own written account is carried into `openedReason` so the artist can answer it.
 - Either party may also open one manually.
 - Both parties may submit written statements and files.
 - **Funds remain held for the duration. There is no automatic resolution in either direction.**
