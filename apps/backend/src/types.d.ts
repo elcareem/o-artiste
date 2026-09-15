@@ -438,3 +438,41 @@ interface CheckInCodeDelivery {
   delivered?: boolean;
   stubbed?: boolean;
 }
+
+// ── Check-in redemption (`services/checkInService.ts`, issue #23) ────────────
+
+type CheckInRow = import('@prisma/client').CheckIn;
+
+/**
+ * Geolocation as captured at the door.
+ *
+ * `unknown` rather than `number`, deliberately: these come straight off a
+ * request body, where a browser's failure modes produce strings, nulls and the
+ * literal `"NaN"`. Narrowing happens in `boundedCoordinate`, which drops
+ * anything implausible instead of rejecting the check-in.
+ */
+interface GeolocationInput {
+  latitude?: unknown;
+  longitude?: unknown;
+  accuracyMeters?: unknown;
+}
+
+/**
+ * A redemption attempt.
+ *
+ * THERE IS NO TIMESTAMP FIELD, and that is the point. The record's value as
+ * dispute evidence rests entirely on the time being ours, so a caller has no
+ * way to express one — not even an ignored one.
+ */
+interface RedeemRequest extends GeolocationInput {
+  bookingId: string;
+  /** The artist presenting the code. Recorded as `redeemedByUser`. */
+  artistUserId: string;
+  /** As typed or scanned. Case, spacing and the dash are all forgiven. */
+  code: unknown;
+}
+
+interface CheckInRedemption {
+  checkIn: CheckInRow;
+  booking: BookingRow;
+}

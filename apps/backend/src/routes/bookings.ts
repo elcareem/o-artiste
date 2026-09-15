@@ -15,7 +15,7 @@ const {
   assertAcknowledged,
 } = require('../services/acknowledgementService.ts');
 const { createEscrowForBooking } = require('../services/escrowService.ts');
-const { codeForClient } = require('../services/checkInService.ts');
+const { codeForClient, redeem } = require('../services/checkInService.ts');
 
 const router = express.Router();
 
@@ -284,5 +284,49 @@ router.post('/bookings/:id/funding', requireAuth, requireRole('CLIENT'), async (
     next(err);
   }
 });
+
+/**
+ * POST /bookings/:id/check-in
+ *
+ * The artist redeems the client's code on arrival — issue #23, docs/04 §2.
+ *
+ * The request body carries the code and, optionally, a geolocation reading.
+ * **It cannot carry a time.** `redeem()` has no parameter for one and the
+ * column is a database default, so a `redeemedAt` in the body is not ignored by
+ * a line of code that could later be removed — there is nowhere for it to go.
+ * That is what makes the record evidence rather than an assertion.
+ */
+router.post(
+  '/bookings/:id/check-in',
+  requireAuth,
+  requireRole('ARTIST'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { code, latitude, longitude, accuracyMeters } = req.body ?? {};
+
+      if (!code) throw new AppError(400, 'Enter the check-in code from the client.');
+
+      const { checkIn, booking } = await redeem({
+        bookingId: req.params.id,
+        artistUserId: req.user.id,
+        code,
+        latitude,
+        longitude,
+        accuracyMeters,
+      });
+
+      res.status(201).json({
+        checkIn: {
+          bookingId: checkIn.bookingId,
+          redeemedAt: checkIn.redeemedAt,
+          hasLocation: checkIn.latitude !== null,
+        },
+        booking: publicBooking(booking),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 module.exports = { router, publicBooking };

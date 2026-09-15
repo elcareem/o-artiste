@@ -64,6 +64,20 @@ Rejected with `409`: an incorrect code, an already-redeemed code, a code outside
 
 On success the booking transitions to `CHECKED_IN`.
 
+### Single use is a property of the database
+
+Three layers hold it, and the outer two are conveniences:
+
+1. A read of the existing `CheckIn` before anything is written — the fast path, and the one that produces the clearest message.
+2. The state machine: a booking already in `CHECKED_IN` cannot transition there again.
+3. **The unique constraint on `CheckIn.bookingId`.** This is the one that matters. Two of the artist's devices submitting at the same moment both pass layer 1 before either writes; only the constraint separates them, and the loser's `P2002` becomes the same `409` as a sequential retry.
+
+Verified by removing layer 1 entirely and re-running the suite: every test still passed, including three concurrent redemptions producing exactly one record. A guard whose removal changes nothing is not the guard doing the work, and it is worth knowing which one is.
+
+### The timestamp
+
+`redeemedAt` is `@default(now())` — PostgreSQL sets it, from PostgreSQL's clock. `redeem()` has **no parameter** through which a time could arrive, so a `redeemedAt` in the request body is not ignored by a line of code that could later be deleted: there is nowhere for it to go. `check:rules` fails if any service, library or job names the column at all.
+
 ## 3. The confirmation matrix
 
 Neither party may confirm before `eventEndAt` — `409` otherwise.
