@@ -102,6 +102,30 @@ Before funding the endpoint returns `409`, not an empty code: the client is told
 
 A caller who is not this booking's client gets `404`, never `403`. A `403` confirms the booking exists, and "this booking has a code you may not see" is worth nothing to a stranger and something to an artist probing for one.
 
+### Redemption — `POST /bookings/:id/check-in`
+
+`ARTIST` only, and only this booking's artist; anyone else gets `404`. A client calling it gets `403`: a client who could redeem their own code could manufacture attendance for an event nobody played.
+
+Body: `{ code, latitude?, longitude?, accuracyMeters? }`. **There is no time field, and adding one to the body changes nothing** — `redeem()` has no parameter for a time and `CheckIn.redeemedAt` is a database default, so there is nowhere for a supplied value to go. `check:rules` fails if any service, library or job so much as names the column.
+
+Geolocation is **supporting metadata and never a gating condition**. A reading that is absent, refused, unparseable or out of range is dropped and the check-in proceeds. A latitude without a longitude is dropped as a pair — half a position reads as a location in a dispute record and is not one.
+
+Response `201`: `{ checkIn: { bookingId, redeemedAt, hasLocation }, booking }`. The coordinates themselves are not echoed back; they exist for dispute review, not for the caller.
+
+Rejections are all `409`, each with **its own message**, because "wrong code" and "already used" send an artist standing at a venue to different next actions:
+
+| Case | Message shape |
+|---|---|
+| Wrong code | "That code is not right. Check it with the client…" |
+| Already redeemed | "This check-in code has already been used." |
+| Before the window | "This code becomes active shortly before your event starts." |
+| After the window | "This code has expired." |
+| Ineligible state | Phrased for the state — "This booking has not been paid for yet…", "This booking was cancelled." |
+
+A raw state name never reaches the artist. `PENDING_PAYMENT` tells them nothing they can act on; "the client has not paid yet" tells them who to talk to.
+
+A missing `code` is `400`, not `409` — nothing about the booking is in conflict, the request is incomplete.
+
 ## 6. Verification
 
 | Method | Path | Auth | Notes |

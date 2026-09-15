@@ -18,6 +18,7 @@ const QRCode = require('qrcode');
 
 const prisma = require('../lib/prisma.ts');
 const { AppError } = require('../lib/errors.ts');
+const bookingService = require('./bookingService.ts');
 
 /**
  * The code alphabet — Crockford base32 without the ambiguous characters.
@@ -210,6 +211,178 @@ async function qrDataUrlFor(code: string): Promise<string> {
   });
 }
 
+/**
+ * Redeems the client's code — issue #23, docs/04 §2.
+ *
+ * Produces the attendance record that is the primary evidence in every
+ * subsequent dispute. Its entire value rests on the timestamp being OURS: a
+ * client-supplied time is an assertion, not evidence, and accepting one would
+ * return the dispute to exactly the competing-recollection problem the code was
+ * built to eliminate. `redeemedAt` is therefore a database default and this
+ * function has no parameter for it — there is no argument a caller could pass.
+ */
+async function redeem({
+  bookingId,
+  artistUserId,
+  code,
+  latitude,
+  longitude,
+  accuracyMeters,
+}: RedeemRequest): Promise<CheckInRedemption> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { artist: true, checkIn: true },
+  });
+
+  // Not this booking's artist — 404, never 403. A 403 confirms the booking
+  // exists, and an artist enumerating bookings is precisely the threat.
+  if (!booking || booking.artist.userId !== artistUserId) {
+    throw new AppError(404, 'Booking not found.');
+  }
+
+  // EACH REJECTION GETS ITS OWN MESSAGE (docs/04 §2). "Wrong code" and "already
+  // used" send an artist standing at a venue to completely different next
+  // actions, and collapsing them into "invalid code" strands them there.
+  if (!booking.checkInCode) {
+    throw new AppError(
+      409,
+      'This booking has not been paid for yet, so there is no code to check in with.'
+    );
+  }
+
+  if (booking.checkIn) {
+    throw new AppError(409, 'This check-in code has already been used.');
+  }
+
+  if (!bookingService.canTransition(booking.state, 'CHECKED_IN')) {
+    throw new AppError(409, ineligibleStateMessage(booking.state));
+  }
+
+  if (!codesMatch(booking.checkInCode, code)) {
+    throw new AppError(409, 'That code is not right. Check it with the client and try again.');
+  }
+
+  const validity = validityOf(booking);
+  if (!validity.valid) {
+    throw new AppError(409, validity.message as string);
+  }
+
+  try {
+    return await prisma.$transaction(async (tx: PrismaTx) => {
+      // The unique constraint on CheckIn.bookingId is what makes single use a
+      // property of the DATABASE rather than of the check above. Two artists'
+      // devices submitting at once both pass that check; only one insert
+      // survives, and the loser is caught below.
+      const checkIn = await tx.checkIn.create({
+        data: {
+          bookingId: booking.id,
+          redeemedByUser: artistUserId,
+          // No redeemedAt. It is @default(now()) — set by PostgreSQL, from
+          // PostgreSQL's clock, and not expressible by any caller.
+          ...geolocation({ latitude, longitude, accuracyMeters }),
+        },
+      });
+
+      const updated = await bookingService.transition({
+        bookingId: booking.id,
+        to: 'CHECKED_IN',
+        client: tx,
+      });
+
+      return { checkIn, booking: updated };
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === 'P2002') {
+      throw new AppError(409, 'This check-in code has already been used.');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Constant-time code comparison.
+ *
+ * `===` on a string returns as soon as two characters differ, so the time it
+ * takes leaks how much of a guess was correct — which turns 30^8 into eight
+ * independent searches of 30. The codes are short and the endpoint is not rate
+ * limited (#22), so this is the guard that has to hold.
+ */
+function codesMatch(stored: string, supplied: unknown): boolean {
+  const candidate = normaliseCode(supplied);
+  const expected = normaliseCode(stored);
+
+  // Length is compared first and non-constant-time on purpose: timingSafeEqual
+  // throws on a length mismatch, and the length of the code is not a secret.
+  if (candidate.length !== expected.length) return false;
+
+  return crypto.timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(expected, 'utf8'));
+}
+
+/**
+ * Geolocation, as supporting metadata only.
+ *
+ * NEVER A GATING CONDITION. An artist in a basement venue with no GPS lock has
+ * still arrived, and turning a signal problem into a payment failure would be a
+ * worse error than the one it prevents. So a reading that is absent, refused by
+ * the browser, or outright nonsense is DROPPED rather than rejected — the
+ * check-in proceeds either way.
+ *
+ * Stored as text so no float enters the schema (docs/01 §1). The value is
+ * evidence, not arithmetic: nothing computes with it.
+ */
+function geolocation({ latitude, longitude, accuracyMeters }: GeolocationInput) {
+  const lat = boundedCoordinate(latitude, 90);
+  const lon = boundedCoordinate(longitude, 180);
+
+  // A latitude without a longitude is not a position. Keeping half of one
+  // would put a value in the dispute record that reads as a location and is
+  // not one.
+  const located = lat !== null && lon !== null;
+
+  return {
+    latitude: located ? lat : null,
+    longitude: located ? lon : null,
+    accuracyMeters: located ? boundedCoordinate(accuracyMeters, Number.MAX_SAFE_INTEGER) : null,
+  };
+}
+
+/** A finite number within ±limit, as text. Anything else becomes null. */
+function boundedCoordinate(value: unknown, limit: number): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || Math.abs(parsed) > limit) return null;
+  return String(parsed);
+}
+
+/**
+ * Why this booking cannot be checked into, phrased for someone at a venue.
+ *
+ * The state name is never shown. `PENDING_PAYMENT` tells an artist nothing they
+ * can act on; "the client has not paid yet" tells them who to talk to.
+ */
+function ineligibleStateMessage(state: BookingState): string {
+  switch (state) {
+    case 'PENDING_PAYMENT':
+      return 'This booking has not been paid for yet. Ask the client to complete payment before you check in.';
+    case 'CHECKED_IN':
+      return 'This check-in code has already been used.';
+    case 'AWAITING_CONFIRMATION':
+      return 'This booking has already moved on to confirmation and cannot be checked into.';
+    case 'CANCELLED':
+      return 'This booking was cancelled.';
+    case 'REFUNDED':
+      return 'This booking was refunded and is closed.';
+    case 'RELEASED':
+      return 'This booking has already been paid out.';
+    case 'DISPUTED':
+      return 'This booking is under dispute. Contact support rather than checking in.';
+    case 'RESOLVED':
+      return 'This booking is closed.';
+    default:
+      return 'This booking cannot be checked into.';
+  }
+}
+
 /** The SMS body. One segment, so it costs one message. */
 function smsBodyFor({ code, artistName }: { code: string; artistName?: string | null }): string {
   return (
@@ -238,6 +411,8 @@ module.exports = {
   validityOf,
   qrPayloadFor,
   qrDataUrlFor,
+  redeem,
+  codesMatch,
   smsBodyFor,
   ALPHABET,
   CODE_LENGTH,

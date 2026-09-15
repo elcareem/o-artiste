@@ -187,6 +187,21 @@ else
   fi
 fi
 
+# ── Check-in timestamps are ours — docs/04 §2, issue #23 ────────────────────
+# The attendance record is the primary evidence in every dispute, and its whole
+# value rests on the timestamp being ours. `CheckIn.redeemedAt` is
+# `@default(now())`: PostgreSQL sets it, from PostgreSQL's clock.
+#
+# No service or library may name the column. A service that names it is a
+# service that can write it, and a written value is an assertion rather than
+# evidence — which returns the dispute to the competing-recollection problem
+# the check-in code exists to eliminate. `routes/bookings.ts` may name it, and
+# only to serialise it back out in a response.
+absent "Nothing in services or lib writes CheckIn.redeemedAt" \
+       "redeemedAt is set by PostgreSQL. A caller-supplied time is an assertion, not evidence. docs/04-CONFIRMATION-AND-DISPUTES.md §2." \
+       "apps/backend/src/services apps/backend/src/lib apps/backend/src/jobs" \
+       'redeemedAt'
+
 echo
 printf 'passed %s   failed %s   skipped %s\n' "$PASS" "$FAIL" "$SKIP"
 echo

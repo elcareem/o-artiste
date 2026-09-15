@@ -4030,3 +4030,145 @@ one place.
 
 Real SMS delivery is #38. Until then the criterion is met by the job log, which
 is what the issue asks for.
+
+---
+
+## #23 — Artist check-in redemption
+
+Branch `feat/23-checkin-redemption`, from `main` at `78267cf`.
+
+Produces the attendance record that is the primary evidence in every subsequent
+dispute. Its entire value rests on the timestamp being ours, so that is where
+most of the work went.
+
+### Acceptance criteria
+
+**- [x] A correct code produces a `CheckIn` with a server timestamp**
+
+`POST /bookings/:id/check-in` with the right code returns `201`, writes the
+record, and moves the booking to `CHECKED_IN`. `redeemedAt` is asserted to fall
+inside the window of the HTTP request itself, with a second of slack each way
+for the round trip and any drift between the application clock and PostgreSQL's.
+
+The code is accepted hyphenated, lower case, or padded with spaces —
+`K7QX-M2F9`, `k7qxm2f9`, `" k7qx-m2f9 "` all redeem. It gets read aloud across a
+noisy room and typed by someone holding a phone in one hand.
+
+**- [x] The same code cannot be redeemed twice (409)**
+
+Three layers hold this, and it is worth knowing which one does the work:
+
+1. A read of the existing `CheckIn` before anything is written.
+2. The state machine — `CHECKED_IN` cannot transition to `CHECKED_IN`.
+3. **The unique constraint on `CheckIn.bookingId`**, whose `P2002` becomes the
+   same `409`.
+
+Layer 3 is the one that matters, and the test that proves it fires three
+concurrent redemptions with the same code. All three pass layer 1 before any of
+them writes; exactly one gets `201`, two get `409`, and exactly one row exists.
+
+Confirmed by **removing layer 1 entirely** and re-running: all 17 tests still
+passed. A guard whose removal changes nothing is not the guard carrying the
+rule, and an implementation that merely looks defended is how a double release
+happens later.
+
+**- [x] Check-in succeeds with geolocation denied, unavailable, or absent**
+
+Eight shapes, each asserted to return `201` and to store nothing:
+
+```
+absent · explicit nulls (permission denied) · undefined (position unavailable)
+empty strings · "NaN" from a failed parse · out of range (999, -999)
+half a reading (latitude only) · nonsense types ({}, [], true)
+```
+
+An artist in a basement venue with no GPS lock has still arrived. Turning a
+signal problem into a payment failure would be a worse error than the one it
+prevents, so an unusable reading is **dropped, never rejected**.
+
+Half a reading is dropped as a pair: a latitude without a longitude is not a
+position, and keeping one would put a value in the dispute record that reads as
+a location and is not one.
+
+A real reading — Lagos, `6.5244 / 3.3792`, 42m — is stored as **text**, so no
+float enters the schema (docs/01 §1). Nothing computes with it; it is evidence,
+not arithmetic. The coordinates are not echoed back to the caller: the response
+carries `hasLocation` only.
+
+**- [x] A client-supplied timestamp in the request body is ignored, not trusted**
+
+Five injection shapes tried — `redeemedAt`, `redeemed_at`, `createdAt`,
+`timestamp`, `checkedInAt`, backdated to 2020 and forward-dated 90 days. Every
+one returns `201` with a stamp inside the request window.
+
+Ignoring is the weaker guarantee, so the implementation makes it structural
+instead. `redeem()` has **no parameter** through which a time could arrive, and
+`redeemedAt` is `@default(now())` — PostgreSQL sets it. A supplied value is not
+dropped by a line of code that could later be deleted; there is nowhere for it
+to go. Two mechanical guards keep it that way:
+
+- A test parses `redeem()`'s own signature and fails if any parameter name
+  contains `At`, `time`, `date` or `stamp`.
+- `check:rules` gained a tenth rule: no service, library or job may name
+  `redeemedAt` at all. Only `routes/bookings.ts` may, and only to serialise it
+  out. Proven by adding `redeemedAt: new Date()` to the service:
+
+```
+FAIL  Nothing in services or lib writes CheckIn.redeemedAt
+      > apps/backend/src/services/checkInService.ts:280: redeemedAt: new Date(),
+```
+
+Reverted, green.
+
+### Rejections
+
+All `409`, each with its own message (docs/04 §2). "Wrong code" and "already
+used" send an artist standing at a venue to different next actions, and
+collapsing them into "invalid code" strands them there.
+
+Ineligible states are phrased for someone at a door, and the raw enum name is
+asserted never to reach them — `PENDING_PAYMENT` tells an artist nothing they
+can act on; "the client has not paid yet" tells them who to talk to.
+
+A missing `code` is `400`, not `409`: nothing about the booking is in conflict,
+the request is incomplete.
+
+### Constant-time comparison
+
+`crypto.timingSafeEqual`, not `===`. String equality returns as soon as two
+characters differ, so its duration leaks how much of a guess was right — which
+turns one search of 30^8 into eight independent searches of 30. #22 accepted
+eight characters partly on the basis that the code stays safe even if redemption
+is never rate limited; that argument only holds if the comparison does not leak.
+
+Length is compared first and non-constant-time, deliberately: `timingSafeEqual`
+throws on mismatched buffer lengths, and an exception there would be a `500`
+instead of a `409`. The length of the code is not a secret.
+
+### Authorisation
+
+- Not this booking's artist → **404, not 403**. A `403` confirms the booking
+  exists, and an artist enumerating bookings is precisely the threat.
+- The booking's own client → **403**. The direction is the entire mechanism: a
+  client who could redeem their own code could manufacture attendance for an
+  event nobody played.
+- Unauthenticated → `401`.
+
+Every refusal is asserted to write no `CheckIn` and leave the state untouched.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 232  # pass 232  # fail 0   (215 + 17 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 10  failed 0  skipped 0
+npm run lint                  → clean
+```
+
+### Carried forward
+
+The confirmation matrix (#24) reads `booking.checkIn` to decide between
+auto-release and dispute. That relationship is what this issue populates, and
+the `CHECKED_IN` → `AWAITING_CONFIRMATION` transition is already in the state
+machine.
