@@ -94,13 +94,31 @@ Both sides are verified, and both sides accrue strikes. An asymmetric system whe
 
 The full fee schedule and its arithmetic live in `05`. The principle:
 
+> **Corrected at #18.** This section previously said the **artist** bears the
+> escrow fees when a booking completes. That was written from the provider's
+> public fee schedule before a sandbox key existed, and it is wrong about the
+> bearers. `GET /fees/configuration` on the live account reports
+> `escrow_service: payer="payer", timing="at_funding"` and
+> `payout: payer="business", timing="at_payout"`. `05` §1 carries the full
+> correction; `01`, `07` and `08` were updated at the time and this section was
+> missed.
+
+| Fee | Who bears it | When | Reasoning |
+|---|---|---|---|
+| **Money-in** | **Client** | At funding, **on top of** the booking amount | The provider charges the payer directly. It never enters escrow, so it is never ours to deduct |
+| **Money-out** | **Platform** | At payout | The provider charges the business. It reduces our take rather than the artist's payment |
+| **Commission** | Artist | At release | Deducted from the escrow, at the booking's snapshotted rate |
+
+On a cancellation the at-fault party bears the fees:
+
 | Outcome | Who bears the escrow fees | Reasoning |
 |---|---|---|
-| Booking completes | Artist | They received the payment the fees enabled |
-| Client cancels | Client | They are the at-fault party |
-| Artist cancels | Artist, via `FeeLiability` | They are the at-fault party — but there is no artist money in escrow to deduct from, so the platform fronts it and recovers from their next payout |
+| Client cancels | Client | They are the at-fault party. The money-in fee they paid at funding is consumed and not refunded — that *is* them bearing it |
+| Artist cancels | Artist, via `FeeLiability` | They are the at-fault party — but there is no artist money in escrow to deduct from, so the platform fronts it and recovers from their next payout (#26) |
 
-Two consequences worth stating plainly:
+Three consequences worth stating plainly:
+
+- **A client transfers more than the booking price.** A ₦200,000 booking is a ₦202,000 transfer. This must be disclosed before they reach their banking app, not discovered there (#21).
 
 - **On an artist cancellation the client receives 100%**, not a fee-reduced amount. They did nothing wrong, and passing them any cost for the artist's decision would undermine the guarantee the platform is built on.
 - **On a client cancellation the artist's compensation is untouched by fees.** They have already lost a date they cannot refill; deducting a flat processing cost from a reduced compensation payment would penalise them twice for someone else's decision.

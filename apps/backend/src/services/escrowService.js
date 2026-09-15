@@ -18,8 +18,9 @@ const prisma = require('../lib/prisma');
 const { AppError } = require('../lib/errors');
 const escrowpay = require('../lib/escrowpay');
 const { assertAcknowledged } = require('./acknowledgementService');
-const { assertCanTransact } = require('./bookingService');
-const { moneyInFee } = require('./feeService');
+const { assertCanTransact, assertTransition, transition } = require('./bookingService');
+const { moneyInFee, computeCompletion, applyFeeLiabilities } = require('./feeService');
+const ledger = require('./ledgerService');
 
 /**
  * Creates the escrow for a booking and returns the bank transfer instruction.
@@ -175,6 +176,192 @@ function fundingInstructionFor(booking, session, activated) {
   };
 }
 
+// ── Release — issue #26 ──────────────────────────────────────────────────────
+
+/**
+ * Releases a completed booking's funds to the artist.
+ *
+ * THE PROVIDER IS CALLED BEFORE ANYTHING IS RECORDED, and that order is
+ * deliberate. The two failure modes are not equally bad:
+ *
+ *   Record first, then call  — a provider failure leaves a booking marked
+ *     RELEASED with a ledger entry saying so and no money moved. The artist is
+ *     not paid, the system believes they were, and nothing surfaces it until
+ *     someone reconciles by hand.
+ *
+ *   Call first, then record  — a database failure leaves money moved and not
+ *     yet recorded. A retry reuses the same idempotency key, so the provider
+ *     returns the ORIGINAL release rather than paying twice, and the recording
+ *     then succeeds. The failure is self-healing.
+ *
+ * Every figure comes from the booking's own frozen snapshot. None of this reads
+ * live configuration — that is the whole point of #15's snapshot, and #26's
+ * criterion about a booking created before a commission change depends on it.
+ */
+async function releaseBooking({ bookingId, reason }) {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { artist: { include: { user: true } } },
+  });
+
+  if (!booking) throw new AppError(404, 'Booking not found.');
+
+  // Idempotent at our level: a booking already released returns what happened
+  // rather than instructing a second release.
+  if (booking.state === 'RELEASED') {
+    return releaseSummaryFor(booking, { alreadyReleased: true });
+  }
+
+  // Checked before the provider call as well as inside the transaction below,
+  // so an illegal release never reaches the provider in the first place.
+  assertTransition(booking.state, 'RELEASED');
+
+  if (!booking.escrowId) {
+    throw new AppError(409, 'This booking was never funded, so there is nothing to release.');
+  }
+  if (!booking.artist.user.escrowPartyId) {
+    throw new AppError(409, 'This artist cannot receive payments yet.');
+  }
+
+  // NOTE: account standing is deliberately NOT re-checked here, unlike at
+  // funding. An artist suspended after performing has still performed, and
+  // withholding money for an event that happened would be confiscation rather
+  // than enforcement. Suspension governs future bookings; #33's strikes are the
+  // mechanism for conduct.
+
+  const completion = computeCompletion({
+    amountKobo: booking.amountKobo,
+    commissionBps: booking.commissionRateBpsSnapshot,
+  });
+
+  const { liabilities, settledKobo } = await selectSettleableLiabilities({
+    artistUserId: booking.artist.userId,
+    payoutCeilingKobo: completion.artistNetKobo,
+  });
+
+  // feeService owns the arithmetic, including the floor — a liability larger
+  // than the payout must never produce a negative disbursement.
+  const settlement = applyFeeLiabilities({
+    payoutKobo: completion.artistNetKobo,
+    liabilitiesKobo: settledKobo,
+  });
+
+  // --- The irreversible step. ---------------------------------------------
+  //
+  // Only the artist's share leaves escrow. What remains is the platform's
+  // commission, which is not the artist's money and must not be released to
+  // them and clawed back.
+  const release = await escrowpay.release({
+    transactionId: booking.escrowId,
+    reference: `${booking.escrowReference}_release`,
+    amountKobo: settlement.payoutKobo,
+    reason: reason ?? 'Event completed and confirmed by both parties',
+  });
+
+  // --- Recorded now, in ONE transaction with the state change. -------------
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await transition({ bookingId: booking.id, to: 'RELEASED', client: tx });
+
+    // Gross commission and the payout-fee pair, then the artist's full net.
+    // The settlement below reduces the artist's position rather than being
+    // netted into this figure, so the ledger shows what was earned AND what was
+    // recovered instead of only the difference (docs/01 §5).
+    await ledger.recordRelease(tx, booking);
+
+    if (settlement.settledKobo > 0) {
+      await ledger.recordFeeLiabilitySettlement(tx, booking.id, settlement.settledKobo);
+
+      await tx.feeLiability.updateMany({
+        where: { id: { in: liabilities.map((l) => l.id) } },
+        data: {
+          status: 'SETTLED',
+          settledAgainstBookingId: booking.id,
+          settledAt: new Date(),
+        },
+      });
+    }
+
+    return next;
+  });
+
+  console.log(
+    `[escrow] released ${settlement.payoutKobo} kobo to artist for booking ${booking.id}` +
+      (settlement.settledKobo > 0 ? ` (${settlement.settledKobo} kobo of liability settled)` : '')
+  );
+
+  return releaseSummaryFor(updated, {
+    completion,
+    settlement,
+    liabilities,
+    providerReleaseId: release?.id ?? null,
+  });
+}
+
+/**
+ * Outstanding liabilities that this payout can clear, oldest first.
+ *
+ * WHOLE LIABILITIES ONLY. `FeeLiability` has no partially-settled state — it is
+ * OUTSTANDING, SETTLED or WRITTEN_OFF — so settling half of one would either
+ * need a new state or a mutated amount, and mutating a recorded obligation is
+ * the same mistake the ledger exists to avoid. A liability the payout cannot
+ * cover in full stays outstanding for the next one.
+ *
+ * In practice these are ~₦2,070 against payouts of tens of thousands, so the
+ * case is rare; it is handled explicitly rather than left to chance.
+ */
+async function selectSettleableLiabilities({ artistUserId, payoutCeilingKobo }) {
+  const outstanding = await prisma.feeLiability.findMany({
+    where: { artistUserId, status: 'OUTSTANDING' },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const liabilities = [];
+  let settledKobo = 0;
+
+  for (const liability of outstanding) {
+    if (settledKobo + liability.amountKobo > payoutCeilingKobo) continue;
+    liabilities.push(liability);
+    settledKobo += liability.amountKobo;
+  }
+
+  return { liabilities, settledKobo };
+}
+
+function releaseSummaryFor(booking, extra = {}) {
+  const completion =
+    extra.completion ??
+    computeCompletion({
+      amountKobo: booking.amountKobo,
+      commissionBps: booking.commissionRateBpsSnapshot,
+    });
+
+  const settlement = extra.settlement ?? {
+    payoutKobo: completion.artistNetKobo,
+    settledKobo: 0,
+    remainingLiabilityKobo: 0,
+  };
+
+  return {
+    bookingId: booking.id,
+    state: booking.state,
+    amountKobo: booking.amountKobo,
+    commissionRateBpsSnapshot: booking.commissionRateBpsSnapshot,
+
+    commissionKobo: completion.commissionKobo,
+    moneyOutFeeKobo: completion.moneyOutFeeKobo,
+    /** What the artist earned before any liability is recovered. */
+    artistNetKobo: completion.artistNetKobo,
+    /** What actually left escrow to the artist. */
+    artistPayoutKobo: settlement.payoutKobo,
+    liabilitySettledKobo: settlement.settledKobo,
+    liabilityRemainingKobo: settlement.remainingLiabilityKobo,
+    platformNetKobo: completion.platformNetKobo,
+
+    alreadyReleased: extra.alreadyReleased ?? false,
+    providerReleaseId: extra.providerReleaseId ?? null,
+  };
+}
+
 /**
  * Re-reads the funding instruction for an escrow that already exists.
  *
@@ -196,4 +383,4 @@ async function withCheckoutSession(booking) {
   }
 }
 
-module.exports = { createEscrowForBooking, fundingInstructionFor };
+module.exports = { createEscrowForBooking, fundingInstructionFor, releaseBooking };

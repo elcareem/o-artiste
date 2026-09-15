@@ -120,14 +120,25 @@ describe('the configuration snapshot survives a round trip intact', async () => 
 describe('a completed booking reconciles to exactly zero in the ledger', async () => {
   const booking = await makeBooking();
 
-  // The worked example from docs/01 §5 and docs/05 §3: ₦200,000 at 5%,
-  // money-in capped at ₦2,000, money-out ₦70 → artist nets ₦187,930.
+  // The worked example from docs/01 §5: ₦200,000 at 5%.
+  //
+  // CORRECTED AT #18. This previously encoded the pre-correction model, in
+  // which both provider fees came out of the escrow and the artist netted
+  // ₦187,930. The provider's live fee configuration charges money-in to the
+  // PAYER at funding and money-out to the PLATFORM at payout, so the client
+  // transfers ₦202,000 and the artist's share is reduced by commission alone.
+  //
+  // It kept passing throughout, because a set of numbers that sums to zero
+  // still sums to zero when the model behind them is wrong. The invariant is
+  // necessary, not sufficient — which is why #26 asserts the figures
+  // themselves, computed by feeService, rather than only the sum.
   const entries = [
-    { entryType: 'FUNDED', party: 'CLIENT', amountKobo: -20000000 },
-    { entryType: 'COMMISSION', party: 'PLATFORM', amountKobo: 1000000 },
+    { entryType: 'FUNDED', party: 'CLIENT', amountKobo: -20200000 },
     { entryType: 'ESCROW_FEE_IN', party: 'PROVIDER', amountKobo: 200000 },
+    { entryType: 'COMMISSION', party: 'PLATFORM', amountKobo: 1000000 },
+    { entryType: 'ESCROW_FEE_OUT', party: 'PLATFORM', amountKobo: -7000 },
     { entryType: 'ESCROW_FEE_OUT', party: 'PROVIDER', amountKobo: 7000 },
-    { entryType: 'RELEASED', party: 'ARTIST', amountKobo: 18793000 },
+    { entryType: 'RELEASED', party: 'ARTIST', amountKobo: 19000000 },
   ];
 
   await prisma.ledgerEntry.createMany({
@@ -144,7 +155,7 @@ describe('a completed booking reconciles to exactly zero in the ledger', async (
   const released = await prisma.ledgerEntry.findFirstOrThrow({
     where: { bookingId: booking.id, entryType: 'RELEASED' },
   });
-  assert.equal(released.amountKobo, 18793000, 'artist nets ₦187,930');
+  assert.equal(released.amountKobo, 19000000, 'artist nets ₦190,000');
 });
 
 describe('state defaults to PENDING_PAYMENT', async () => {
