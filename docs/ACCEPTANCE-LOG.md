@@ -3360,3 +3360,157 @@ delivery.
 The endpoint takes **no bearer token** — the signature is the authentication, and
 it is stronger here because it also covers the body. Asserted with a junk
 `Authorization` header, which changes nothing either way.
+
+---
+
+## #21 — feat(web): booking status page
+
+Branch `feat/21-booking-status`. Verified 2026-09-15.
+
+```
+$ npm run test:backend
+# tests 181  # pass 181  # fail 0        (2 new)
+
+$ npm test --workspace apps/web
+# tests 14   # pass 14   # fail 0        (7 new)
+
+$ npm run check:rules
+passed 8    failed 0    skipped 0
+
+$ npm run lint && npm run build --workspace apps/web
+clean
+```
+
+**All four criteria were verified in a real browser**, driving headless Chrome
+over the DevTools Protocol against the real backend, the real Next server and a
+deterministic stand-in for the provider. Asserting on a component in isolation
+would not have caught the two defects below, both of which only appear when the
+whole path runs.
+
+### `[x]` Page transitions from awaiting to funded once the webhook lands, with no manual refresh
+
+```
+webhook accepted                                    HTTP 200
+page shows "held safely" without a reload           PASS
+transitioned from awaiting to funded                PASS
+exactly one navigation — never reloaded             1
+the change arrived via polling                      1 poll
+```
+
+`performance.getEntriesByType("navigation").length === 1` is the assertion that
+makes this meaningful: the DOM changed and the page was never re-requested.
+
+### `[x]` Polling ceases once a terminal state is reached
+
+Counted at the network layer via CDP rather than in the network tab by eye:
+after the booking reached a terminal state, **0 further requests in 16 seconds**
+— more than three poll intervals.
+
+The terminal set is not duplicated by hand. A test **parses the backend's own
+`ALLOWED_TRANSITIONS` map** and asserts the frontend agrees state by state.
+Hand-copying it is exactly how a page ends up polling a finished booking
+forever: the backend adds a terminal state, nothing fails, and the bug surfaces
+as a battery complaint.
+
+An **unknown** state deliberately keeps polling. Stopping too early leaves a
+client looking at stale information; polling too long costs one request.
+
+### `[x]` A backend error during polling shows a readable message, not a raw error
+
+The backend was **actually killed mid-poll**, not mocked:
+
+```
+backend stopped                                        pid 3390117
+shows readable copy when the API is unreachable
+  "Could not reach the server. Check your connection and try again.
+   We are still checking."
+no status codes or raw network errors                  PASS
+no stack traces                                        PASS
+no leaked objects or undefined values                  PASS
+funding details stay on screen so the client can pay   PASS
+the message clears on its own once the API is back     no refresh needed
+```
+
+**The funding details staying on screen is the point.** A client who is mid-way
+through a bank transfer when our API dies must not lose the account number they
+are typing. The page degrades to "we are still checking" and keeps everything
+else.
+
+Polling **backs off** on consecutive failures — 5s, 10s, 20s, 40s, capped at 60s
+— and resets on the first success. A backend that is down does not recover
+faster for being asked every five seconds, and a page left open on a phone would
+otherwise ask for hours.
+
+### `[x]` Funding details are selectable and copyable on mobile
+
+```
+account number user-select     all        (one tap selects the whole value)
+word-break                     break-all  (long values wrap, no sideways scroll)
+copy button height             44px       (minimum touch target)
+horizontal overflow at 360px   none       (doc 360 = window 360)
+```
+
+**Selection first, clipboard second.** `user-select: all` works with no
+JavaScript, no clipboard permission and no secure context. The button is the
+convenience on top. When `navigator.clipboard` is unavailable or refused the
+button says **"Select it"** rather than claiming a copy that did not happen — a
+client who trusts a silent failure pastes the wrong account number.
+
+### Both money figures are named, and the walkthrough asserts it
+
+```
+₦202,000                          the amount to transfer
+₦200,000 for the booking, plus    the booking amount
+₦2,000 in bank charges            the provider's fee
+```
+
+The provider charges its fee to the payer on top rather than deducting it from
+the escrow (docs/05 §1). A client expecting to send ₦200,000 and asked for
+₦202,000 at their banking app is precisely the surprise the disclosure rules
+exist to prevent.
+
+### Two defects the walkthrough found
+
+**1. A returning client got an empty funding instruction.** Bank transfer
+funding is out-of-band — the client leaves to make the transfer and comes back,
+often on another device. `createEscrowForBooking` returned early when the escrow
+already existed, and that path produced `bankTransfer: null`, because the
+account number lives only on the checkout session (#18's masking finding). **A
+returning client would have had nothing to pay into.** Fixed: the session is
+re-fetched with the same `_checkout` idempotency key, so the provider returns
+*the same* session rather than opening a second one with a different destination
+account. A provider that cannot be reached on re-read still renders the booking,
+with no fabricated account details.
+
+**2. A masked account number could still reach the page.** `isPayable()` rejects
+anything containing `*` or a non-digit, and the page says it is still setting up
+the transfer rather than rendering `****4680` as though it were dialable.
+
+### Supporting infrastructure, outside #21's stated scope
+
+**#21 is the first page in this app that makes an authenticated call, and no
+issue in the backlog builds a sign-in screen.** Without one the page cannot be
+delivered at all, so the minimum was built and is called out here rather than
+folded in silently:
+
+- `lib/session.ts` + `app/api/session/route.ts` — credentials exchanged for an
+  **httpOnly cookie**. `localStorage` is the usual shortcut and it is the wrong
+  one here: any script on the page can read it, and this token authorises money
+  movement. Asserted in the browser — `document.cookie` does not contain it.
+- `lib/proxy.ts` + `app/api/bookings/[id]/…` — the browser therefore cannot call
+  the backend directly, so same-origin route handlers attach the bearer token
+  server-side. The backend's `error` string is passed through unaltered, because
+  the backend owns that copy (docs/02 §2).
+- `app/login/page.tsx` — a minimal sign-in form.
+
+#30, #36 and #37 all need the same thing and will reuse it.
+
+The proxy helper lives in `lib/` rather than being exported from a route file: a
+Next route module is expected to export HTTP method handlers and nothing else,
+and exporting a helper from one works until a version of Next decides it does
+not.
+
+### Phase 2 complete
+
+#11 through #21 are all closed. The remaining open item is #5's queue timing on
+the deployed host, which needs a worker process on Render and is due before #25.

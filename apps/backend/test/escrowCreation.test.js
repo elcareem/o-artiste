@@ -424,3 +424,75 @@ describe('a client suspended after booking creation cannot fund either', async (
   const after = await prisma.booking.findUnique({ where: { id: booking.id } });
   assert.equal(after.escrowId, null);
 });
+
+describe('a returning client gets the account number back, not an empty instruction', async () => {
+  // Bank transfer funding is out-of-band: the client leaves to make the
+  // transfer and comes back, often on another device. Before this, the second
+  // call returned bankTransfer: null — a funding page with nothing to pay into.
+  const { clientUser, booking } = await readyToFund();
+
+  const calls = [];
+  const session = {
+    allowed_channels: ['bank_transfer'],
+    payment_instructions: {
+      amount_minor: N(202000),
+      account_number: '8881754743',
+      account_name: 'O-artist',
+      bank_code: '090175',
+      provider: 'rubies',
+    },
+  };
+
+  const first = await withProvider(
+    {
+      createEscrow: async () => ({ id: 'TXN_return', version: 1 }),
+      activateEscrow: async () => ({ status: 'pending_funding' }),
+      createCheckoutSession: async (args) => {
+        calls.push(args.reference);
+        return session;
+      },
+    },
+    () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id })
+  );
+
+  assert.equal(first.bankTransfer.accountNumber, '8881754743');
+
+  const second = await withProvider(
+    {
+      createEscrow: async () => assert.fail('a second escrow must not be created'),
+      createCheckoutSession: async (args) => {
+        calls.push(args.reference);
+        return session;
+      },
+    },
+    () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id })
+  );
+
+  assert.equal(second.bankTransfer.accountNumber, '8881754743', 'the returning client can still pay');
+  assert.equal(second.amountToTransferKobo, N(202000));
+  assert.equal(second.escrowId, 'TXN_return', 'and it is the same escrow');
+
+  // The same idempotency key both times, so the provider returns the same
+  // session rather than a second one with a different destination account.
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0], calls[1]);
+});
+
+describe('an unreachable provider on re-read still shows the booking, without inventing an account', async () => {
+  const { clientUser, booking } = await readyToFund();
+
+  await prisma.booking.update({ where: { id: booking.id }, data: { escrowId: 'TXN_existing' } });
+
+  const instruction = await withProvider(
+    {
+      createCheckoutSession: async () => {
+        throw new AppError(502, 'Could not reach the payment provider.');
+      },
+    },
+    () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id })
+  );
+
+  assert.equal(instruction.bankTransfer, null, 'no fabricated account details');
+  assert.equal(instruction.bookingAmountKobo, N(200000), 'but the booking is still readable');
+  assert.equal(instruction.amountToTransferKobo, N(202000));
+});

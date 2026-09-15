@@ -15,3 +15,6 @@ ISSUES-PART-1-FOUNDATION.md
 ISSUES-PART-2-BOOKING.md
 ISSUES-PART-3-DISPUTES.md
 ISSUES-PART-4-LAUNCH.md
+
+# TypeScript incremental build cache
+*.tsbuildinfo

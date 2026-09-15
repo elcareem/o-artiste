@@ -74,8 +74,18 @@ async function createEscrowForBooking({ bookingId, clientUserId }) {
 
   // Idempotent at our level too: if the escrow already exists, return its
   // instruction rather than creating a second one.
+  //
+  // THE SESSION IS RE-FETCHED, NOT OMITTED. Bank transfer funding is
+  // out-of-band: the client leaves to make the transfer and comes back, often
+  // on another device, and the account number lives only on the checkout
+  // session (see the masking note below). Returning the booking alone would
+  // hand a returning client a funding page with nothing to pay into.
+  //
+  // The call carries the same `_checkout` idempotency key as the original, so
+  // the provider returns THE SAME session rather than opening a second one with
+  // a different destination account.
   if (booking.escrowId) {
-    return fundingInstructionFor(booking);
+    return withCheckoutSession(booking);
   }
 
   const payerPartyId = booking.client.user.escrowPartyId;
@@ -163,6 +173,27 @@ function fundingInstructionFor(booking, session, activated) {
         }
       : null,
   };
+}
+
+/**
+ * Re-reads the funding instruction for an escrow that already exists.
+ *
+ * If the provider cannot be reached the booking details are still returned,
+ * with `bankTransfer: null` — a status page that shows the amount and the state
+ * is more useful than an error page, and #21 renders the missing-account case
+ * explicitly rather than pretending it has one.
+ */
+async function withCheckoutSession(booking) {
+  try {
+    const session = await escrowpay.createCheckoutSession({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_checkout`,
+    });
+    return fundingInstructionFor(booking, session);
+  } catch (err) {
+    console.error(`[escrow] could not re-read funding session for ${booking.id}: ${err.message}`);
+    return fundingInstructionFor(booking);
+  }
 }
 
 module.exports = { createEscrowForBooking, fundingInstructionFor };
