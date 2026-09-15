@@ -37,6 +37,23 @@ It is captured as supporting metadata where available and **never gates a redemp
 
 Keep the human-readable form short enough to read aloud over noise. This gets used at a live event, not in an office — a 32-character token is the wrong answer even though it is the more secure one, because the failure mode it creates is an artist who cannot check in.
 
+### Issued at funding, sent before the event
+
+The code is written to the booking **inside the same transaction** as the `FUNDED_HELD` transition and the funding ledger entries. A funded booking with no code is a booking nobody can complete, so that must not be a state the database can hold, not even briefly.
+
+It is **sent** much later — `CHECKIN_CODE_SMS_LEAD_HOURS` before the event, default 24. Funding can happen months ahead, and a code received in June for a September wedding has been forwarded, screenshot and forgotten by the time it matters.
+
+The delivery job's id is derived from the booking, so the funding webhook redelivering cannot put two messages in a client's inbox. It re-reads the booking when it fires rather than trusting its payload: a booking cancelled in the intervening weeks sends nothing.
+
+### The validity window
+
+| Setting | Default | Why |
+|---|---|---|
+| `CHECKIN_WINDOW_BEFORE_HOURS` | 2 | Artists arrive early to set up. A code that only works at the advertised start time strands them at the door |
+| `CHECKIN_WINDOW_AFTER_HOURS` | 12 | Generous on purpose — an artist who forgot to check in during a five-hour set has still performed |
+
+Outside the window the code is still **shown** to the client, with `valid: false` and the reason. Visibility is not what is gated; redemption is. A client who cannot see their code until two hours before the event has no way to check they have it.
+
 ## 2. Redemption
 
 `POST /bookings/:id/check-in` creates a `CheckIn` with a **server-side timestamp**. No client-supplied time is accepted, and a timestamp in the request body is ignored rather than trusted.

@@ -352,3 +352,89 @@ interface ProviderResponse {
  * by a non-null assertion scattered through the body.
  */
 type AuthedReq = Req & { user: AuthenticatedUser };
+
+// ── Check-in codes (`services/checkInService.ts`) ────────────────────────────
+
+/** A request to `lib/notifications.ts`. */
+interface SmsRequest {
+  /** E.164 phone number. */
+  to: string;
+  /** Body. Kept short — Nigerian networks bill per 160-character segment. */
+  message: string;
+  /** Correlates the log line with what caused it. */
+  reference?: string;
+}
+
+interface SmsResult {
+  delivered: boolean;
+  /** True while #38 is unimplemented, so a caller can tell a stub from a send. */
+  stubbed: boolean;
+  /** Masked, never the full number — see `maskPhone`. */
+  to: string;
+  segments: number;
+}
+
+/** The fields of a booking that determine its check-in window. */
+interface CheckInWindowInput {
+  eventDate: Date | string;
+  eventEndAt?: Date | string | null;
+}
+
+interface CheckInWindow {
+  validFrom: Date;
+  validTo: Date;
+}
+
+/**
+ * The result of `issueForBooking`.
+ *
+ * `issued` distinguishes a code this call created from one that already
+ * existed. It matters: the funding webhook is retryable, and a retry must send
+ * nothing, because the client already has the code from the first delivery.
+ */
+interface IssuedCheckInCode {
+  code: string;
+  validFrom: Date | null;
+  validTo: Date | null;
+  issued: boolean;
+}
+
+/** Why a code cannot be redeemed right now, phrased for the person reading it. */
+interface CheckInValidity {
+  valid: boolean;
+  reason: 'already_redeemed' | 'too_early' | 'expired' | null;
+  message: string | null;
+}
+
+/** The minimum a booking must carry for `validityOf` to judge it. */
+interface RedeemableBooking {
+  checkIn?: { id: string } | null;
+  checkInCodeValidFrom?: Date | null;
+  checkInCodeValidTo?: Date | null;
+}
+
+interface CheckInCodeRequest {
+  bookingId: string;
+  userId: string;
+}
+
+/** What `GET /bookings/:id/check-in-code` returns. To the client, and only the client. */
+interface CheckInCodeView extends CheckInValidity {
+  bookingId: string;
+  /** Hyphenated for reading aloud: `K7QX-M2F9`. */
+  code: string;
+  /** A PNG data URL. Rendered server-side so the code reaches no third party. */
+  qrDataUrl: string;
+  validFrom: Date | null;
+  validTo: Date | null;
+}
+
+/** The outcome of one check-in-code SMS job (`jobs/checkInCodeJob.ts`). */
+interface CheckInCodeDelivery {
+  bookingId: string;
+  sent: boolean;
+  reason?: 'booking_missing' | 'booking_not_active' | 'no_code';
+  /** Absent unless `sent`. False while #38 is unimplemented. */
+  delivered?: boolean;
+  stubbed?: boolean;
+}

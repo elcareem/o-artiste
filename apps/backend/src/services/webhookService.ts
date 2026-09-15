@@ -28,6 +28,11 @@ const prisma = require('../lib/prisma.ts');
 const escrowpay = require('../lib/escrowpay.ts');
 const bookingService = require('./bookingService.ts');
 const ledger = require('./ledgerService.ts');
+const checkInService = require('./checkInService.ts');
+// Safe to require at module load: it opens no Redis connection until `schedule`
+// is called, which is what keeps the webhook endpoint answering when the queue
+// is the thing that is down.
+const checkInCodeJob = require('../jobs/checkInCodeJob.ts');
 
 const EVENT_ID_HEADER = 'escrowpay-event-id';
 const DELIVERY_ID_HEADER = 'escrowpay-delivery-id';
@@ -265,10 +270,21 @@ async function handleTransactionFunded(payload: WebhookPayload): Promise<Webhook
     );
   }
 
+  // The check-in code is issued INSIDE the funding transaction (#22). It is the
+  // artist's only route to payment, so a booking that is funded without one is
+  // a booking nobody can complete — that must not be a state the database can
+  // hold, not even briefly.
   await prisma.$transaction(async (tx: PrismaTx) => {
     await bookingService.transition({ bookingId: booking.id, to: 'FUNDED_HELD', client: tx });
     await ledger.recordFunding(tx, booking);
+    await checkInService.issueForBooking(tx, booking);
   });
+
+  // Queued after the commit, never inside it: a job that fired against a
+  // transaction that then rolled back would text a client a code we do not
+  // have. `schedule` swallows its own failures for the same reason the code is
+  // issued transactionally — the money movement must not depend on Redis.
+  await checkInCodeJob.schedule(booking);
 
   console.log(`[webhook] booking ${booking.id} funded, ${fundedMinor} kobo held`);
   return { note: 'funded', bookingId: booking.id };

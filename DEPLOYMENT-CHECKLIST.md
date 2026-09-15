@@ -371,7 +371,13 @@ than an outage. Remove the previous value after the overlap closes.
 - [ ] SMS provider account (e.g. Termii) → API key and sender ID
 - [ ] Transactional email provider → API key and verified sender domain
 
-**Gates:** #38, and the SMS delivery criterion deferred from #22.
+**Gates:** #38. Real SMS transport — #22's delivery is met by the job log until
+then.
+
+**Do not set `SMS_API_KEY` before #38 lands.** `lib/notifications.ts` reads it
+as the signal that a provider exists, and will throw rather than log. That is
+deliberate: a half-configured notifier that silently drops a client's check-in
+code is worse than one that is obviously absent.
 
 ---
 
@@ -406,6 +412,9 @@ Maintained alongside `apps/backend/.env.example`.
 | `ESCROWPAY_AMOUNT_UNIT` | provider client | `kobo` or `naira` — open item `docs/00` §11.8 |
 | `ESCROWPAY_TIMEOUT_MS` | provider client | below the host timeout recorded at #2 |
 | `AUTO_RELEASE_GRACE_HOURS` | auto-release job | open item `docs/00` §11.5 |
+| `CHECKIN_WINDOW_BEFORE_HOURS` | check-in codes | #22 — default `2`; artists arrive early to set up |
+| `CHECKIN_WINDOW_AFTER_HOURS` | check-in codes | #22 — default `12`; a forgotten check-in must not become a payment dispute |
+| `CHECKIN_CODE_SMS_LEAD_HOURS` | check-in codes | #22 — default `24`; when the SMS goes out, not when the code is issued |
 | `SMS_API_KEY` / `SMS_SENDER_ID` | notifications | #38 |
 | `EMAIL_API_KEY` / `EMAIL_FROM` | notifications | #38 |
 | `NEXT_PUBLIC_API_URL` | web | #3 |

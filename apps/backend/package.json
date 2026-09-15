@@ -30,7 +30,8 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3",
-    "prisma": "^5.22.0"
+    "prisma": "^5.22.0",
+    "qrcode": "^1.5.4"
   },
   "prisma": {
     "seed": "node prisma/seed.ts"
