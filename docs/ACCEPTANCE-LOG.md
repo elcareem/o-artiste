@@ -3585,3 +3585,129 @@ The deployed verification itself: `RUN_WORKERS_IN_WEB=true` has to be set on
 `o-artiste-api`, after which the two remaining boxes (a job firing on the
 deployed host, and surviving a deployed-process restart) can be ticked. Both
 setups are written up in `DEPLOYMENT-CHECKLIST.md` under "Running the workers".
+
+---
+
+## #26 — feat(backend): release execution
+
+Branch `feat/26-release-execution`. Verified 2026-09-15.
+
+```
+$ npm run test:backend
+# tests 193  # pass 193  # fail 0        (12 new)
+
+$ npm run check:rules
+passed 8    failed 0    skipped 0
+```
+
+The first issue in Phase 3, and the first time money leaves escrow.
+
+### `[x]` A ₦200,000 booking at 5% disburses to the artist
+
+**The issue text says ₦187,930. That figure is pre-#18 and is not what this
+implements.** The provider's live fee configuration charges money-in to the
+payer at funding and money-out to the platform at payout, rather than deducting
+both from the escrow, so the artist's share is reduced by **commission alone**.
+`docs/05` §1 and `docs/08` §5 both carry the corrected figure.
+
+```
+booking                20,000,000    ₦200,000
+commission at 500 bps   1,000,000     ₦10,000
+artist payout          19,000,000    ₦190,000   ← released
+payout fee (platform)       7,000         ₦70
+platform net              993,000      ₦9,930
+```
+
+Asserted on the **amount passed to the provider**, not only on the computed
+figure — `calls[0].amountKobo === 19,000,000`. **Only the artist's share leaves
+escrow.** What remains is the platform's commission, which is not the artist's
+money and must not be released to them and clawed back.
+
+The ledger reconciles to zero, with each party's position asserted
+independently: client −₦202,000, artist +₦190,000, platform +₦9,930, provider
++₦2,070.
+
+### `[x]` An outstanding fee liability is netted off, with both halves in the ledger
+
+```
+earned      19,000,000    ₦190,000
+recovered      207,000      ₦2,070
+disbursed   18,793,000    ₦187,930   ← what left escrow
+```
+
+The accrual sits on the booking that caused it and the settlement on the booking
+that paid it off, **each as a balanced pair**, so both bookings still reconcile
+to zero independently even though the liability spans two of them. Asserted on
+both.
+
+**The artist's earnings are recorded gross, with the recovery as its own
+entry** — `RELEASED ARTIST +₦190,000` and `FEE_LIABILITY_SETTLED ARTIST
+−₦2,070` — rather than a single netted ₦187,930. Netting balances identically
+and hides what was earned as distinct from what was recovered, which is exactly
+the question an artist disputing a deduction will ask.
+
+**Whole liabilities only, oldest first.** `FeeLiability` has no
+partially-settled state, so settling half would need either a new state or a
+mutated amount, and mutating a recorded obligation is the mistake the ledger
+exists to avoid. A liability the payout cannot cover in full stays outstanding
+for the next one — tested with a ₦500,000 liability against a ₦19,000 payout:
+nothing settled, payout untouched, **never negative**. Three ₦2,070 liabilities
+against the same payout all settle.
+
+### `[x]` A booking created before a commission change pays out at its snapshotted rate
+
+The rate is changed to 900 bps after the booking exists — a **raise**, so a
+payout reading live configuration would shortchange the artist and the
+difference would be ours. Live config is asserted to have genuinely changed,
+then the release pays 500 bps: **₦190,000, not ₦182,000.**
+
+### `[x]` No route handler or job calls the provider release method directly
+
+Enforced by `check:rules` and asserted again from inside the test suite, so the
+guarantee holds even if someone runs only `npm test`.
+
+### Ordering: the provider is called BEFORE anything is recorded
+
+The two failure modes are not equally bad, and the order is chosen accordingly:
+
+| Order | Failure leaves |
+|---|---|
+| Record, then call | Booking `RELEASED`, ledger says released, **no money moved**. The artist is not paid and the system believes they were. Silent until someone reconciles by hand. |
+| **Call, then record** | Money moved, not yet recorded. A retry reuses the same idempotency key, so the provider returns the **original** release rather than paying twice, and the recording succeeds. **Self-healing.** |
+
+Tested: a provider failure leaves the booking in `AWAITING_CONFIRMATION`, no
+`RELEASED` ledger entry, and the ledger still summing to −₦200,000 — the money
+still in escrow. A second release returns what happened without calling the
+provider again, and the idempotency key is asserted to be
+`${escrowReference}_release` — stable, so a genuine retry before our record
+landed cannot pay twice.
+
+### A deliberate decision: a suspended artist is still paid
+
+Account standing is re-checked at funding (added at #20) but **not** here. An
+artist suspended after performing has still performed, and withholding money for
+an event that happened would be confiscation rather than enforcement. Suspension
+governs future bookings; #33's strikes are the mechanism for conduct. Tested
+explicitly so the decision cannot be silently reversed.
+
+### Mutation-tested
+
+Both headline criteria were confirmed to be load-bearing by breaking the service
+and checking the suite goes red:
+
+```
+read live config instead of the snapshot   → the snapshot test fails
+release the gross net, ignoring liabilities → the liability test fails
+```
+
+### A stale test corrected
+
+`test/schema.test.js` still encoded the **pre-#18 fee model** — both provider
+fees out of the escrow, artist netting ₦187,930 — and **kept passing
+throughout**, because a set of numbers that sums to zero still sums to zero when
+the model behind them is wrong.
+
+Corrected to the real shape. Worth recording as a lesson rather than a tidy-up:
+**reconciliation is necessary, not sufficient.** It catches a dropped or
+double-counted entry; it cannot catch a consistently wrong model. #26 asserts the
+figures themselves, computed by `feeService`, rather than only the sum.
