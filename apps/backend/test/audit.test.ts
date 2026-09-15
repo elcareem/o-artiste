@@ -28,7 +28,7 @@ const creds = (role = 'CLIENT') => {
   };
 };
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -55,7 +55,7 @@ async function waitForAudit(where, attempts = 40) {
 }
 
 describe('an attempt to self-assign SUPER_ADMIN is recorded in the audit log', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const attempt = { ...creds(), role: 'SUPER_ADMIN' };
 
     const res = await post(server, '/auth/register', attempt);
@@ -81,9 +81,9 @@ describe('an attempt to self-assign SUPER_ADMIN is recorded in the audit log', a
 });
 
 describe('an authenticated user reaching above their level is recorded, naming them', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const c = creds('CLIENT');
-    const { token, user } = await (await post(server, '/auth/register', c)).json();
+    const { token, user } = ((await (await post(server, '/auth/register', c)).json()) as any);
 
     const res = await fetch(`${server.url}/admin/config/commission`, {
       method: 'PUT',
@@ -106,7 +106,7 @@ describe('an authenticated user reaching above their level is recorded, naming t
 });
 
 describe('a permitted request writes no denial row', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { hashPassword } = require('../src/lib/auth.ts');
     const c = creds('SUPER_ADMIN');
     await prisma.user.create({
@@ -118,9 +118,9 @@ describe('a permitted request writes no denial row', async () => {
       },
     });
 
-    const { token, user } = await (
+    const { token, user } = ((await (
       await post(server, '/auth/login', { email: c.email, password: c.password })
-    ).json();
+    ).json()) as any);
 
     const res = await fetch(`${server.url}/admin/config/commission`, {
       headers: { Authorization: `Bearer ${token}` },

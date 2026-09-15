@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 
 const fee = require('../src/services/feeService.ts');
 
-const N = (naira) => naira * 100; // naira → kobo, for readable test data
+const N = (naira: number) => naira * 100; // naira → kobo, for readable test data
 
 // ---------------------------------------------------------------------------
 // The canonical example

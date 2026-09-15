@@ -114,7 +114,7 @@ async function seedUsers() {
       continue;
     }
 
-    const user = await prisma.$transaction(async (tx) => {
+    const user = await prisma.$transaction(async (tx: PrismaTx) => {
       const u = await tx.user.create({
         data: {
           email: spec.email,
@@ -162,7 +162,7 @@ async function seedUsers() {
   return created;
 }
 
-async function seedCommissionRate(setByUserId) {
+async function seedCommissionRate(setByUserId: string) {
   const existing = await prisma.commissionRate.findUnique({ where: { id: COMMISSION_RATE_ID } });
   if (existing) return existing;
 
@@ -176,7 +176,7 @@ async function seedCommissionRate(setByUserId) {
   });
 }
 
-async function seedCancellationTiers(setByUserId) {
+async function seedCancellationTiers(setByUserId: string) {
   const existing = await prisma.cancellationTier.findMany({
     where: { versionId: TIER_VERSION_ID },
   });

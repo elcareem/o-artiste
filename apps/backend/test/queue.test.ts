@@ -84,13 +84,13 @@ describe('a job that throws is retried per the configured backoff', async () => 
     // Fails twice, succeeds on the third attempt — inside the default of 3.
     await queue.add(echoJob.JOB_NAME, { message: 'flaky', failTimes: 2 }, { jobId });
 
-    const mine = () => attempts.filter((a) => a.id === jobId);
+    const mine = () => attempts.filter((a: any) => a.id === jobId);
     const done = await until(() => (mine().length >= 3 ? mine() : null), { timeout: 25000 });
 
     assert.ok(done, `expected 3 attempts, saw ${mine().length}`);
     assert.equal(done.length, 3);
     assert.deepEqual(
-      done.map((a) => a.attempt),
+      done.map((a: any) => a.attempt),
       [1, 2, 3],
       'attempts are numbered in order'
     );
@@ -127,7 +127,7 @@ describe('a job failing all retries is visible in the dead-letter queue', async 
     const letter = await until(
       async () => {
         const jobs = await queueLib.deadLetterJobs();
-        return jobs.find((j) => j.data?.data?.message === 'doomed');
+        return jobs.find((j: any) => j.data?.data?.message === 'doomed');
       },
       { timeout: 25000 }
     );
@@ -169,8 +169,8 @@ describe('scheduled jobs survive a process restart', async () => {
   });
 
   const output = [];
-  worker.stdout.on('data', (d) => output.push(d.toString()));
-  worker.stderr.on('data', (d) => output.push(d.toString()));
+  worker.stdout.on('data', (d: any) => output.push(d.toString()));
+  worker.stderr.on('data', (d: any) => output.push(d.toString()));
 
   try {
     const ran = await until(

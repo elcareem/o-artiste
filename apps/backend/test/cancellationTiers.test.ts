@@ -31,7 +31,7 @@ const VALID = [
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
 
-async function makeUser(role) {
+async function makeUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   const password = 'correct horse battery staple';
@@ -46,7 +46,7 @@ async function makeUser(role) {
   return { user, password };
 }
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -62,7 +62,7 @@ async function tokenFor(server, role) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: user.email, password }),
   });
-  return { ...(await res.json()), user };
+  return { ...(((await res.json()) as any)), user };
 }
 
 const putTiers = (server, body, token) =>
@@ -79,7 +79,7 @@ const putTiers = (server, body, token) =>
 async function rejectsNaming(server, token, tiers, pattern, label) {
   const res = await putTiers(server, { tiers, reason: 'test' }, token);
   assert.equal(res.status, 400, `${label}: expected 400`);
-  const { error } = await res.json();
+  const { error } = ((await res.json()) as any);
   assert.match(error, pattern, `${label}: message must name the problem, got: ${error}`);
   return error;
 }
@@ -87,7 +87,7 @@ async function rejectsNaming(server, token, tiers, pattern, label) {
 // ---------------------------------------------------------------------------
 
 describe('submitting overlapping ranges returns 400 with a message naming the conflict', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const overlapping = [
@@ -105,7 +105,7 @@ describe('submitting overlapping ranges returns 400 with a message naming the co
 });
 
 describe('submitting a set with a gap at days 3-4 returns 400 naming that window', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const gapped = [
@@ -122,7 +122,7 @@ describe('submitting a set with a gap at days 3-4 returns 400 naming that window
 });
 
 describe('a single-day gap is named in the singular', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const gapped = [
@@ -136,7 +136,7 @@ describe('a single-day gap is named in the singular', async () => {
 });
 
 describe('submitting a row summing to 9500 bps returns 400', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const wrongSum = [
@@ -152,7 +152,7 @@ describe('submitting a row summing to 9500 bps returns 400', async () => {
 });
 
 describe('a set that does not cover day 0 is rejected', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const noDayZero = [
@@ -166,7 +166,7 @@ describe('a set that does not cover day 0 is rejected', async () => {
 });
 
 describe('the open-ended band is required, unique, and must be the top band', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     // None open-ended: cancellations made far in advance match nothing.
@@ -196,7 +196,7 @@ describe('the open-ended band is required, unique, and must be the top band', as
 });
 
 describe('rows are validated individually before the set is considered', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const cases = [
@@ -214,10 +214,10 @@ describe('rows are validated individually before the set is considered', async (
 });
 
 describe('a prior tier set remains queryable after a change', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
-    const first = await (await putTiers(server, { tiers: VALID, reason: 'initial' }, token)).json();
+    const first = ((await (await putTiers(server, { tiers: VALID, reason: 'initial' }, token)).json()) as any);
 
     // A restructured table — a new 14-day band, which is exactly the change the
     // issue says rows must be addable for.
@@ -228,9 +228,9 @@ describe('a prior tier set remains queryable after a change', async () => {
       { minDaysBefore: 7, maxDaysBefore: 13, clientRefundBps: 8000, artistCompensationBps: 2000 },
       { minDaysBefore: 14, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
     ];
-    const second = await (
+    const second = ((await (
       await putTiers(server, { tiers: restructured, reason: 'added a 14-day band' }, token)
-    ).json();
+    ).json()) as any);
 
     assert.notEqual(second.current.versionId, first.current.versionId);
     assert.equal(second.current.tiers.length, 5, 'rows are addable, not only editable');
@@ -251,7 +251,7 @@ describe('a prior tier set remains queryable after a change', async () => {
 });
 
 describe('a non-super-admin receives 403', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     for (const role of ['CLIENT', 'ARTIST', 'ADMIN']) {
       const { token } = await tokenFor(server, role);
       const res = await putTiers(server, { tiers: VALID, reason: 'attempt' }, token);
@@ -270,15 +270,15 @@ describe('a non-super-admin receives 403', async () => {
 });
 
 describe('a change requires a written reason and is recorded in the audit log', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token, user } = await tokenFor(server, 'SUPER_ADMIN');
 
     assert.equal((await putTiers(server, { tiers: VALID }, token)).status, 400);
     assert.equal((await putTiers(server, { tiers: VALID, reason: '  ' }, token)).status, 400);
 
-    const saved = await (
+    const saved = ((await (
       await putTiers(server, { tiers: VALID, reason: 'aligning with provider fees' }, token)
-    ).json();
+    ).json()) as any);
 
     const row = await prisma.auditLog.findFirst({
       where: { action: 'CANCELLATION_TIERS_CHANGED', entityId: saved.current.versionId },
@@ -311,7 +311,7 @@ describe('the validator is pure, so the same rules hold without a request', asyn
 });
 
 describe('every day resolves to exactly one band in a saved set', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
     await putTiers(server, { tiers: VALID, reason: 'coverage check' }, token);
 
@@ -319,7 +319,7 @@ describe('every day resolves to exactly one band in a saved set', async () => {
 
     for (let day = 0; day <= 400; day++) {
       const matching = tiers.filter(
-        (t) => day >= t.minDaysBefore && (t.maxDaysBefore === null || day <= t.maxDaysBefore)
+        (t: any) => day >= t.minDaysBefore && (t.maxDaysBefore === null || day <= t.maxDaysBefore)
       );
       assert.equal(matching.length, 1, `day ${day} matched ${matching.length} bands`);
     }

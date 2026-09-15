@@ -25,7 +25,7 @@ test.before(async () => {
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
-const N = (naira) => naira * 100;
+const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
@@ -34,7 +34,7 @@ const DEFAULT_TIERS = [
   { minDaysBefore: 0, maxDaysBefore: 0, clientRefundBps: 1500, artistCompensationBps: 8500 },
 ];
 
-async function makeUser(role, extra = {}) {
+async function makeUser(role: UserRole, extra: Record<string, unknown> = {}) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   return prisma.user.create({
@@ -58,7 +58,7 @@ async function readyToFund({ acknowledge = true, clientParty = true, artistParty
     data: { rateBasisPoints: 500, effectiveFrom: new Date(), setByUserId: admin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t) => ({
+    data: DEFAULT_TIERS.map((t: CancellationTierSnapshot) => ({
       ...t,
       versionId: `v_${uniq()}`,
       effectiveFrom: new Date(),
@@ -101,7 +101,7 @@ async function readyToFund({ acknowledge = true, clientParty = true, artistParty
 }
 
 /** Replaces the provider client for one call. */
-async function withProvider(overrides, fn) {
+async function withProvider(overrides: Record<string, any>, fn: () => any) {
   const originals = {};
   for (const [name, impl] of Object.entries(overrides)) {
     originals[name] = escrowpay[name];
@@ -197,7 +197,7 @@ describe('a provider error leaves the booking in PENDING_PAYMENT with no orphane
             clientUserId: clientUser.id,
           })
         ),
-      (err) => err.status === 502,
+      (err: ThrownError) => err.status === 502,
       `${failing} must surface as a provider error`
     );
 
@@ -258,7 +258,7 @@ describe('funding is refused without an acknowledgement, even calling the servic
       withProvider(provider, () =>
         escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id })
       ),
-    (err) => err.status === 409
+    (err: ThrownError) => err.status === 409
   );
 
   // The gate is checked before any provider call — no escrow is created for a
@@ -317,7 +317,7 @@ describe('a party without an escrow identity cannot fund, and the provider is no
             clientUserId: clientUser.id,
           })
         ),
-      (err) => err.status === 409 && pattern.test(err.message),
+      (err: ThrownError) => err.status === 409 && pattern.test((err as ThrownError).message),
       `${label} without a party id`
     );
     assert.equal(called, false, `${label}: the provider must not be reached`);
@@ -336,7 +336,7 @@ describe('a booking already past PENDING_PAYMENT cannot be funded again', async 
           clientUserId: clientUser.id,
         })
       ),
-    (err) => err.status === 409 && /already been paid/i.test(err.message)
+    (err: ThrownError) => err.status === 409 && /already been paid/i.test((err as ThrownError).message)
   );
 });
 
@@ -352,7 +352,7 @@ describe('only the booking’s own client can fund it', async () => {
           clientUserId: stranger.clientUser.id,
         })
       ),
-    (err) => err.status === 404
+    (err: ThrownError) => err.status === 404
   );
 });
 
@@ -397,7 +397,7 @@ describe('an artist who is unverified or suspended cannot be funded into', async
 
     await assert.rejects(
       () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id }),
-      (err) => {
+      (err: ThrownError) => {
         assert.ok(err instanceof AppError, `${label}: expected an AppError`);
         assert.equal(err.status, 403, `${label}: expected 403`);
         return true;
@@ -418,7 +418,7 @@ describe('a client suspended after booking creation cannot fund either', async (
 
   await assert.rejects(
     () => escrowService.createEscrowForBooking({ bookingId: booking.id, clientUserId: clientUser.id }),
-    (err) => err.status === 403
+    (err: ThrownError) => err.status === 403
   );
 
   const after = await prisma.booking.findUnique({ where: { id: booking.id } });

@@ -76,13 +76,13 @@ describe('the admin endpoint surfaces the fallback so the UI can flag it', async
       },
     });
 
-    const { token } = await (
+    const { token } = ((await (
       await fetch(`${server.url}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: 'sa2@example.test', password }),
       })
-    ).json();
+    ).json()) as any);
 
     const res = await fetch(`${server.url}/admin/config/commission`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -91,7 +91,7 @@ describe('the admin endpoint surfaces the fallback so the UI can flag it', async
     // Previously this returned 500 on an unconfigured platform, taking the
     // admin screen down with it.
     assert.equal(res.status, 200);
-    const body = await res.json();
+    const body = ((await res.json()) as any);
     assert.equal(typeof body.current.isDefault, 'boolean');
   } finally {
     await server.close();

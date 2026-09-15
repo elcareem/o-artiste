@@ -42,7 +42,7 @@ async function makeArtist({ verified = true, standing = 'GOOD' } = {}) {
   return { user, artist };
 }
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -57,10 +57,10 @@ async function login(server, email) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password: PASSWORD }),
   });
-  return (await res.json()).token;
+  return (((await res.json()) as any)).token;
 }
 
-const putProfile = (server, artistId, body, token) =>
+const putProfile = (server: TestServer, artistId: string, body?: unknown, token?: string) =>
   fetch(`${server.url}/artists/${artistId}`, {
     method: 'PUT',
     headers: {
@@ -73,7 +73,7 @@ const putProfile = (server, artistId, body, token) =>
 // ---------------------------------------------------------------------------
 
 describe('a rate of ₦19,999 or ₦3,000,001 returns 400 naming the permitted range', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { user, artist } = await makeArtist();
     const token = await login(server, user.email);
 
@@ -87,7 +87,7 @@ describe('a rate of ₦19,999 or ₦3,000,001 returns 400 naming the permitted r
       const res = await putProfile(server, artist.id, { baseRateKobo: kobo }, token);
       assert.equal(res.status, 400, `${label} must be rejected`);
 
-      const { error } = await res.json();
+      const { error } = ((await res.json()) as any);
       // The message must NAME the limit. "Invalid rate" leaves an artist
       // guessing at a bound they have no way to discover.
       assert.match(error, /₦20,000/, `${label}: message must state the floor`);
@@ -103,7 +103,7 @@ describe('a rate of ₦19,999 or ₦3,000,001 returns 400 naming the permitted r
 });
 
 describe('an artist editing another artist’s profile receives 403', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const alice = await makeArtist();
     const bob = await makeArtist();
 
@@ -137,12 +137,12 @@ describe('an artist editing another artist’s profile receives 403', async () =
 });
 
 describe('the rate is stored and returned as a kobo integer, never a formatted string', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { user, artist } = await makeArtist();
     const token = await login(server, user.email);
 
     const res = await putProfile(server, artist.id, { baseRateKobo: 25000000 }, token);
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     assert.equal(body.artist.baseRateKobo, 25000000);
     assert.equal(typeof body.artist.baseRateKobo, 'number');
@@ -159,7 +159,7 @@ describe('the rate is stored and returned as a kobo integer, never a formatted s
 });
 
 describe('non-integer and non-numeric rates are refused', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { user, artist } = await makeArtist();
     const token = await login(server, user.email);
 
@@ -176,7 +176,7 @@ describe('non-integer and non-numeric rates are refused', async () => {
 });
 
 describe('a profile becomes complete only when every required field is set', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { user, artist } = await makeArtist();
     const token = await login(server, user.email);
 
@@ -187,18 +187,18 @@ describe('a profile becomes complete only when every required field is set', asy
       'baseRateKobo',
     ]);
 
-    let body = await (await putProfile(server, artist.id, { category: 'Afrobeats' }, token)).json();
+    let body = ((await (await putProfile(server, artist.id, { category: 'Afrobeats' }, token)).json()) as any);
     assert.equal(body.artist.profileComplete, false, 'still missing location and rate');
 
-    body = await (await putProfile(server, artist.id, { location: 'Lagos' }, token)).json();
+    body = ((await (await putProfile(server, artist.id, { location: 'Lagos' }, token)).json()) as any);
     assert.equal(body.artist.profileComplete, false, 'still missing the rate');
 
-    body = await (await putProfile(server, artist.id, { baseRateKobo: 5000000 }, token)).json();
+    body = ((await (await putProfile(server, artist.id, { baseRateKobo: 5000000 }, token)).json()) as any);
     assert.equal(body.artist.profileComplete, true);
     assert.equal(body.listable, true);
 
     // Clearing a required field makes it incomplete again.
-    body = await (await putProfile(server, artist.id, { baseRateKobo: null }, token)).json();
+    body = ((await (await putProfile(server, artist.id, { baseRateKobo: null }, token)).json()) as any);
     assert.equal(body.artist.profileComplete, false);
     assert.equal(body.listable, false);
   });

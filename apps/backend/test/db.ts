@@ -99,7 +99,7 @@ async function truncate(prisma, schema) {
   );
 
   const names = tables
-    .map((t) => t.tablename)
+    .map((t: any) => t.tablename)
     .filter((name) => name !== '_prisma_migrations')
     .map((name) => `"${schema}"."${name}"`);
 

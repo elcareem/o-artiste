@@ -37,7 +37,7 @@ test.after(async () => {
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
-const N = (naira) => naira * 100;
+const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
@@ -46,7 +46,7 @@ const DEFAULT_TIERS = [
   { minDaysBefore: 0, maxDaysBefore: 0, clientRefundBps: 1500, artistCompensationBps: 8500 },
 ];
 
-async function makeUser(role) {
+async function makeUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   return prisma.user.create({
@@ -69,7 +69,7 @@ async function fundableBooking({ amountKobo = N(200000) } = {}) {
     data: { rateBasisPoints: 500, effectiveFrom: new Date(), setByUserId: admin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t) => ({
+    data: DEFAULT_TIERS.map((t: CancellationTierSnapshot) => ({
       ...t,
       versionId: `v_${uniq()}`,
       effectiveFrom: new Date(),
@@ -141,11 +141,11 @@ async function post(d, { headers = {}, raw = null } = {}) {
     headers: { ...d.headers, ...headers },
     body: raw ?? d.raw,
   });
-  return { status: res.status, body: await res.json() };
+  return { status: res.status, body: ((await res.json()) as any) };
 }
 
 /** Replaces provider methods for the duration of a call. */
-async function withProvider(overrides, fn) {
+async function withProvider(overrides: Record<string, any>, fn: () => any) {
   const originals = {};
   for (const [name, impl] of Object.entries(overrides)) {
     originals[name] = escrowpay[name];

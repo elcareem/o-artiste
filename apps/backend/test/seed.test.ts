@@ -76,7 +76,7 @@ describe('seeded accounts cover every role, with transacting users pre-verified'
   // its schema: no other suite can add a user here. Before isolation these had
   // to be scoped to known seed emails, which measured the right thing but
   // depended on remembering to do it.
-  const byRole = async (role) => prisma.user.findMany({ where: { role } });
+  const byRole = async (role: UserRole) => prisma.user.findMany({ where: { role } });
 
   assert.equal((await byRole('SUPER_ADMIN')).length, 1);
   assert.equal((await byRole('ADMIN')).length, 1);
@@ -154,7 +154,7 @@ describe('the default tier set has no gaps or overlaps in its day ranges', async
   assert.equal(tiers[0].minDaysBefore, 0);
 
   // Exactly one open-ended top band, and it is the last one.
-  const openEnded = tiers.filter((t) => t.maxDaysBefore === null);
+  const openEnded = tiers.filter((t: any) => t.maxDaysBefore === null);
   assert.equal(openEnded.length, 1);
   assert.equal(openEnded[0], tiers[tiers.length - 1]);
 
@@ -174,7 +174,7 @@ describe('the default tier set has no gaps or overlaps in its day ranges', async
   // Every day from 0 to 30 resolves to exactly one band.
   for (let day = 0; day <= 30; day++) {
     const matching = tiers.filter(
-      (t) => day >= t.minDaysBefore && (t.maxDaysBefore === null || day <= t.maxDaysBefore)
+      (t: any) => day >= t.minDaysBefore && (t.maxDaysBefore === null || day <= t.maxDaysBefore)
     );
     assert.equal(matching.length, 1, `day ${day} must match exactly one band, matched ${matching.length}`);
   }

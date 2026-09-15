@@ -23,7 +23,7 @@ if (hasKey && !onTestBook) {
 }
 
 let seq = 0;
-const ref = (p) => `test_${p}_${Date.now()}_${seq++}`;
+const ref = (p: any) => `test_${p}_${Date.now()}_${seq++}`;
 
 /**
  * Any identifier ending in an even digit verifies in the simulator, and an
@@ -139,7 +139,7 @@ describe('an odd-digit identifier fails verification with a reason, not a crash'
         email: `oartiste.fail.${Date.now()}@gmail.com`,
         reference: ref('fail'),
       }),
-    (err) => {
+    (err: ThrownError) => {
       assert.equal(err.providerCode, 'identity_verification_failed');
       assert.match(err.providerMessage, /data_mismatch/);
       return true;
@@ -238,7 +238,7 @@ describe('release and refund reject an unfunded transaction rather than half-act
     ['release', () => ep.release({ transactionId: state.transactionId, reference: ref('rel'), amountKobo: 1000000 })],
     ['refund', () => ep.refund({ transactionId: state.transactionId, reference: ref('ref'), amountKobo: 1000000 })],
   ]) {
-    await assert.rejects(fn, (err) => {
+    await assert.rejects(fn, (err: ThrownError) => {
       assert.equal(err.status, 502, `${name} surfaces as a provider error`);
       assert.ok(err.providerCode || err.providerMessage, `${name} carries diagnostics`);
       assert.ok(!JSON.stringify(err).includes(process.env.ESCROWPAY_API_KEY), 'never leaks the key');

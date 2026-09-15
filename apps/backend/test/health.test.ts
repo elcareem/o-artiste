@@ -8,7 +8,7 @@ test('GET /health returns 200 with {"status":"ok"}', async () => {
   const server = await startServer(createApp());
   try {
     const res = await fetch(`${server.url}/health`);
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     assert.equal(res.status, 200);
     assert.deepEqual(body, { status: 'ok' });
@@ -21,7 +21,7 @@ test('an unknown route returns the unified error shape', async () => {
   const server = await startServer(createApp());
   try {
     const res = await fetch(`${server.url}/no-such-route`);
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     assert.equal(res.status, 404);
     // Exactly one key, named error, carrying a human-readable string.
@@ -42,7 +42,7 @@ test('malformed JSON is reported as a client error, not a 500', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: '{"broken":',
     });
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     assert.equal(res.status, 400);
     assert.deepEqual(Object.keys(body), ['error']);

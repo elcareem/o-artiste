@@ -26,7 +26,7 @@ test.before(async () => {
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
 const PASSWORD = 'correct horse battery staple';
-const N = (naira) => naira * 100;
+const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
@@ -35,7 +35,7 @@ const DEFAULT_TIERS = [
   { minDaysBefore: 0, maxDaysBefore: 0, clientRefundBps: 1500, artistCompensationBps: 8500 },
 ];
 
-async function makeUser(role, extra = {}) {
+async function makeUser(role: UserRole, extra: Record<string, unknown> = {}) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   return prisma.user.create({
@@ -64,7 +64,7 @@ async function scenario() {
   // set, and the failure would look like a bug in the snapshot.
   const versionId = `v_${uniq()}`;
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t) => ({
+    data: DEFAULT_TIERS.map((t: CancellationTierSnapshot) => ({
       ...t,
       versionId,
       effectiveFrom: new Date(),
@@ -137,7 +137,7 @@ async function withStubbedProvider(fn) {
   }
 }
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -152,10 +152,10 @@ async function login(server, email) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password: PASSWORD }),
   });
-  return (await res.json()).token;
+  return (((await res.json()) as any)).token;
 }
 
-const call = (server, method, path, body, token) =>
+const call = (server: TestServer, method: string, path: string, body?: unknown, token?: string) =>
   fetch(`${server.url}${path}`, {
     method,
     headers: {
@@ -168,21 +168,21 @@ const call = (server, method, path, body, token) =>
 // ---------------------------------------------------------------------------
 
 describe('attempting to fund a booking with no acknowledgement returns 409', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { clientUser, booking } = await scenario();
     const token = await login(server, clientUser.email);
 
     const res = await call(server, 'POST', `/bookings/${booking.id}/funding`, {}, token);
     assert.equal(res.status, 409);
 
-    const { error } = await res.json();
+    const { error } = ((await res.json()) as any);
     // Says what is missing, rather than merely refusing.
     assert.match(error, /accept the cancellation terms/i);
   });
 });
 
 describe('the checkout step cannot be skipped by calling the funding endpoint directly', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { clientUser, booking } = await scenario();
     const token = await login(server, clientUser.email);
 
@@ -194,9 +194,9 @@ describe('the checkout step cannot be skipped by calling the funding endpoint di
     );
 
     // Acknowledge, then fund.
-    const terms = await (
+    const terms = ((await (
       await call(server, 'GET', `/bookings/${booking.id}/terms`, null, token)
-    ).json();
+    ).json()) as any);
 
     const acked = await call(
       server,
@@ -258,7 +258,7 @@ describe('the persisted row contains literal percentages, not a foreign key to a
 
   // The day-0 band is the literal figure, readable years later without any
   // other table.
-  assert.equal(row.tiersAsDisplayed.find((t) => t.minDaysBefore === 0).clientRefundBps, 1500);
+  assert.equal(row.tiersAsDisplayed.find((t: any) => t.minDaysBefore === 0).clientRefundBps, 1500);
 });
 
 describe('the acknowledgement survives the configuration changing afterwards', async () => {
@@ -285,7 +285,7 @@ describe('the acknowledgement survives the configuration changing afterwards', a
   const row = await ack.getAcknowledgement(booking.id);
   assert.equal(row.tiersAsDisplayed.length, 4, 'still what the client was shown');
   assert.equal(
-    row.tiersAsDisplayed.find((t) => t.minDaysBefore === 0).clientRefundBps,
+    row.tiersAsDisplayed.find((t: any) => t.minDaysBefore === 0).clientRefundBps,
     1500,
     'not the new 0 bps'
   );
@@ -294,12 +294,12 @@ describe('the acknowledgement survives the configuration changing afterwards', a
 });
 
 describe('acknowledgement must be an active act', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { clientUser, booking } = await scenario();
     const token = await login(server, clientUser.email);
-    const terms = await (
+    const terms = ((await (
       await call(server, 'GET', `/bookings/${booking.id}/terms`, null, token)
-    ).json();
+    ).json()) as any);
 
     // A pre-ticked box or a passive acceptance does not satisfy disclosure, so
     // anything other than an explicit true is refused.
@@ -319,13 +319,13 @@ describe('acknowledgement must be an active act', async () => {
 });
 
 describe('acknowledging terms that differ from the snapshot is refused', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { clientUser, booking } = await scenario();
     const token = await login(server, clientUser.email);
 
     // The client returns a table with a better day-0 refund than the one that
     // governs the booking. Recording that would make the evidence a lie.
-    const tampered = DEFAULT_TIERS.map((t) =>
+    const tampered = DEFAULT_TIERS.map((t: any) =>
       t.minDaysBefore === 0 ? { ...t, clientRefundBps: 9000, artistCompensationBps: 1000 } : t
     );
 
@@ -337,7 +337,7 @@ describe('acknowledging terms that differ from the snapshot is refused', async (
       token
     );
     assert.equal(res.status, 409);
-    assert.match((await res.json()).error, /changed while you were reading/i);
+    assert.match((((await res.json()) as any)).error, /changed while you were reading/i);
 
     assert.equal(await prisma.termsAcknowledgement.count({ where: { bookingId: booking.id } }), 0);
   });
@@ -352,7 +352,7 @@ describe('band order and key order do not cause a spurious mismatch', async () =
 
   // Same table, reversed, with keys written in a different order — which is
   // what a JSON round trip through a form might produce.
-  const reordered = [...snapshot].reverse().map((t) => ({
+  const reordered = [...snapshot].reverse().map((t: CancellationTierSnapshot) => ({
     artistCompensationBps: t.artistCompensationBps,
     maxDaysBefore: t.maxDaysBefore,
     clientRefundBps: t.clientRefundBps,
@@ -395,7 +395,7 @@ describe('acknowledging twice is idempotent, not an error or a duplicate', async
 });
 
 describe('only the booking’s own client can read or acknowledge its terms', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { booking } = await scenario();
     const other = await scenario();
     const strangerToken = await login(server, other.clientUser.email);
@@ -427,11 +427,11 @@ describe('only the booking’s own client can read or acknowledge its terms', as
 });
 
 describe('the terms endpoint returns the snapshot in full, with the acknowledgement state', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { clientUser, booking } = await scenario();
     const token = await login(server, clientUser.email);
 
-    let body = await (await call(server, 'GET', `/bookings/${booking.id}/terms`, null, token)).json();
+    let body = ((await (await call(server, 'GET', `/bookings/${booking.id}/terms`, null, token)).json()) as any);
     assert.equal(body.terms.tiers.length, 4, 'the full table, not a link to it');
     assert.equal(body.terms.commissionRateBps, 500);
     assert.equal(body.terms.acknowledged, false);
@@ -446,7 +446,7 @@ describe('the terms endpoint returns the snapshot in full, with the acknowledgem
       token
     );
 
-    body = await (await call(server, 'GET', `/bookings/${booking.id}/terms`, null, token)).json();
+    body = ((await (await call(server, 'GET', `/bookings/${booking.id}/terms`, null, token)).json()) as any);
     assert.equal(body.terms.acknowledged, true);
     assert.ok(body.terms.acknowledgedAt);
   });

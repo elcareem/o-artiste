@@ -46,7 +46,7 @@ test('a /webhooks/* path receives the raw body as a Buffer', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: RAW,
     });
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     console.log('  raw body isBuffer:', body.isBuffer);
     console.log('  raw body bytes   :', Buffer.byteLength(RAW));
@@ -67,7 +67,7 @@ test('a non-webhook path still receives parsed JSON', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ artistId: 'art_1', amountKobo: 20000000 }),
     });
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     assert.equal(body.isBuffer, false);
     assert.deepEqual(body.parsed, { artistId: 'art_1', amountKobo: 20000000 });
@@ -84,7 +84,7 @@ test('a path merely beginning with the prefix is not treated as a webhook', asyn
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ a: 1 }),
     });
-    const body = await res.json();
+    const body = ((await res.json()) as any);
 
     assert.equal(body.isBuffer, false, '/webhooksomething is not /webhooks/*');
   } finally {

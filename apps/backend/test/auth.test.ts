@@ -29,7 +29,7 @@ function credentials(role = 'CLIENT') {
   };
 }
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -38,7 +38,7 @@ async function withServer(fn) {
   }
 }
 
-const post = (server, path, body, token) =>
+const post = (server: TestServer, path: string, body?: unknown, token?: string) =>
   fetch(`${server.url}${path}`, {
     method: 'POST',
     headers: {
@@ -48,7 +48,7 @@ const post = (server, path, body, token) =>
     body: JSON.stringify(body),
   });
 
-const put = (server, path, body, token) =>
+const put = (server: TestServer, path: string, body?: unknown, token?: string) =>
   fetch(`${server.url}${path}`, {
     method: 'PUT',
     headers: {
@@ -58,13 +58,13 @@ const put = (server, path, body, token) =>
     body: JSON.stringify(body),
   });
 
-const get = (server, path, token) =>
+const get = (server: TestServer, path: string, token?: string) =>
   fetch(`${server.url}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
 
 /** Registers a user directly in the database with a role that is not public. */
-async function seedPrivilegedUser(role) {
+async function seedPrivilegedUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const c = credentials(role);
   const user = await prisma.user.create({
@@ -81,12 +81,12 @@ async function seedPrivilegedUser(role) {
 // ---------------------------------------------------------------------------
 
 describe('a registered user can log in and call GET /me', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const creds = credentials('CLIENT');
 
     const registered = await post(server, '/auth/register', creds);
     assert.equal(registered.status, 201);
-    const registerBody = await registered.json();
+    const registerBody = ((await registered.json()) as any);
     assert.ok(registerBody.token, 'registration returns a session token');
 
     const loggedIn = await post(server, '/auth/login', {
@@ -94,11 +94,11 @@ describe('a registered user can log in and call GET /me', async () => {
       password: creds.password,
     });
     assert.equal(loggedIn.status, 200);
-    const { token } = await loggedIn.json();
+    const { token } = ((await loggedIn.json()) as any);
 
     const me = await get(server, '/me', token);
     assert.equal(me.status, 200);
-    const body = await me.json();
+    const body = ((await me.json()) as any);
 
     assert.equal(body.user.email, creds.email.toLowerCase());
     assert.equal(body.user.role, 'CLIENT');
@@ -108,11 +108,11 @@ describe('a registered user can log in and call GET /me', async () => {
 });
 
 describe('GET /me never returns the password hash or the verification reference', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const creds = credentials('ARTIST');
-    const { token } = await (await post(server, '/auth/register', creds)).json();
+    const { token } = ((await (await post(server, '/auth/register', creds)).json()) as any);
 
-    const body = await (await get(server, '/me', token)).json();
+    const body = ((await (await get(server, '/me', token)).json()) as any);
     const serialised = JSON.stringify(body);
 
     assert.ok(!('passwordHash' in body.user), 'passwordHash must never leave the process');
@@ -122,9 +122,9 @@ describe('GET /me never returns the password hash or the verification reference'
 });
 
 describe('an expired or malformed token returns 401', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const creds = credentials('CLIENT');
-    const { token } = await (await post(server, '/auth/register', creds)).json();
+    const { token } = ((await (await post(server, '/auth/register', creds)).json()) as any);
 
     // Genuinely expired, not merely wrong.
     const expired = jwt.sign({ sub: 'someone', role: 'CLIENT' }, process.env.JWT_SECRET, {
@@ -143,7 +143,7 @@ describe('an expired or malformed token returns 401', async () => {
     for (const [label, bad] of cases) {
       const res = await get(server, '/me', bad);
       assert.equal(res.status, 401, `${label} token must be rejected`);
-      const body = await res.json();
+      const body = ((await res.json()) as any);
       assert.deepEqual(Object.keys(body), ['error'], `${label}: unified error shape`);
     }
 
@@ -153,9 +153,9 @@ describe('an expired or malformed token returns 401', async () => {
 });
 
 describe('a token for a deleted user is rejected, not trusted on its claims', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const creds = credentials('CLIENT');
-    const { token, user } = await (await post(server, '/auth/register', creds)).json();
+    const { token, user } = ((await (await post(server, '/auth/register', creds)).json()) as any);
 
     await prisma.client.deleteMany({ where: { userId: user.id } });
     await prisma.user.delete({ where: { id: user.id } });
@@ -167,22 +167,22 @@ describe('a token for a deleted user is rejected, not trusted on its claims', as
 });
 
 describe('each role is blocked from an endpoint above its level', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const clientCreds = credentials('CLIENT');
-    const { token: clientToken } = await (await post(server, '/auth/register', clientCreds)).json();
+    const { token: clientToken } = ((await (await post(server, '/auth/register', clientCreds)).json()) as any);
 
     const admin = await seedPrivilegedUser('ADMIN');
-    const { token: adminToken } = await (
+    const { token: adminToken } = ((await (
       await post(server, '/auth/login', { email: admin.credentials.email, password: admin.credentials.password })
-    ).json();
+    ).json()) as any);
 
     const superAdmin = await seedPrivilegedUser('SUPER_ADMIN');
-    const { token: superToken } = await (
+    const { token: superToken } = ((await (
       await post(server, '/auth/login', {
         email: superAdmin.credentials.email,
         password: superAdmin.credentials.password,
       })
-    ).json();
+    ).json()) as any);
 
     // CLIENT cannot reach an admin endpoint.
     assert.equal((await get(server, '/admin/ping', clientToken)).status, 403);
@@ -208,7 +208,7 @@ describe('each role is blocked from an endpoint above its level', async () => {
 });
 
 describe('there is NO public route by which an account can self-assign ADMIN or SUPER_ADMIN', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     for (const role of ['ADMIN', 'SUPER_ADMIN']) {
       const creds = { ...credentials('CLIENT'), role };
       const res = await post(server, '/auth/register', creds);
@@ -233,7 +233,7 @@ describe('there is NO public route by which an account can self-assign ADMIN or 
 });
 
 describe('registration validates its inputs and does not leak who holds an account', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const base = credentials('CLIENT');
 
     assert.equal((await post(server, '/auth/register', { ...base, email: 'nope' })).status, 400);
@@ -249,12 +249,12 @@ describe('registration validates its inputs and does not leak who holds an accou
 
     assert.equal(dupEmail.status, 409);
     assert.equal(dupPhone.status, 409);
-    assert.equal((await dupEmail.json()).error, (await dupPhone.json()).error);
+    assert.equal((((await dupEmail.json()) as any)).error, (((await dupPhone.json()) as any)).error);
   });
 });
 
 describe('login is uninformative about which half was wrong, and blocks suspended accounts', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const creds = credentials('CLIENT');
     await post(server, '/auth/register', creds);
 
@@ -263,7 +263,7 @@ describe('login is uninformative about which half was wrong, and blocks suspende
 
     assert.equal(wrongPassword.status, 401);
     assert.equal(noSuchUser.status, 401);
-    assert.equal((await wrongPassword.json()).error, (await noSuchUser.json()).error);
+    assert.equal((((await wrongPassword.json()) as any)).error, (((await noSuchUser.json()) as any)).error);
 
     await prisma.user.update({
       where: { email: creds.email },
@@ -273,12 +273,12 @@ describe('login is uninformative about which half was wrong, and blocks suspende
     const suspended = await post(server, '/auth/login', { email: creds.email, password: creds.password });
     assert.equal(suspended.status, 403);
     // Clear and non-technical (docs/06 §5).
-    assert.match((await suspended.json()).error, /suspended/i);
+    assert.match((((await suspended.json()) as any)).error, /suspended/i);
   });
 });
 
 describe('passwords are stored as bcrypt hashes, never in plaintext', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const creds = credentials('CLIENT');
     await post(server, '/auth/register', creds);
 

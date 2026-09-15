@@ -41,7 +41,7 @@ async function makeUser(role = 'CLIENT') {
   return { user, password };
 }
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -57,7 +57,7 @@ async function tokenFor(server, role = 'CLIENT') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: user.email, password }),
   });
-  return { token: (await res.json()).token, user };
+  return { token: (((await res.json()) as any)).token, user };
 }
 
 /** Replaces onboardParty for one call, restoring it afterwards. */
@@ -169,10 +169,10 @@ describe('a provider timeout leaves the user RETRYABLE, not failed', async () =>
         },
         () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
       ),
-    (err) => {
+    (err: ThrownError) => {
       // 503, not 403 — this is our partner being unreachable, not a rejection.
       assert.equal(err.status, 503);
-      assert.match(err.message, /try again/i);
+      assert.match((err as ThrownError).message, /try again/i);
       return true;
     }
   );
@@ -208,10 +208,10 @@ describe('a 4xx from the provider is a fixable request, not an outage', async ()
         },
         () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
       ),
-    (err) => {
+    (err: ThrownError) => {
       assert.equal(err.status, 400, 'a fixable request is 400, not 503');
-      assert.match(err.message, /check your email address/i);
-      assert.doesNotMatch(err.message, /few minutes/i, 'must not suggest waiting');
+      assert.match((err as ThrownError).message, /check your email address/i);
+      assert.doesNotMatch((err as ThrownError).message, /few minutes/i, 'must not suggest waiting');
       return true;
     }
   );
@@ -236,7 +236,7 @@ describe('a genuine mismatch is REJECTED and is not retryable', async () => {
         },
         () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901' })
       ),
-    (err) => err.status === 403
+    (err: ThrownError) => err.status === 403
   );
 
   const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
@@ -306,7 +306,7 @@ describe('input is validated before the provider is troubled', async () => {
           },
           () => service.verifyUser({ userId: user.id, method, identifier })
         ),
-      (err) => err.status === 400
+      (err: ThrownError) => err.status === 400
     );
     assert.equal(called, false, `${method}/${identifier} must not reach the provider`);
   }
@@ -316,14 +316,14 @@ describe('input is validated before the provider is troubled', async () => {
 });
 
 describe('the endpoints require auth and report status', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     assert.equal((await fetch(`${server.url}/me/verification`)).status, 401);
 
     const { token, user } = await tokenFor(server);
 
-    const before = await (
+    const before = ((await (
       await fetch(`${server.url}/me/verification`, { headers: { Authorization: `Bearer ${token}` } })
-    ).json();
+    ).json()) as any);
     assert.equal(before.verification.status, 'UNVERIFIED');
     assert.equal(before.verification.retryable, true);
 
@@ -336,15 +336,15 @@ describe('the endpoints require auth and report status', async () => {
     );
     assert.equal(res.status, 201);
 
-    const after = await (
+    const after = ((await (
       await fetch(`${server.url}/me/verification`, { headers: { Authorization: `Bearer ${token}` } })
-    ).json();
+    ).json()) as any);
     assert.equal(after.verification.status, 'VERIFIED');
 
     // GET /me reflects it too.
-    const me = await (
+    const me = ((await (
       await fetch(`${server.url}/me`, { headers: { Authorization: `Bearer ${token}` } })
-    ).json();
+    ).json()) as any);
     assert.equal(me.user.verificationStatus, 'VERIFIED');
     void user;
   });

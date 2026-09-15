@@ -19,7 +19,7 @@ test.before(async () => { if (ready) await ready; });
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
 
-async function makeUser(role) {
+async function makeUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   const password = 'correct horse battery staple';
@@ -34,7 +34,7 @@ async function makeUser(role) {
   return { user, password };
 }
 
-async function withServer(fn) {
+async function withServer(fn: (server: TestServer) => Promise<void>) {
   const server = await startServer(createApp());
   try {
     return await fn(server);
@@ -50,7 +50,7 @@ async function tokenFor(server, role) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: user.email, password }),
   });
-  const { token } = await res.json();
+  const { token } = ((await res.json()) as any);
   return { token, user };
 }
 
@@ -67,7 +67,7 @@ const putRate = (server, body, token) =>
 // ---------------------------------------------------------------------------
 
 describe('a non-super-admin token receives 403 from the endpoint', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     for (const role of ['CLIENT', 'ARTIST', 'ADMIN']) {
       const { token } = await tokenFor(server, role);
       const res = await putRate(server, { rateBasisPoints: 700, reason: 'attempt' }, token);
@@ -84,11 +84,11 @@ describe('a non-super-admin token receives 403 from the endpoint', async () => {
 });
 
 describe('changing the rate leaves the prior record intact and queryable', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
-    const first = await (await putRate(server, { rateBasisPoints: 500, reason: 'initial' }, token)).json();
-    const second = await (await putRate(server, { rateBasisPoints: 700, reason: 'raise' }, token)).json();
+    const first = ((await (await putRate(server, { rateBasisPoints: 500, reason: 'initial' }, token)).json()) as any);
+    const second = ((await (await putRate(server, { rateBasisPoints: 700, reason: 'raise' }, token)).json()) as any);
 
     assert.notEqual(second.current.id, first.current.id, 'a change writes a NEW record');
 
@@ -102,7 +102,7 @@ describe('changing the rate leaves the prior record intact and queryable', async
 describe('the resolver returns the correct historical rate for a past timestamp', async () => {
   // The canonical test from issue #7: set 5%, change to 7%, query yesterday,
   // get 5% back.
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token, user } = await tokenFor(server, 'SUPER_ADMIN');
 
     // A dedicated timeline, so neighbouring suites cannot perturb it.
@@ -140,10 +140,10 @@ describe('the resolver returns the correct historical rate for a past timestamp'
 });
 
 describe('a scheduled future rate does not take effect early', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
-    const nowRate = await (await putRate(server, { rateBasisPoints: 500, reason: 'now' }, token)).json();
+    const nowRate = ((await (await putRate(server, { rateBasisPoints: 500, reason: 'now' }, token)).json()) as any);
     const future = new Date(Date.now() + 30 * 86400000);
     await putRate(server, { rateBasisPoints: 900, effectiveFrom: future.toISOString(), reason: 'scheduled' }, token);
 
@@ -158,7 +158,7 @@ describe('a scheduled future rate does not take effect early', async () => {
 });
 
 describe('an audit row exists naming the actor for every change', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token, user } = await tokenFor(server, 'SUPER_ADMIN');
 
     await putRate(server, { rateBasisPoints: 500, reason: 'baseline' }, token);
@@ -170,9 +170,9 @@ describe('an audit row exists naming the actor for every change', async () => {
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
 
-    const changed = await (
+    const changed = ((await (
       await putRate(server, { rateBasisPoints: 650, reason: 'covering higher provider fees' }, token)
-    ).json();
+    ).json()) as any);
 
     const row = await prisma.auditLog.findFirst({
       where: { action: 'COMMISSION_RATE_CHANGED', entityId: changed.current.id },
@@ -193,7 +193,7 @@ describe('an audit row exists naming the actor for every change', async () => {
 });
 
 describe('the audit row and the rate record commit or fail together', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { user } = await tokenFor(server, 'SUPER_ADMIN');
 
     const before = await prisma.commissionRate.count();
@@ -215,7 +215,7 @@ describe('the audit row and the rate record commit or fail together', async () =
 });
 
 describe('rates are validated as whole basis points, never floats', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     const rejected = [
@@ -230,7 +230,7 @@ describe('rates are validated as whole basis points, never floats', async () => 
     for (const [body, label] of rejected) {
       const res = await putRate(server, body, token);
       assert.equal(res.status, 400, `${label} must be rejected`);
-      assert.deepEqual(Object.keys(await res.json()), ['error']);
+      assert.deepEqual(Object.keys(((await res.json()) as any)), ['error']);
     }
 
     // 0% and 100% are the permitted extremes, not errors.
@@ -240,7 +240,7 @@ describe('rates are validated as whole basis points, never floats', async () => 
 });
 
 describe('a change requires a written reason, and cannot be backdated', async () => {
-  await withServer(async (server) => {
+  await withServer(async (server: TestServer) => {
     const { token } = await tokenFor(server, 'SUPER_ADMIN');
 
     assert.equal((await putRate(server, { rateBasisPoints: 600 }, token)).status, 400);
@@ -252,7 +252,7 @@ describe('a change requires a written reason, and cannot be backdated', async ()
     const yesterday = new Date(Date.now() - 86400000).toISOString();
     const res = await putRate(server, { rateBasisPoints: 600, effectiveFrom: yesterday, reason: 'backdate' }, token);
     assert.equal(res.status, 400);
-    assert.match((await res.json()).error, /past/i);
+    assert.match((((await res.json()) as any)).error, /past/i);
   });
 });
 

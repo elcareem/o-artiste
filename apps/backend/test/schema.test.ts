@@ -28,7 +28,7 @@ const TIER_SET = [
 ];
 
 let seq = 0;
-const uniq = (p) => `${p}_${Date.now()}_${seq++}`;
+const uniq = (p: any) => `${p}_${Date.now()}_${seq++}`;
 
 async function makeBooking(overrides = {}) {
   const user = await prisma.user.create({
@@ -73,7 +73,7 @@ describe('escrowReference is unique — two escrows for one booking is unrecover
   const booking = await makeBooking();
   await assert.rejects(
     () => makeBooking({ escrowReference: booking.escrowReference }),
-    (err) => err.code === 'P2002',
+    (err: ThrownError) => err.code === 'P2002',
     'a duplicate escrowReference must be rejected by the database'
   );
 });
@@ -91,7 +91,7 @@ describe('WebhookEvent.providerEventId is unique — the idempotency guarantee',
       prisma.webhookEvent.create({
         data: { providerEventId: eventId, eventType: 'escrow.funded', rawBody: '{}' },
       }),
-    (err) => err.code === 'P2002'
+    (err: ThrownError) => err.code === 'P2002'
   );
 });
 
@@ -142,7 +142,7 @@ describe('a completed booking reconciles to exactly zero in the ledger', async (
   ];
 
   await prisma.ledgerEntry.createMany({
-    data: entries.map((e) => ({ ...e, bookingId: booking.id })),
+    data: entries.map((e: any) => ({ ...e, bookingId: booking.id })),
   });
 
   const sum = await prisma.ledgerEntry.aggregate({

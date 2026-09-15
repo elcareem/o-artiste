@@ -25,7 +25,7 @@ test.before(async () => {
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
-const N = (naira) => naira * 100;
+const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
@@ -34,7 +34,7 @@ const DEFAULT_TIERS = [
   { minDaysBefore: 0, maxDaysBefore: 0, clientRefundBps: 1500, artistCompensationBps: 8500 },
 ];
 
-async function makeUser(role) {
+async function makeUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   return prisma.user.create({
@@ -57,7 +57,7 @@ async function makeBooking({ amountKobo = N(200000), commissionBps = 500 } = {})
     data: { rateBasisPoints: commissionBps, effectiveFrom: new Date(), setByUserId: admin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t) => ({
+    data: DEFAULT_TIERS.map((t: CancellationTierSnapshot) => ({
       ...t,
       versionId: `v_${uniq()}`,
       effectiveFrom: new Date(),
@@ -96,7 +96,7 @@ const inTx = (fn) => prisma.$transaction(fn);
 describe('a completed booking reconciles to exactly zero', async () => {
   const booking = await makeBooking();
 
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, booking);
     await ledger.recordRelease(tx, booking);
   });
@@ -117,7 +117,7 @@ describe('a completed booking reconciles to exactly zero', async () => {
 describe('an unsettled booking does not balance, and says so', async () => {
   const booking = await makeBooking();
 
-  await inTx((tx) => ledger.recordFunding(tx, booking));
+  await inTx((tx: PrismaTx) => ledger.recordFunding(tx, booking));
 
   const r = await ledger.reconcile(booking.id);
 
@@ -162,7 +162,7 @@ describe('every terminal outcome reconciles to zero', async () => {
     for (const amountKobo of amounts) {
       const booking = await makeBooking({ amountKobo });
 
-      await inTx(async (tx) => {
+      await inTx(async (tx: PrismaTx) => {
         await ledger.recordFunding(tx, booking);
         await outcome.run(tx, booking);
       });
@@ -180,7 +180,7 @@ describe('every terminal outcome reconciles to zero', async () => {
 describe('a client is made whole on an artist cancellation', async () => {
   const booking = await makeBooking();
 
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, booking);
     await ledger.recordArtistCancellation(tx, booking);
   });
@@ -203,7 +203,7 @@ describe('a state change that fails rolls back its ledger entry', async () => {
   // first, so if the rollback did not cover it the row would survive.
   await assert.rejects(
     () =>
-      prisma.$transaction(async (tx) => {
+      prisma.$transaction(async (tx: PrismaTx) => {
         await ledger.recordFunding(tx, booking);
         await bookingService.transition({ bookingId: booking.id, to: 'RELEASED', client: tx });
       }),
@@ -221,7 +221,7 @@ describe('the reverse also holds — a failed ledger write rolls back the state 
   const booking = await makeBooking();
 
   await assert.rejects(() =>
-    prisma.$transaction(async (tx) => {
+    prisma.$transaction(async (tx: PrismaTx) => {
       await bookingService.transition({ bookingId: booking.id, to: 'FUNDED_HELD', client: tx });
       await ledger.record(tx, {
         bookingId: booking.id,
@@ -249,9 +249,9 @@ describe('the base Prisma client is refused outright', async () => {
         party: 'CLIENT',
         amountKobo: -N(202000),
       }),
-    (err) => {
+    (err: ThrownError) => {
       assert.ok(err instanceof AppError);
-      assert.match(err.message, /inside the transaction/i);
+      assert.match((err as ThrownError).message, /inside the transaction/i);
       return true;
     },
     'a ledger write outside a transaction must be impossible, not merely discouraged'
@@ -281,18 +281,18 @@ describe('the composite recorders refuse it too', async () => {
 describe('a correction produces two entries, not one modified entry', async () => {
   const booking = await makeBooking();
 
-  const [funded] = await inTx((tx) => ledger.recordFunding(tx, booking));
+  const [funded] = await inTx((tx: PrismaTx) => ledger.recordFunding(tx, booking));
 
-  const correction = await inTx((tx) =>
+  const correction = await inTx((tx: PrismaTx) =>
     ledger.recordCorrection(tx, { offsetsEntryId: funded.id, reason: 'funded at the wrong amount' })
   );
 
   const r = await ledger.reconcile(booking.id);
-  const rows = r.entries.filter((e) => e.id === funded.id || e.id === correction.id);
+  const rows = r.entries.filter((e: any) => e.id === funded.id || e.id === correction.id);
 
   assert.equal(rows.length, 2, 'both the original and the correction are visible');
 
-  const original = rows.find((e) => e.id === funded.id);
+  const original = rows.find((e: any) => e.id === funded.id);
   assert.equal(original.entryType, 'FUNDED');
   assert.equal(original.amountKobo, -N(202000), 'the original is untouched');
 
@@ -308,30 +308,30 @@ describe('a correction produces two entries, not one modified entry', async () =
 
 describe('a correction cannot be applied twice, or to a correction', async () => {
   const booking = await makeBooking();
-  const [funded] = await inTx((tx) => ledger.recordFunding(tx, booking));
+  const [funded] = await inTx((tx: PrismaTx) => ledger.recordFunding(tx, booking));
 
-  const correction = await inTx((tx) =>
+  const correction = await inTx((tx: PrismaTx) =>
     ledger.recordCorrection(tx, { offsetsEntryId: funded.id, reason: 'first' })
   );
 
   await assert.rejects(
-    () => inTx((tx) => ledger.recordCorrection(tx, { offsetsEntryId: funded.id, reason: 'again' })),
+    () => inTx((tx: PrismaTx) => ledger.recordCorrection(tx, { offsetsEntryId: funded.id, reason: 'again' })),
     /already been corrected/,
     'double-correcting would silently reverse the reversal'
   );
 
   await assert.rejects(
-    () => inTx((tx) => ledger.recordCorrection(tx, { offsetsEntryId: correction.id, reason: 'meta' })),
+    () => inTx((tx: PrismaTx) => ledger.recordCorrection(tx, { offsetsEntryId: correction.id, reason: 'meta' })),
     /cannot itself be corrected/
   );
 
   await assert.rejects(
-    () => inTx((tx) => ledger.recordCorrection(tx, { offsetsEntryId: funded.id })),
+    () => inTx((tx: PrismaTx) => ledger.recordCorrection(tx, { offsetsEntryId: funded.id })),
     /must state its reason/
   );
 
   await assert.rejects(
-    () => inTx((tx) => ledger.recordCorrection(tx, { offsetsEntryId: 'no_such_entry', reason: 'x' })),
+    () => inTx((tx: PrismaTx) => ledger.recordCorrection(tx, { offsetsEntryId: 'no_such_entry', reason: 'x' })),
     /does not exist/
   );
 });
@@ -341,15 +341,15 @@ describe('a booking corrected and rewritten still reconciles', async () => {
 
   // Simulates the real shape of a correction: something was recorded against
   // the wrong party, is reversed, and the right entries are written.
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, booking);
     await ledger.recordRelease(tx, booking);
   });
 
   const r1 = await ledger.reconcile(booking.id);
-  const commission = r1.entries.find((e) => e.entryType === 'COMMISSION');
+  const commission = r1.entries.find((e: any) => e.entryType === 'COMMISSION');
 
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordCorrection(tx, {
       offsetsEntryId: commission.id,
       reason: 'commission applied at the live rate rather than the snapshot',
@@ -374,12 +374,12 @@ describe('a liability accrued on one booking and settled on another leaves both 
   const cancelled = await makeBooking();
   const later = await makeBooking();
 
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, cancelled);
     await ledger.recordArtistCancellation(tx, cancelled);
   });
 
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, later);
     await ledger.recordRelease(tx, later);
     await ledger.recordFeeLiabilitySettlement(tx, later.id, N(2070));
@@ -401,14 +401,14 @@ describe('the primitive rejects malformed entries', async () => {
   const booking = await makeBooking();
 
   await assert.rejects(
-    () => inTx((tx) => ledger.record(tx, { entryType: 'FUNDED', party: 'CLIENT', amountKobo: 1 })),
+    () => inTx((tx: PrismaTx) => ledger.record(tx, { entryType: 'FUNDED', party: 'CLIENT', amountKobo: 1 })),
     /must reference a booking/
   );
 
   for (const bad of [1.5, '100', null, undefined, NaN]) {
     await assert.rejects(
       () =>
-        inTx((tx) =>
+        inTx((tx: PrismaTx) =>
           ledger.record(tx, {
             bookingId: booking.id,
             entryType: 'FUNDED',
@@ -425,7 +425,7 @@ describe('the primitive rejects malformed entries', async () => {
 describe('every entry names its booking and its bearing party', async () => {
   const booking = await makeBooking();
 
-  await inTx(async (tx) => {
+  await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, booking);
     await ledger.recordRelease(tx, booking);
   });

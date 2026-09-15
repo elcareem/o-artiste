@@ -26,7 +26,7 @@ test.before(async () => {
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
-const N = (naira) => naira * 100;
+const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS = [
   { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
@@ -35,7 +35,7 @@ const DEFAULT_TIERS = [
   { minDaysBefore: 0, maxDaysBefore: 0, clientRefundBps: 1500, artistCompensationBps: 8500 },
 ];
 
-async function makeUser(role) {
+async function makeUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
   return prisma.user.create({
@@ -58,7 +58,7 @@ async function readyToRelease({ amountKobo = N(200000), commissionBps = 500, art
     data: { rateBasisPoints: commissionBps, effectiveFrom: new Date(), setByUserId: admin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t) => ({
+    data: DEFAULT_TIERS.map((t: CancellationTierSnapshot) => ({
       ...t,
       versionId: `v_${uniq()}`,
       effectiveFrom: new Date(),
@@ -100,7 +100,7 @@ async function readyToRelease({ amountKobo = N(200000), commissionBps = 500, art
   });
 
   // The funding ledger entries the webhook would have written (#20).
-  await prisma.$transaction((tx) => ledger.recordFunding(tx, booking));
+  await prisma.$transaction((tx: PrismaTx) => ledger.recordFunding(tx, booking));
 
   booking = await prisma.booking.update({
     where: { id: booking.id },
@@ -111,7 +111,7 @@ async function readyToRelease({ amountKobo = N(200000), commissionBps = 500, art
 }
 
 /** Replaces provider methods for the duration of a call. */
-async function withProvider(overrides, fn) {
+async function withProvider(overrides: Record<string, any>, fn: () => any) {
   const originals = {};
   for (const [name, impl] of Object.entries(overrides)) {
     originals[name] = escrowpay[name];
@@ -125,7 +125,7 @@ async function withProvider(overrides, fn) {
 }
 
 /** Records every release call so the amount and idempotency key can be asserted. */
-function recordingProvider(calls, impl) {
+function recordingProvider(calls: any[], impl?: (args: any) => any) {
   return {
     release: async (args) => {
       calls.push(args);
@@ -177,7 +177,7 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
   // A prior artist cancellation: the client is made whole, the platform fronts
   // the fees, and the artist owes them (#28's shape, recorded here directly).
   const cancelled = await readyToRelease({ artistUser });
-  await prisma.$transaction((tx) => ledger.recordArtistCancellation(tx, cancelled.booking));
+  await prisma.$transaction((tx: PrismaTx) => ledger.recordArtistCancellation(tx, cancelled.booking));
   await prisma.booking.update({ where: { id: cancelled.booking.id }, data: { state: 'REFUNDED' } });
 
   const liability = await prisma.feeLiability.create({
@@ -210,13 +210,13 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
   const accrual = await ledger.reconcile(cancelled.booking.id);
   const payout = await ledger.reconcile(booking.id);
 
-  const accrued = accrual.entries.filter((e) => e.entryType === 'FEE_LIABILITY_ACCRUED');
-  const settledEntries = payout.entries.filter((e) => e.entryType === 'FEE_LIABILITY_SETTLED');
+  const accrued = accrual.entries.filter((e: any) => e.entryType === 'FEE_LIABILITY_ACCRUED');
+  const settledEntries = payout.entries.filter((e: any) => e.entryType === 'FEE_LIABILITY_SETTLED');
 
   assert.equal(accrued.length, 2, 'the accrual is a balanced pair');
   assert.equal(settledEntries.length, 2, 'and so is the settlement');
-  assert.equal(accrued.find((e) => e.party === 'ARTIST').amountKobo, -N(2070));
-  assert.equal(settledEntries.find((e) => e.party === 'ARTIST').amountKobo, -N(2070));
+  assert.equal(accrued.find((e: any) => e.party === 'ARTIST').amountKobo, -N(2070));
+  assert.equal(settledEntries.find((e: any) => e.party === 'ARTIST').amountKobo, -N(2070));
 
   // Each booking still reconciles on its own, even though the liability spans
   // two of them.
@@ -282,8 +282,8 @@ describe('several small liabilities settle oldest first, up to what the payout c
   assert.equal(result.liabilitySettledKobo, N(6210), 'all three settled');
   assert.equal(result.artistPayoutKobo, N(19000) - N(6210));
 
-  const statuses = await prisma.feeLiability.findMany({ where: { id: { in: made.map((l) => l.id) } } });
-  assert.ok(statuses.every((l) => l.status === 'SETTLED'));
+  const statuses = await prisma.feeLiability.findMany({ where: { id: { in: made.map((l: any) => l.id) } } });
+  assert.ok(statuses.every((l: any) => l.status === 'SETTLED'));
   assert.equal((await ledger.reconcile(booking.id)).sumKobo, 0);
 });
 
@@ -325,14 +325,14 @@ describe('the provider is called before anything is recorded, and a failure reco
         { release: async () => { throw new AppError(502, 'Could not reach the payment provider.'); } },
         () => escrowService.releaseBooking({ bookingId: booking.id })
       ),
-    (err) => err.status === 502
+    (err: ThrownError) => err.status === 502
   );
 
   const after = await prisma.booking.findUnique({ where: { id: booking.id } });
   assert.equal(after.state, 'AWAITING_CONFIRMATION', 'not marked released when no money moved');
 
   const r = await ledger.reconcile(booking.id);
-  assert.equal(r.entries.filter((e) => e.entryType === 'RELEASED').length, 0);
+  assert.equal(r.entries.filter((e: any) => e.entryType === 'RELEASED').length, 0);
   assert.equal(r.sumKobo, -N(200000), 'still held in escrow');
 });
 
@@ -355,7 +355,7 @@ describe('a retry after a recording failure reuses the same idempotency key', as
   assert.equal(calls[0].reference, `${booking.escrowReference}_release`);
 
   const r = await ledger.reconcile(booking.id);
-  assert.equal(r.entries.filter((e) => e.entryType === 'RELEASED').length, 1);
+  assert.equal(r.entries.filter((e: any) => e.entryType === 'RELEASED').length, 1);
   assert.equal(r.sumKobo, 0);
 });
 
@@ -369,7 +369,7 @@ describe('a booking in the wrong state is refused before the provider is trouble
       withProvider({ release: async () => { called = true; } }, () =>
         escrowService.releaseBooking({ bookingId: booking.id })
       ),
-    (err) => err.status === 409
+    (err: ThrownError) => err.status === 409
   );
 
   assert.equal(called, false, 'no money instruction for an unfundable state');
@@ -380,19 +380,19 @@ describe('a booking with no escrow, and an artist with no payout identity, are b
   await prisma.booking.update({ where: { id: noEscrow.booking.id }, data: { escrowId: null } });
   await assert.rejects(
     () => escrowService.releaseBooking({ bookingId: noEscrow.booking.id }),
-    (err) => err.status === 409 && /never funded/i.test(err.message)
+    (err: ThrownError) => err.status === 409 && /never funded/i.test((err as ThrownError).message)
   );
 
   const noParty = await readyToRelease();
   await prisma.user.update({ where: { id: noParty.artistUser.id }, data: { escrowPartyId: null } });
   await assert.rejects(
     () => escrowService.releaseBooking({ bookingId: noParty.booking.id }),
-    (err) => err.status === 409 && /cannot receive payments/i.test(err.message)
+    (err: ThrownError) => err.status === 409 && /cannot receive payments/i.test((err as ThrownError).message)
   );
 
   await assert.rejects(
     () => escrowService.releaseBooking({ bookingId: 'no_such_booking' }),
-    (err) => err.status === 404
+    (err: ThrownError) => err.status === 404
   );
 });
 
@@ -471,7 +471,7 @@ describe('the payout preview discloses liabilities this payout would settle', as
       headers: { Authorization: `Bearer ${signToken(artistUser)}` },
     });
     assert.equal(res.status, 200);
-    const { payout } = await res.json();
+    const { payout } = ((await res.json()) as any);
 
     assert.equal(payout.artistNetKobo, N(190000), 'what the booking earns');
     assert.equal(payout.outstandingLiabilityKobo, N(2070), 'what they owe');
@@ -499,7 +499,7 @@ describe('a preview with no liabilities reports a payout equal to the net', asyn
     const res = await fetch(`${server.url}/bookings/${booking.id}/payout-preview`, {
       headers: { Authorization: `Bearer ${signToken(artistUser)}` },
     });
-    const { payout } = await res.json();
+    const { payout } = ((await res.json()) as any);
 
     assert.equal(payout.outstandingLiabilityKobo, 0);
     assert.equal(payout.estimatedPayoutKobo, N(190000));
@@ -533,7 +533,7 @@ describe('a liability too large to settle is disclosed but not deducted', async 
     const res = await fetch(`${server.url}/bookings/${booking.id}/payout-preview`, {
       headers: { Authorization: `Bearer ${signToken(artistUser)}` },
     });
-    const { payout } = await res.json();
+    const { payout } = ((await res.json()) as any);
 
     assert.equal(payout.outstandingLiabilityKobo, N(500000), 'the debt is shown in full');
     assert.equal(payout.liabilitySettleableKobo, 0, 'but this payout cannot clear it');
