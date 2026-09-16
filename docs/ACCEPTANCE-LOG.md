@@ -4826,3 +4826,62 @@ code never selects a column it does not know about. It is a concrete reason the
 "no destructive migration on the automatic path" rule in
 `DEPLOYMENT-CHECKLIST.md` is not optional — a `DROP COLUMN` in that position
 would have taken the previous, still-serving version down with it.
+
+### Deployment visibility — `/health` versus `/admin/diagnostics`
+
+Three times in one day the question "what is actually running out there?" could
+not be answered from outside, and twice that gap had already cost days:
+`JWT_SECRET` unset so no login could succeed, and the provider credentials never
+set at all. `/health` answered `{"status":"ok"}` throughout both, because all it
+ever checked was that a process was listening.
+
+Two endpoints now, split on what is safe to say publicly:
+
+```
+GET /health              public   { status, version, commit, startedAt, uptimeSeconds }
+GET /admin/diagnostics   ADMIN    dependencies, configuration presence, 503 when broken
+```
+
+**The commit is public.** It is an opaque hash against a private repository, and
+being able to verify a deploy from outside is worth more than the little it
+gives away. `RENDER_GIT_COMMIT` is injected by Render automatically.
+
+**Dependency state is not.** "The database is not answering" tells an attacker
+when to try something. That is the one thing here worth hiding.
+
+Three decisions inside the diagnostics worth recording:
+
+- **The database check is a count through the generated client, not `select 1`.**
+  A pool can hold an open socket to a database that has stopped answering, and
+  `select 1` succeeds against a schema missing every column the code needs. A
+  count goes through the client's own column list, so it fails exactly when the
+  deployed schema has drifted from the deployed code — the failure this endpoint
+  exists to surface. The migration name is reported alongside, best-effort,
+  because `prisma db push` builds test schemas without a migration history and a
+  missing one there is not a database failure.
+- **The queue check reports how many workers are attached.** A queue with no
+  consumer accepts jobs and runs none of them, which looks healthy from every
+  angle except the one that matters — and that is precisely the state
+  `o-artiste-api` was in before `RUN_WORKERS_IN_WEB` was set.
+- **Configuration is present-or-absent, never by value.** An endpoint that
+  echoes a signing key to whoever holds an admin token has replaced one problem
+  with a worse one. `JWT_SECRET` reports its length, since length is the
+  defence. `ESCROWPAY_API_KEY` reports its prefix only, since `sk_test_` versus
+  `sk_live_` decides which book the money moves in. A test asserts no actual
+  secret value appears anywhere in the response.
+
+A failing dependency answers **503**, so this can be pointed at by a monitor
+rather than read by whoever happens to look.
+
+**The existing health test caught the contract change and failed**, which is
+what it is for. It now pins the exact key set, so a future addition to a public
+unauthenticated endpoint has to be deliberate.
+
+### Verification
+
+```
+npm run test:backend          → # tests 291  # pass 291  # fail 0   (284 + 7 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run typecheck / lint      → clean
+```

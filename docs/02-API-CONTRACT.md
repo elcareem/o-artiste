@@ -192,6 +192,21 @@ The preview returns the applicable tier, the exact refund, the exact artist comp
 | `POST` | `/admin/queue/echo` | `ADMIN` | Schedules the do-nothing job; `delayMs` defaults to 10,000 |
 | `GET` | `/admin/queue/echo/:id` | `ADMIN` | Whether it ran, and when |
 | `GET` | `/admin/queue/dead-letter` | `ADMIN` | Jobs that exhausted every retry |
+| `GET` | `/admin/diagnostics` | `ADMIN` | Whether the dependencies actually answer. `503` when one does not |
+
+### Health versus diagnostics
+
+`GET /health` is **public** and reports that the process is alive **and which build is answering** — `{ status, version, commit, startedAt, uptimeSeconds }`. The commit is what makes a deploy verifiable from outside; without it, "did that merge ship?" is answered by poking at routes and inferring.
+
+It deliberately reports nothing about dependencies. `GET /admin/diagnostics` does, and is `ADMIN`-only, because "the database is not answering" tells an attacker when to try something. Which build is running does not — it is an opaque hash against a private repository.
+
+This split exists because a bare `ok` is what let two multi-day failures go unnoticed: `JWT_SECRET` unset, so no login could ever succeed, and the provider credentials never set at all. `/health` answered `ok` throughout both.
+
+The database check is a **count through the generated client**, not `select 1`. A pool can hold an open socket to a database that has stopped answering, and `select 1` succeeds against a schema missing every column the code needs — so the check fails exactly when the deployed schema has drifted from the deployed code.
+
+The queue check reports **how many workers are attached**. A queue with no consumer accepts jobs and runs none of them, which looks healthy from every angle except the one that matters.
+
+**Configuration is reported as present or absent, never by value.** An endpoint that echoes a signing key to whoever holds an admin token has replaced one problem with a worse one. `JWT_SECRET` shows its length, because length is the defence; `ESCROWPAY_API_KEY` shows its prefix only, because `sk_test_` versus `sk_live_` decides which book the money moves in.
 
 ### Queue diagnostics
 

@@ -575,3 +575,11 @@ interface AutoReleaseOutcome {
   reason: AutoReleaseSkipReason | 'released';
   release?: ReleaseSummary;
 }
+
+/** One dependency check in `GET /admin/diagnostics` (#41). */
+interface DiagnosticCheck {
+  ok: boolean;
+  latencyMs: number;
+  /** Human-readable. Carries an error message on failure, never a credential. */
+  detail: string;
+}

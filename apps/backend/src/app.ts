@@ -8,6 +8,7 @@ const express = require('express');
 const cors = require('cors');
 
 const { bodyParsers } = require('./lib/bodyParsers.ts');
+const { healthPayload } = require('./lib/version.ts');
 const { notFoundHandler, errorHandler } = require('./lib/errors.ts');
 const { router: authRouter } = require('./routes/auth.ts');
 const { router: adminRouter } = require('./routes/admin.ts');
@@ -34,8 +35,12 @@ function createApp() {
    * answer while a dependency is down, or it cannot distinguish a dead process
    * from a dead dependency. docs/02-API-CONTRACT.md §11.
    */
+  // Alive, and WHICH BUILD. The commit is what makes a deploy verifiable from
+  // outside; without it "did that merge actually ship?" is answered by poking
+  // at routes and inferring. Deliberately says nothing about dependencies —
+  // that is `/admin/diagnostics`, behind a token.
   app.get('/health', (req: Req, res: Res) => {
-    res.json({ status: 'ok' });
+    res.json(healthPayload());
   });
 
   app.use(authRouter);
