@@ -4467,3 +4467,127 @@ npm run lint                  → clean
 and the rule that it fires only where a check-in exists. The outcome name and
 its separation from `awaiting_response` exist so that job has something precise
 to act on.
+
+### A production break found while looking for the deployed database
+
+#24 adds a migration. Checking whether the deployed database had it turned up
+that it had **three of the four** committed migrations — and, more importantly,
+that there was no mechanism by which it would ever get the fourth.
+
+The backend's `build` script was `prisma generate`. Migrations were applied by
+hand from a laptop, which had worked because none had been written since #4.
+Merging #24 would therefore have deployed code selecting `clientConfirmedAt`
+from a table without that column, and **every read of `Booking` would have
+failed in production** — bookings, funding, webhooks, all of it.
+
+```
+$ psql <deployed> -c 'select migration_name from _prisma_migrations order by started_at'
+ 20260911204031_init
+ 20260911214328_audit_log_anonymous_actors
+ 20260912170420_identity_verification         ← deployed stops here
+ 20260915223406_confirmation_timestamps       ← committed, never applied
+```
+
+`build` is now `prisma migrate deploy && prisma generate`, so Render applies
+what is pending before the new code starts. Shipped **on this branch rather than
+its own**, so there is no ordering in which #24 can merge without it.
+
+Verified against a throwaway schema rather than against production: all four
+migrations apply cleanly to an empty database, the four `#24` columns exist
+afterwards, and a second run prints `No pending migrations to apply` — the build
+runs on every deploy, so idempotence is the property that matters.
+
+The deployed database was deliberately **not** written to by hand. The migration
+is additive and nullable and would have been safe, but the fix is the mechanism,
+not the one-off — and applying it manually would have hidden whether the
+mechanism works.
+
+Recorded in `DEPLOYMENT-CHECKLIST.md` with the caveat this creates: a
+destructive migration now runs automatically, before the code expecting it is
+live. Any migration that removes or rewrites data has to be split — ship the
+additive half, deploy, backfill, then remove as a separate reviewed step.
+
+### `JWT_SECRET` was missing from the deployed API, and nothing said so
+
+Creating the #5 admin account against the deployed database worked. Logging in
+with it returned:
+
+```
+{"error":"Something went wrong on our end."}
+```
+
+A 500, where minutes earlier a non-existent user had correctly received a clean
+`401`. That difference locates the fault precisely: login gets *past* the user
+lookup and the password check, and the only step left is `signToken()`, which
+calls `jwtSecret()`, which throws a plain `Error` when `JWT_SECRET` is unset.
+A plain `Error` is exactly what the terminal handler turns into that message.
+
+**The deployed API had never been able to issue a token to anyone.** It was
+invisible because no account existed there until the moment one did, four days
+after the service went live. `/health` returned `ok` throughout, because
+`/health` answers without touching anything.
+
+The guard in `lib/auth.ts` is right — defaulting to a guessable signing key
+would let anyone mint a `SUPER_ADMIN` token, so throwing is correct. What was
+wrong is *when*: "fail loudly at first use" turned out to mean "fail in front of
+the first real user, in production, with a generic 500".
+
+A missing signing key is not a runtime condition. It is a deployment that did
+not finish, and it should look like one.
+
+`src/lib/requiredEnv.ts` now runs in both entry points — `index.ts` and
+`worker.ts`, never in `createApp()`, so tests still assemble the app freely:
+
+```
+$ JWT_SECRET= node src/index.ts
+[backend] Refusing to start. 1 configuration problem:
+
+  JWT_SECRET is not set — Logins return 500 — the API cannot sign a session token.
+      generate one: node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+
+Set these on the service and redeploy. See DEPLOYMENT-CHECKLIST.md.
+$ echo $?
+1
+```
+
+Exit 1 means the deploy fails and the previous version keeps serving.
+
+Decisions inside it:
+
+- **Every missing variable is reported at once.** Finding them one restart at a
+  time is four deploys to learn four names.
+- **Each says what breaks, not that it is required.** "`JWT_SECRET` is required"
+  sends an operator to the source at 2am; "logins return 500" sends them to the
+  fix. Asserted by a test that rejects any `why` beginning "is required".
+- **A 32-character minimum on `JWT_SECRET`.** The threat is an offline search
+  against a value we chose, so length is the whole defence — a seven-character
+  secret is not meaningfully better than none.
+- **`REDIS_URL` only where the process runs workers**, `ESCROWPAY_*` only in
+  production, since locally their absence merely disables provider calls.
+- **`WEB_ORIGIN` warns rather than refuses.** A wrong CORS origin breaks the
+  browser client while the API, the webhooks and the workers stay functional;
+  refusing to boot would take down more than it protects.
+
+Ten tests, including both entry points spawned as real processes and asserted to
+exit 1 without binding a port.
+
+**A false negative worth recording.** My first attempt to test the boot refusal
+ran `src/index.ts` from an unrelated directory with `JWT_SECRET` unset — and the
+server started. Not a bug in the check: `app.ts` pulls in `lib/prisma.ts`, and
+**the Prisma client loads `apps/backend/.env` itself when it initialises**,
+regardless of the working directory. The environment was being repopulated
+underneath the test.
+
+The test now passes `JWT_SECRET=''` rather than unsetting it, because dotenv
+never overwrites a variable that is already present — including an empty one.
+A deployed host has no `.env` at all, so the variable is simply absent there,
+which the same check catches. Worth knowing generally: **on this machine you
+cannot test for a missing environment variable by unsetting it.**
+
+### Verification
+
+```
+npm run test:backend → # tests 267  # pass 267  # fail 0   (257 + 10 new)
+npm run check:rules  → passed 10  failed 0  skipped 0
+npm run typecheck    → 0 errors
+```

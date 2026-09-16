@@ -16,7 +16,7 @@
     "create-admin": "node scripts/create-admin.ts",
     "start:worker": "node src/worker.ts",
     "dev:worker": "node --watch src/worker.ts",
-    "build": "prisma generate",
+    "build": "prisma migrate deploy && prisma generate",
     "postinstall": "prisma generate",
     "test:sandbox": "node --test \"test/**/*.sandbox.ts\"",
     "test:all": "npm run test && npm run test:sandbox",
