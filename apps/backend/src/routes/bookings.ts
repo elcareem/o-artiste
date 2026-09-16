@@ -14,7 +14,9 @@ const {
   acknowledgeTerms,
   assertAcknowledged,
 } = require('../services/acknowledgementService.ts');
-const { createEscrowForBooking } = require('../services/escrowService.ts');
+const { createEscrowForBooking, cancelByClient } = require('../services/escrowService.ts');
+const { applicableTier } = require('../services/cancellationService.ts');
+const { computeClientCancellation } = require('../services/feeService.ts');
 const { codeForClient, redeem } = require('../services/checkInService.ts');
 const { confirm, claimNoShow } = require('../services/confirmationService.ts');
 
@@ -400,5 +402,109 @@ router.post(
     }
   }
 );
+
+/**
+ * GET /bookings/:id/cancellation-preview
+ *
+ * EXACT figures, before anything is committed — issue #27, docs/05 §8.
+ *
+ * Not an estimate and not a range. `docs/00` §10 exists because the failure
+ * this system is built to avoid is a client discovering a deduction after the
+ * fact, and a preview that rounds differently from the thing that executes is
+ * the same failure with extra steps. It therefore calls the SAME function the
+ * cancellation calls, against the SAME snapshot.
+ *
+ * Open to both parties. An artist is entitled to know what a cancellation today
+ * would pay them — it is their date being held.
+ */
+router.get(
+  '/bookings/:id/cancellation-preview',
+  requireAuth,
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const booking = await prisma.booking.findUnique({
+        where: { id: req.params.id },
+        include: { client: true, artist: true },
+      });
+
+      const isParticipant =
+        booking &&
+        (booking.client.userId === req.user.id || booking.artist.userId === req.user.id);
+      if (!isParticipant) throw new AppError(404, 'Booking not found.');
+
+      const { tier, daysBefore } = applicableTier(booking);
+
+      const breakdown = computeClientCancellation({
+        amountKobo: booking.amountKobo,
+        commissionBps: booking.commissionRateBpsSnapshot,
+        clientRefundBps: tier.clientRefundBps,
+        artistCompensationBps: tier.artistCompensationBps,
+      });
+
+      res.json({
+        preview: {
+          bookingId: booking.id,
+          state: booking.state,
+          cancellable: canBeCancelled(booking.state),
+          daysBeforeEvent: daysBefore,
+          appliedTier: tier,
+
+          amountKobo: booking.amountKobo,
+          clientRefundKobo: breakdown.clientRefundKobo,
+          artistCompensationKobo: breakdown.artistCompensationKobo,
+          commissionKobo: breakdown.commissionKobo,
+
+          // Named separately because it is the figure a client is most likely
+          // to feel misled about: paid at funding, on top of the amount, and
+          // consumed whether or not the event happens.
+          clientSunkFeeKobo: breakdown.clientSunkFeeKobo,
+          moneyOutFeeKobo: breakdown.moneyOutFeeKobo,
+
+          // Never negative. docs/05 §6: a shortfall is not recovered from
+          // anyone, but it must be SHOWN rather than discovered.
+          unrecoveredShortfallKobo: breakdown.unrecoveredShortfallKobo,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /bookings/:id/cancel
+ *
+ * The client cancels. Tiered refund and artist compensation, both computed from
+ * the booking's own snapshot.
+ *
+ * `CLIENT` only here. An artist cancelling is a different economic event
+ * entirely — the client is made whole and the artist accrues a liability — and
+ * it arrives at #28 rather than sharing this path.
+ */
+router.post(
+  '/bookings/:id/cancel',
+  requireAuth,
+  requireRole('CLIENT'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { reason } = req.body ?? {};
+
+      const cancellation = await cancelByClient({
+        bookingId: req.params.id,
+        clientUserId: req.user.id,
+        reason: reason ? String(reason).slice(0, 2000) : undefined,
+      });
+
+      res.json({ cancellation });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** Whether a cancellation is still possible, for the preview's own use. */
+function canBeCancelled(state: BookingState): boolean {
+  return state === 'PENDING_PAYMENT' || state === 'FUNDED_HELD';
+}
 
 module.exports = { router, publicBooking };

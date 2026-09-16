@@ -71,11 +71,46 @@ function assertTransition(from: BookingState, to: BookingState): void {
     throw new AppError(
       409,
       allowed.length === 0
-        ? `This booking is already ${from.toLowerCase().replace(/_/g, ' ')} and cannot change.`
-        : `A booking cannot go from ${from} to ${to}.`
+        ? `This booking has already been ${WHERE_IT_IS[from]} and cannot change.`
+        : `This booking is ${WHERE_IT_IS[from]}, so it cannot be ${WHAT_YOU_ASKED[to]}.`
     );
   }
 }
+
+/**
+ * The states, as a person would say them.
+ *
+ * The raw name must never reach a user (docs/02 §2). `CHECKED_IN` tells a
+ * client nothing; "checked in at the event" tells them why their cancellation
+ * was refused. This was leaking through the generic branch of
+ * `assertTransition` until #27's test asserted no enum name appears in an
+ * error — every other message in the system had been written by hand, so the
+ * one generated from the state machine was the one nobody had read.
+ */
+const WHERE_IT_IS: Record<BookingState, string> = Object.freeze({
+  PENDING_PAYMENT: 'waiting for payment',
+  FUNDED_HELD: 'paid for, with the money held',
+  CHECKED_IN: 'checked in at the event',
+  AWAITING_CONFIRMATION: 'waiting to be confirmed',
+  DISPUTED: 'under dispute',
+  RELEASED: 'paid out',
+  REFUNDED: 'refunded',
+  CANCELLED: 'cancelled',
+  RESOLVED: 'settled by support',
+});
+
+/** The same set, phrased as the thing the caller was trying to do. */
+const WHAT_YOU_ASKED: Record<BookingState, string> = Object.freeze({
+  PENDING_PAYMENT: 'reopened for payment',
+  FUNDED_HELD: 'funded',
+  CHECKED_IN: 'checked into',
+  AWAITING_CONFIRMATION: 'confirmed',
+  DISPUTED: 'disputed',
+  RELEASED: 'paid out',
+  REFUNDED: 'refunded',
+  CANCELLED: 'cancelled',
+  RESOLVED: 'resolved',
+});
 
 /**
  * Performs a guarded transition.

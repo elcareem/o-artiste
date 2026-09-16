@@ -516,7 +516,9 @@ describe('an illegal transition throws rather than proceeding', async () => {
     () => bookingService.transition({ bookingId: booking.id, to: 'RELEASED' }),
     (err: ThrownError) => {
       assert.equal(err.status, 409);
-      assert.match(err.message, /already refunded/i);
+      assert.match(err.message, /already been refunded/i);
+      // #27 humanised these. The raw state name must never reach a user.
+      assert.doesNotMatch(err.message, /[A-Z]{3,}_[A-Z]/);
       return true;
     }
   );
