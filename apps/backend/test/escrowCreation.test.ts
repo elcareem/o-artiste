@@ -25,6 +25,20 @@ test.before(async () => {
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
+
+/**
+ * One versionId for the whole set.
+ *
+ * `resolveTierSet` returns the rows sharing the LATEST version's id, so giving
+ * each row its own id publishes four one-band versions and snapshots a single
+ * band onto the booking. Its cancellation then has no applicable rule for most
+ * days — caught in #28 by the snapshot guard `createBooking` now applies.
+ */
+function tierSetFor<T>(tiers: T[]): (T & { versionId: string })[] {
+  const versionId = `v_${uniq()}`;
+  return tiers.map((t) => ({ ...t, versionId }));
+}
+
 const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS = [
@@ -58,9 +72,8 @@ async function readyToFund({ acknowledge = true, clientParty = true, artistParty
     data: { rateBasisPoints: 500, effectiveFrom: new Date(), setByUserId: admin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t: CancellationTierSnapshot) => ({
+    data: tierSetFor(DEFAULT_TIERS).map((t: any) => ({
       ...t,
-      versionId: `v_${uniq()}`,
       effectiveFrom: new Date(),
       setByUserId: admin.id,
     })),

@@ -5161,3 +5161,145 @@ Two of #33's criteria in the original issue reference a dispute ruling, which
 arrives at #32. The engine is exercised here through `accrueForDispute`
 directly; #32 wires it to a real resolution. #34 reads `activeWeight` for the
 enforcement ladders.
+
+---
+
+## #28 — Artist-initiated cancellation and fee liability
+
+Branch `feat/28-artist-cancellation`, from `main` at `3540fa5`.
+
+This case has a structural problem the client case does not: **the artist bears
+the fees and has no money in escrow to deduct them from.** The client's payment
+is the only money in the transaction and all of it is going back to the client.
+
+### Acceptance criteria
+
+**- [x] The client receives the full booking amount back, not a fee-reduced amount**
+
+The escrow **and** the money-in fee they paid on top of it at funding. Zero fee
+exposure means zero — they did nothing wrong, and passing them any part of the
+cost of the artist's decision would undermine the guarantee the platform exists
+to make. Asserted at two days out, the harshest band a *client* cancellation
+has, to show the timing changes nothing about the money here.
+
+**- [x] A `FeeLiability` row is created and later netted off the artist's next release**
+
+Followed end to end across two bookings and one artist: cancel booking A →
+liability `OUTSTANDING` for exactly `moneyIn + moneyOut`; release booking B →
+the artist is paid `artistNet − liability`, and the row becomes `SETTLED` with
+`settledAgainstBookingId` pointing at B.
+
+**- [x] The ledger shows the platform bearing the cost at cancellation and recovering it at settlement**
+
+Both bookings reconcile to zero on their own, and the liability is a balanced
+**pair** of entries on each — asserted as two rows, not one.
+
+**- [x] Cancelling triggers the correct strike weight for the timing band**
+
+```
+10d, 7d → no strike, liability still accrued
+5d      → ARTIST_CANCEL_3_6_DAYS
+2d      → ARTIST_CANCEL_1_2_DAYS
+0d      → ARTIST_CANCEL_DAY_OF
+```
+
+The 7-day case asserts **both** halves of docs/06 §2's first line: no strike,
+*and* a liability that exists anyway. The fees were incurred whether or not the
+conduct warrants deterrence.
+
+Weights are read from the rules in force rather than hardcoded, so the test
+survives the retuning open item `00` §11.6 expects.
+
+### One money path, not two
+
+`refundBooking` already implemented these economics for #24's uncontradicted
+no-show. Rather than duplicate the provider call, the ledger writes and the
+liability, it gained an `alsoRecord` hook that runs **inside its own
+transaction**, and #28 passes the `Cancellation` row and the strike through it.
+
+A second transaction would have been simpler and wrong: the alternative is a
+refund that succeeded with no record of why it happened — money moved,
+irreversibly, and the explanation missing. Tested by making the strike write
+throw: the booking stays `FUNDED_HELD`, no cancellation row, no liability, no
+ledger entries, and the retry completes the whole thing.
+
+### One endpoint, two economic events
+
+`POST /bookings/:id/cancel` now dispatches on the caller's part in the booking,
+resolved server-side from the token — never from the body (docs/02 §7).
+
+| Caller | Outcome |
+|---|---|
+| `CLIENT` | Tiered split from the snapshot; the client bears the fees |
+| `ARTIST` | Client made whole including their fee; the artist accrues a liability |
+
+These are different events, not one event with a parameter. Asserted on two
+identical bookings two days out: the client path returns ₦80,000 and compensates
+the artist, the artist path returns everything and compensates nobody.
+
+#27's test that an artist received `403` here was superseded and rewritten.
+
+### Write-offs
+
+`POST /admin/users/:id/fee-liabilities/write-off`, with a mandatory written
+reason. Pursuing a ₦2,070 debt through collections costs more than the debt.
+
+**Written off, not deleted.** The platform bore that cost and the ledger has to
+keep saying so: the row changes status, gains a reason and a timestamp, and the
+action is attributed in `AuditLog`. A written-off liability is asserted **not**
+to be collected against a later payout. #34 will call this on permanent removal.
+
+### The guard that found a suite-wide fixture bug
+
+`createBooking` now validates the tier set it resolves **before freezing it onto
+a booking**. #8 guards the write; this guards the read. A set that has become
+partial would otherwise snapshot onto the booking and fail only at cancellation,
+with money held and no applicable rule — and docs/05 §5 is explicit that there
+is no safe default there.
+
+It immediately rejected most of the test suite's own fixtures. Eight files were
+publishing **four one-band versions instead of one four-band version**, because
+each row got its own `versionId`:
+
+```ts
+DEFAULT_TIERS.map((t) => ({ ...t, versionId: `v_${uniq()}`, … }))   // four versions
+tierSetFor(DEFAULT_TIERS).map((t) => ({ ...t, … }))                 // one
+```
+
+`resolveTierSet` returns the rows of the latest version, so every booking those
+fixtures created carried a **single-band snapshot** and would have been
+uncancellable outside that one band. Thirty-six tests failed the moment the
+guard was added; all eight fixtures are fixed.
+
+Failing at creation costs a booking that was never made. Failing at cancellation
+costs a decision nobody is authorised to make.
+
+### A ledger subtlety, recorded in docs/01
+
+My first version of the "platform ends up whole" assertion summed
+`FEE_LIABILITY_ACCRUED(PLATFORM)` and `FEE_LIABILITY_SETTLED(PLATFORM)` and got
+`+2 × liability` — the platform apparently profiting from a cancellation.
+
+The accrual is a **receivable**, not income: the counterpart that lets the
+cancellation balance on its own. Summing it with the collection counts the same
+₦2,070 twice.
+
+The corrected version compares the fees actually borne on the cancellation
+against the recovery on the settling booking. That failed too, by ₦70 — the
+settling booking's *own* payout fee, an ordinary cost of paying an artist,
+swept in by too broad a query. Each side has to be scoped to the booking it
+belongs to.
+
+Both traps are now written into `docs/01` §5, because anyone building a
+platform-wide P&L off this ledger will hit them.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 326  # pass 326  # fail 0   (317 + 9 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+npm run seed (twice)          → idempotent
+```

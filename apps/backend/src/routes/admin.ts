@@ -24,6 +24,7 @@ const {
   setStrikeRules,
   strikesFor,
 } = require('../services/strikeService.ts');
+const { writeOffLiabilities } = require('../services/escrowService.ts');
 
 const router = express.Router();
 
@@ -220,6 +221,45 @@ router.get(
   async (req: Req, res: Res, next: Next) => {
     try {
       res.json({ history: await strikesFor(req.params.id) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /admin/users/:id/fee-liabilities/write-off
+ *
+ * Writes off an artist's outstanding fee liabilities — issue #28.
+ *
+ * Pursuing a ₦2,000 debt through collections costs more than the debt, so a
+ * liability against an account that will never transact again is written off
+ * rather than carried indefinitely.
+ *
+ * WRITTEN OFF, NOT DELETED. The platform bore that cost and the ledger has to
+ * keep saying so; the row changes status and gains a reason, and the action is
+ * attributed in `AuditLog`.
+ *
+ * A written reason is mandatory, for the same rule that governs every other
+ * manual money decision (docs/07 §1): a movement without a recorded
+ * justification is indefensible later.
+ */
+router.post(
+  '/admin/users/:id/fee-liabilities/write-off',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { reason } = req.body ?? {};
+      if (!reason) throw new AppError(400, 'Record why these liabilities are being written off.');
+
+      const result = await writeOffLiabilities({
+        artistUserId: req.params.id,
+        reason: String(reason).slice(0, 2000),
+        actorUserId: req.user.id,
+      });
+
+      res.json({ writeOff: result });
     } catch (err) {
       next(err);
     }

@@ -189,6 +189,17 @@ A correction is the exact negation of the entry it offsets, typed `CORRECTION` a
 
 `FeeLiability` movements (#28, #26) are written as balanced pairs, artist against platform, so they do not disturb reconciliation: an accrued debt has moved no money yet. The accrual is recorded on the booking that caused it and the settlement on the later booking whose payout pays it off, so **each booking still reconciles to zero on its own** even though the liability spans two.
 
+**`FEE_LIABILITY_ACCRUED(PLATFORM)` is a receivable, not income.** It is the bookkeeping counterpart that lets the cancellation balance on its own — the platform is out of pocket by the fees and holds a claim of equal value. `FEE_LIABILITY_SETTLED(PLATFORM)` is the cash that later arrives.
+
+The two are therefore **not** summed together to measure the platform's position: doing so counts the same ₦2,070 twice, once as a claim and once as its collection. The platform is whole when the fees it bore on the cancellation (`ESCROW_FEE_IN` + `ESCROW_FEE_OUT`, both negative there) plus the recovery on the settling booking come to zero.
+
+Two traps in that calculation, both hit while writing #28's test:
+
+- Summing the accrual and the settlement gave `+2 × liability` and looked like the platform profiting from a cancellation.
+- Sweeping in the settling booking's *own* payout fee gave `−₦70` and looked like a shortfall. That fee is an ordinary cost of paying an artist and belongs to that booking, not to the liability.
+
+Each side must be scoped to the booking it belongs to.
+
 ### Implementation
 
 `services/ledgerService.js` is the sole writer, enforced by grep. Its `record` primitive **refuses the base Prisma client** and accepts only an interactive transaction client, which turns rule 3 from a convention into a structural guarantee — a caller who forgets the transaction gets an exception, not an orphaned row. The composite recorders take a booking and derive every figure from `feeService` and the booking's own frozen snapshot; no caller passes amounts in, so ledger entries cannot drift from the arithmetic the rest of the system uses.

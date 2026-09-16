@@ -38,6 +38,19 @@ test.after(async () => {
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
 
+/**
+ * One versionId for the whole set.
+ *
+ * `resolveTierSet` returns the rows sharing the latest version's id, so giving
+ * each row its own id snapshots a SINGLE band onto the booking — and its
+ * cancellation then has no applicable rule for most days. Caught in #28 by a
+ * 500 at cancellation, with the money already held.
+ */
+function tierSetFor<T>(tiers: T[]): (T & { versionId: string })[] {
+  const versionId = `v_${uniq()}`;
+  return tiers.map((t) => ({ ...t, versionId }));
+}
+
 async function makeUser(role: UserRole) {
   const { hashPassword } = require('../src/lib/auth.ts');
   const n = uniq();
@@ -498,12 +511,12 @@ describe('strikes are attached to the booking that caused them', async () => {
     data: { rateBasisPoints: 500, effectiveFrom: new Date(), setByUserId: superAdmin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: [
+    data: tierSetFor([
       { minDaysBefore: 7, maxDaysBefore: null, clientRefundBps: 10000, artistCompensationBps: 0 },
       { minDaysBefore: 3, maxDaysBefore: 6, clientRefundBps: 7000, artistCompensationBps: 3000 },
       { minDaysBefore: 1, maxDaysBefore: 2, clientRefundBps: 4000, artistCompensationBps: 6000 },
       { minDaysBefore: 0, maxDaysBefore: 0, clientRefundBps: 1500, artistCompensationBps: 8500 },
-    ].map((t) => ({ ...t, versionId: `v_${uniq()}`, effectiveFrom: new Date(), setByUserId: superAdmin.id })),
+    ]).map((t: any) => ({ ...t, effectiveFrom: new Date(), setByUserId: superAdmin.id })),
   });
 
   const booking = await require('../src/services/bookingService.ts').createBooking({
