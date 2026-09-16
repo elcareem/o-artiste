@@ -18,7 +18,7 @@
 const QUEUE_NAME = 'webhooks';
 const JOB_NAME = 'webhook-retry';
 
-async function process(job: import('bullmq').Job) {
+async function run(job: import('bullmq').Job) {
   const { providerEventId } = job.data;
   if (!providerEventId) throw new Error('webhook-retry job has no providerEventId');
 
@@ -39,4 +39,11 @@ async function process(job: import('bullmq').Job) {
   return result;
 }
 
-module.exports = { QUEUE_NAME, JOB_NAME, process };
+module.exports = { QUEUE_NAME, JOB_NAME,
+  // Declared as `run`, exported under the name the worker expects. A function
+  // declaration called `process` shadows Node's global for the WHOLE module, so
+  // any `process.env` read in this file would silently become a property lookup
+  // on this function. Caught in #25, where it turned a configurable grace
+  // period into one that could never be configured.
+  process: run,
+};

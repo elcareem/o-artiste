@@ -546,3 +546,28 @@ interface EnvRequirement {
   /** A command that produces an acceptable value, shown in the failure. */
   generate?: string;
 }
+
+// ── Auto-release (`jobs/autoReleaseJob.ts`, issue #25) ───────────────────────
+
+/**
+ * Why auto-release did nothing.
+ *
+ * Every one of these is a case where releasing would be wrong, and they are
+ * named separately because "the job ran and did not pay anyone" is a sentence
+ * an operator will need explained.
+ */
+type AutoReleaseSkipReason =
+  | 'booking_missing'
+  | 'already_settled'
+  | 'dispute_open'
+  | 'no_check_in'
+  | 'client_claimed_no_show'
+  | 'not_yet_due';
+
+interface AutoReleaseOutcome {
+  bookingId: string;
+  /** True only when THIS run moved the money. A second run reports false. */
+  released: boolean;
+  reason: AutoReleaseSkipReason | 'released';
+  release?: ReleaseSummary;
+}

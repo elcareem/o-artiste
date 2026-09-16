@@ -62,7 +62,10 @@ const IN_PRODUCTION: EnvRequirement[] = [
  *
  * @param runsWorkers whether this process will start job workers
  */
-function assertRequiredEnv({ runsWorkers = false }: { runsWorkers?: boolean } = {}): void {
+function assertRequiredEnv({
+  runsWorkers = false,
+  servesHttp = true,
+}: { runsWorkers?: boolean; servesHttp?: boolean } = {}): void {
   const required = [
     ...ALWAYS,
     ...(runsWorkers ? FOR_WORKERS : []),
@@ -93,7 +96,11 @@ function assertRequiredEnv({ runsWorkers = false }: { runsWorkers?: boolean } = 
   // Not fatal. A wrong origin breaks the browser client while leaving the API,
   // the webhooks and the workers entirely functional, so refusing to boot would
   // take down more than it protects.
-  if (process.env.NODE_ENV === 'production' && !process.env.WEB_ORIGIN) {
+  //
+  // Only for a process that answers requests. A worker serves no HTTP and has
+  // no CORS, so warning it about an origin is noise in exactly the log someone
+  // reads when a job has gone wrong.
+  if (servesHttp && process.env.NODE_ENV === 'production' && !process.env.WEB_ORIGIN) {
     console.warn(
       '[backend] WARNING: WEB_ORIGIN is not set, so CORS defaults to http://localhost:3000.' +
         ' The deployed web app will be blocked by the browser.'

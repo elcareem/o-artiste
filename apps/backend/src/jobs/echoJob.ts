@@ -14,7 +14,7 @@ const JOB_NAME = 'echo';
  * Deliberately able to fail on demand, so the retry and dead-letter paths can
  * be exercised without inventing a broken business job.
  */
-async function process(job: import('bullmq').Job) {
+async function run(job: import('bullmq').Job) {
   if (job.data?.failTimes && job.attemptsMade < job.data.failTimes) {
     throw new Error(`echo: deliberate failure ${job.attemptsMade + 1} of ${job.data.failTimes}`);
   }
@@ -25,4 +25,11 @@ async function process(job: import('bullmq').Job) {
   return { message, ranAt: new Date().toISOString(), attempt: job.attemptsMade + 1 };
 }
 
-module.exports = { QUEUE_NAME, JOB_NAME, process };
+module.exports = { QUEUE_NAME, JOB_NAME,
+  // Declared as `run`, exported under the name the worker expects. A function
+  // declaration called `process` shadows Node's global for the WHOLE module, so
+  // any `process.env` read in this file would silently become a property lookup
+  // on this function. Caught in #25, where it turned a configurable grace
+  // period into one that could never be configured.
+  process: run,
+};

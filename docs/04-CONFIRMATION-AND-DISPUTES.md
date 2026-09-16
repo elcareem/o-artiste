@@ -126,6 +126,27 @@ A BullMQ job scheduled at funding, firing at `eventEndAt` + grace period.
 | Cancelled when the booking reaches a terminal state earlier | |
 | The deadline is **disclosed** to the client in the post-event prompt | The client is being told that silence has a consequence. That only works if they know when |
 
+### How it is implemented
+
+Scheduled at **funding** — months before it might fire — so the payload carries a booking id and nothing else, and every condition is re-decided against the database when the job wakes. By then the booking may have been cancelled, refunded, disputed, or released by either party.
+
+`autoReleaseAt` is stored on the booking at scheduling time rather than recomputed. It is disclosed to the client, and a deadline derived from live configuration would drift away from the job that was actually queued — a disclosed deadline that disagrees with the scheduled job is worse than no disclosure.
+
+The grace period is `AUTO_RELEASE_GRACE_HOURS`, default 48 (open item `00` §11.5). A malformed value **throws** rather than falling back: a silent default here is a payout timer nobody set.
+
+Every refusal is named, because "the job ran and did not pay anyone" is a sentence an operator will need explained:
+
+| Reason | Meaning |
+|---|---|
+| `already_settled` | Released, refunded, cancelled or resolved. This is also what makes a retry idempotent |
+| `dispute_open` | Checked against the dispute rows, not only the booking state |
+| `no_check_in` | Nobody has evidence the event happened |
+| `client_claimed_no_show` | #24 already acted; not this job's decision |
+| `not_yet_due` | The deadline has not passed. A delay miscalculated elsewhere must not become an early payout |
+| `booking_missing` | Reported, not thrown |
+
+The pending job is removed when a booking concludes early. It would no-op anyway — housekeeping, so the queue is a picture of what is genuinely outstanding.
+
 ## 5. Disputes
 
 ### State machine

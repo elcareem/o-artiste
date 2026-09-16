@@ -12,7 +12,10 @@ const path = require('node:path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 // Before anything requires lib/queue.ts.
-process.env.QUEUE_PREFIX = `test-qdiag-${process.pid}`;
+// Unique per RUN, not merely per process: Redis keeps keys forever and the
+// OS reuses pids, so a prefix of pid alone can land on a dead run's queue —
+// including its job-id counter, which makes `getJob('1')` return a stranger.
+process.env.QUEUE_PREFIX = `test-qdiag-${process.pid}-${Date.now()}`;
 
 const { prisma, hasDatabase, ready } = require('./db.ts')('queuediag');
 
@@ -118,17 +121,18 @@ describe('a scheduled echo job reports back as having actually run', async () =>
 
   const worker = queueLib.registerWorker(echoJob.QUEUE_NAME, echoJob.process);
   try {
+    // Polls for `ranAt`, not for `state`. `ranAt` is generated INSIDE the
+    // processor: a `completed` state proves the queue finished the job, while a
+    // timestamp from the processor proves a worker executed it — which is the
+    // question actually being asked on a deployed host. Waiting on the state
+    // and then asserting the timestamp leaves a window between the two.
     const done = await until(async () => {
       const res = await call('GET', `/admin/queue/echo/${id}`, token);
-      return res.body.job.state === 'completed' ? res.body.job : null;
+      return res.body.job.ranAt ? res.body.job : null;
     });
 
-    assert.ok(done, 'the job never completed');
-
-    // `ranAt` is generated INSIDE the processor. A `completed` state proves the
-    // queue finished the job; a timestamp from the processor proves a worker
-    // executed it, which is the question being asked on a deployed host.
-    assert.ok(done!.ranAt, 'no ranAt — the state says completed but nothing ran it');
+    assert.ok(done, 'the job never reported having run');
+    assert.equal(done!.state, 'completed');
     assert.ok(new Date(done!.ranAt).getTime() >= new Date(done!.scheduledAt).getTime() - 1000);
     assert.equal(done!.failedReason, null);
   } finally {

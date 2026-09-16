@@ -294,6 +294,13 @@ model Booking {
   clientNoShowClaimedAt DateTime?
   clientNoShowReason    String?
 
+  /// When auto-release will fire: `eventEndAt` + the grace period, fixed at
+  /// funding (#25). Stored rather than recomputed because it is DISCLOSED to
+  /// the client — telling someone that silence has a consequence only works if
+  /// they are told when, and a deadline recomputed from live configuration
+  /// would drift away from the job that was actually scheduled.
+  autoReleaseAt DateTime?
+
   fundedAt    DateTime?
   releasedAt  DateTime?
   refundedAt  DateTime?

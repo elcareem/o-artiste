@@ -17,12 +17,14 @@ const { registerWorker, closeAll } = require('./lib/queue.ts');
 const echoJob = require('./jobs/echoJob.ts');
 const webhookRetryJob = require('./jobs/webhookRetryJob.ts');
 const checkInCodeJob = require('./jobs/checkInCodeJob.ts');
+const autoReleaseJob = require('./jobs/autoReleaseJob.ts');
 
 function startWorkers() {
   registerWorker(echoJob.QUEUE_NAME, echoJob.process);
   registerWorker(webhookRetryJob.QUEUE_NAME, webhookRetryJob.process);
   registerWorker(checkInCodeJob.QUEUE_NAME, checkInCodeJob.process);
-  console.log('[worker] listening on queues: maintenance, webhooks, notifications');
+  registerWorker(autoReleaseJob.QUEUE_NAME, autoReleaseJob.process);
+  console.log('[worker] listening on queues: maintenance, webhooks, notifications, releases');
   return { stop: closeAll };
 }
 
@@ -31,7 +33,7 @@ if (require.main === module) {
   // API importing `startWorkers` for its in-process mode does not run the check
   // twice with different expectations.
   try {
-    require('./lib/requiredEnv.ts').assertRequiredEnv({ runsWorkers: true });
+    require('./lib/requiredEnv.ts').assertRequiredEnv({ runsWorkers: true, servesHttp: false });
   } catch (err) {
     console.error(`\n[worker] ${(err as Error).message}\n`);
     process.exit(1);
