@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
-const { assertRequiredEnv, ALWAYS, IN_PRODUCTION } = require('../src/lib/requiredEnv.ts');
+const { assertRequiredEnv, ALWAYS, FOR_WORKERS, IN_PRODUCTION } = require('../src/lib/requiredEnv.ts');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..');
 
@@ -253,6 +253,44 @@ test('the worker refuses too, and asks for what a worker actually needs', () => 
     assert.match(output, /REDIS_URL/);
     assert.match(output, /auto-release never run/);
     assert.doesNotMatch(output, /listening on queues/);
+  }
+});
+
+test('a missing provider credential says where to find one', () => {
+  // The person reading a failed deploy at 2am is often not the person who knows
+  // where the secret lives. A real failure of this exact check said only what
+  // was absent, which sent the operator back to the source.
+  withEnv(
+    {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@x/db',
+      JWT_SECRET: GOOD_SECRET,
+      WEB_ORIGIN: 'https://example.test',
+      ESCROWPAY_API_KEY: undefined,
+      ESCROWPAY_WEBHOOK_SECRET: undefined,
+    },
+    () => {
+      try {
+        assertRequiredEnv();
+        assert.fail('should have thrown');
+      } catch (err) {
+        const message = (err as Error).message;
+        assert.match(message, /EscrowPay dashboard/);
+        // The two are different secrets and get confused for one another.
+        assert.match(message, /sk_test_/);
+        assert.match(message, /whsec_/);
+        assert.match(message, /Not the API key/);
+      }
+    }
+  );
+});
+
+test('every requirement that can be obtained says how', () => {
+  for (const requirement of [...ALWAYS, ...FOR_WORKERS, ...IN_PRODUCTION]) {
+    assert.ok(
+      requirement.how && requirement.how.length > 10,
+      `${requirement.name} gives no way to obtain a value`
+    );
   }
 });
 

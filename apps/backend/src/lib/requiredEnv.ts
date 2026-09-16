@@ -24,12 +24,13 @@ const ALWAYS: EnvRequirement[] = [
   {
     name: 'DATABASE_URL',
     why: 'Prisma has nothing to connect to.',
+    how: 'Render → the Postgres instance → Connections. Internal from a Render service, External from a laptop.',
   },
   {
     name: 'JWT_SECRET',
     why: 'Logins return 500 — the API cannot sign a session token.',
     minLength: 32,
-    generate: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`,
+    how: `generate one: node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`,
   },
 ];
 
@@ -38,6 +39,7 @@ const FOR_WORKERS: EnvRequirement[] = [
   {
     name: 'REDIS_URL',
     why: 'BullMQ cannot start, so webhook retries and auto-release never run.',
+    how: 'Render → the Key Value instance → Connections. It must use the noeviction policy, or queued jobs are silently dropped.',
   },
 ];
 
@@ -50,10 +52,12 @@ const IN_PRODUCTION: EnvRequirement[] = [
   {
     name: 'ESCROWPAY_API_KEY',
     why: 'No booking can be funded, released or refunded.',
+    how: 'EscrowPay dashboard → API keys. sk_test_… is the sandbox book, sk_live_… is real money.',
   },
   {
     name: 'ESCROWPAY_WEBHOOK_SECRET',
     why: 'Every inbound webhook is rejected as unsigned, so funding is never recorded.',
+    how: 'whsec_… shown once when the webhook endpoint was created. Not the API key.',
   },
 ];
 
@@ -74,11 +78,12 @@ function assertRequiredEnv({
 
   const problems: string[] = [];
 
-  for (const { name, why, minLength, generate } of required) {
+  for (const { name, why, minLength, how } of required) {
     const value = process.env[name];
+    const hint = how ? `\n      ${how}` : '';
 
     if (!value) {
-      problems.push(`  ${name} is not set — ${why}${generate ? `\n      generate one: ${generate}` : ''}`);
+      problems.push(`  ${name} is not set — ${why}${hint}`);
       continue;
     }
 
@@ -87,8 +92,7 @@ function assertRequiredEnv({
     // offline search against a value we chose.
     if (minLength && value.length < minLength) {
       problems.push(
-        `  ${name} is only ${value.length} characters — at least ${minLength} are needed.` +
-          (generate ? `\n      generate one: ${generate}` : '')
+        `  ${name} is only ${value.length} characters — at least ${minLength} are needed.${hint}`
       );
     }
   }
