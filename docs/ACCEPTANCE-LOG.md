@@ -4826,3 +4826,110 @@ code never selects a column it does not know about. It is a concrete reason the
 "no destructive migration on the automatic path" rule in
 `DEPLOYMENT-CHECKLIST.md` is not optional — a `DROP COLUMN` in that position
 would have taken the previous, still-serving version down with it.
+
+### Deployment visibility — `/health` versus `/admin/diagnostics`
+
+Three times in one day the question "what is actually running out there?" could
+not be answered from outside, and twice that gap had already cost days:
+`JWT_SECRET` unset so no login could succeed, and the provider credentials never
+set at all. `/health` answered `{"status":"ok"}` throughout both, because all it
+ever checked was that a process was listening.
+
+Two endpoints now, split on what is safe to say publicly:
+
+```
+GET /health              public   { status, version, commit, startedAt, uptimeSeconds }
+GET /admin/diagnostics   ADMIN    dependencies, configuration presence, 503 when broken
+```
+
+**The commit is public.** It is an opaque hash against a private repository, and
+being able to verify a deploy from outside is worth more than the little it
+gives away. `RENDER_GIT_COMMIT` is injected by Render automatically.
+
+**Dependency state is not.** "The database is not answering" tells an attacker
+when to try something. That is the one thing here worth hiding.
+
+Three decisions inside the diagnostics worth recording:
+
+- **The database check is a count through the generated client, not `select 1`.**
+  A pool can hold an open socket to a database that has stopped answering, and
+  `select 1` succeeds against a schema missing every column the code needs. A
+  count goes through the client's own column list, so it fails exactly when the
+  deployed schema has drifted from the deployed code — the failure this endpoint
+  exists to surface. The migration name is reported alongside, best-effort,
+  because `prisma db push` builds test schemas without a migration history and a
+  missing one there is not a database failure.
+- **The queue check reports how many workers are attached.** A queue with no
+  consumer accepts jobs and runs none of them, which looks healthy from every
+  angle except the one that matters — and that is precisely the state
+  `o-artiste-api` was in before `RUN_WORKERS_IN_WEB` was set.
+- **Configuration is present-or-absent, never by value.** An endpoint that
+  echoes a signing key to whoever holds an admin token has replaced one problem
+  with a worse one. `JWT_SECRET` reports its length, since length is the
+  defence. `ESCROWPAY_API_KEY` reports its prefix only, since `sk_test_` versus
+  `sk_live_` decides which book the money moves in. A test asserts no actual
+  secret value appears anywhere in the response.
+
+A failing dependency answers **503**, so this can be pointed at by a monitor
+rather than read by whoever happens to look.
+
+**The existing health test caught the contract change and failed**, which is
+what it is for. It now pins the exact key set, so a future addition to a public
+unauthenticated endpoint has to be deliberate.
+
+### Verification
+
+```
+npm run test:backend          → # tests 291  # pass 291  # fail 0   (284 + 7 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run typecheck / lint      → clean
+```
+
+### Correcting the configuration check: three severities, not two
+
+The check introduced above was too blunt, and the evidence was unambiguous: it
+blocked four consecutive deploys, including the deploy of the diagnostics
+endpoint that would have explained the block. A check that prevents shipping the
+tool which diagnoses the check is worse than the problem it guards against.
+
+It also produced a false reading on my part. After one of those failed deploys I
+scheduled a queue job, saw it run, and concluded the service had started with
+the provider credentials set. It had not — the queue endpoints shipped in an
+earlier release, so the job ran on the **previous** build that the failed deploy
+had left serving. `/health` returning a bare `ok` is exactly what made that
+inference possible, and is why the build identity above was added.
+
+| Level | Variables | Behaviour |
+|---|---|---|
+| Prerequisite | `DATABASE_URL`, `JWT_SECRET`, `REDIS_URL` (workers only) | Refuses to start |
+| Unsafe pairing | `ESCROWPAY_API_KEY` set, `ESCROWPAY_WEBHOOK_SECRET` not | Refuses to start |
+| Capability | both provider credentials absent | Starts degraded, loudly |
+
+The reasoning for the middle row is the substance. **An API key without a
+webhook secret is the one arrangement where money is lost rather than merely not
+moved.** The key lets a client fund an escrow; the provider's notification is
+then rejected as unsigned; their money sits in escrow against a booking that
+stays `PENDING_PAYMENT` forever, and neither side is told. With neither
+credential set nothing can be funded at all, so nothing is at risk — that is an
+incomplete deployment, not a dangerous one.
+
+Verified by booting the real entry point three ways:
+
+```
+both absent                  → exit 124 (stayed up), DEGRADED banner, listening
+key set, secret absent       → exit 1, "can take a client's money and never record it"
+JWT_SECRET absent            → exit 1, unchanged
+```
+
+What was kept from the original: everything reported at once, each requirement
+saying what breaks and where to find a value, and the `JWT_SECRET` length floor.
+What changed is only which of them stop the process.
+
+### Verification
+
+```
+npm run test:backend → # tests 292  # pass 292  # fail 0
+npm run check:rules  → passed 11  failed 0  skipped 0
+npm run typecheck / lint → clean
+```

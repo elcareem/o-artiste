@@ -22,6 +22,7 @@ const { AppError } = require('../lib/errors.ts');
 const { requireAuth, requireRole } = require('../middleware/auth.ts');
 const { getQueue, deadLetterJobs, PREFIX } = require('../lib/queue.ts');
 const echoJob = require('../jobs/echoJob.ts');
+const { healthPayload } = require('../lib/version.ts');
 
 const router = express.Router();
 
@@ -173,6 +174,145 @@ function parseDelay(value: unknown): number {
   }
 
   return delay;
+}
+
+/**
+ * GET /admin/diagnostics
+ *
+ * Whether the dependencies actually answer — issue #41.
+ *
+ * `/health` reports that a process is listening. That is not the same thing,
+ * and the difference has cost this project two multi-day outages of function:
+ * `JWT_SECRET` unset so no login could ever succeed, and the provider
+ * credentials never set at all, with `/health` answering `ok` throughout both.
+ *
+ * ADMIN-only, because "the database is not answering" tells an attacker when to
+ * try something. It is the one thing here worth hiding; which build is running
+ * is on `/health` for anyone.
+ *
+ * CONFIGURATION IS REPORTED AS PRESENT OR ABSENT, NEVER BY VALUE. An endpoint
+ * that echoes a signing key to whoever holds an admin token has replaced one
+ * problem with a worse one. Lengths are given for the secrets where length is
+ * itself the defence.
+ */
+router.get(
+  '/admin/diagnostics',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const checks = {
+        build: healthPayload(),
+        database: await checkDatabase(),
+        queue: await checkQueue(),
+        configuration: describeConfiguration(),
+      };
+
+      const failing = [checks.database, checks.queue].filter((c) => !c.ok).length;
+
+      // 503 when something is genuinely broken, so this can be pointed at by a
+      // monitor rather than read by a person who happens to look.
+      res.status(failing === 0 ? 200 : 503).json({ diagnostics: checks });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * Can we reach PostgreSQL, and is its schema the one this code expects?
+ *
+ * A COUNT THROUGH THE GENERATED CLIENT, not `select 1`. A pool can hold an open
+ * socket to a database that has stopped answering, and `select 1` succeeds
+ * against a schema missing every column this code needs. Counting bookings goes
+ * through the client's own column list, so it fails exactly when the deployed
+ * schema has drifted from the deployed code — which is the failure this whole
+ * endpoint exists to make visible.
+ */
+async function checkDatabase(): Promise<DiagnosticCheck> {
+  const prisma = require('../lib/prisma.ts');
+  const startedAt = Date.now();
+
+  try {
+    const bookings = await prisma.booking.count();
+    const latencyMs = Date.now() - startedAt;
+
+    return {
+      ok: true,
+      latencyMs,
+      detail: `${bookings} booking(s); ${await latestMigration(prisma)}`,
+    };
+  } catch (err) {
+    return { ok: false, latencyMs: Date.now() - startedAt, detail: (err as Error).message };
+  }
+}
+
+/**
+ * The most recently applied migration, best effort.
+ *
+ * Useful on a deployed host for answering "did the build apply it?" without
+ * shell access. Absent in tests, where `prisma db push` creates the schema
+ * without a migration history — so a failure here is not a failure of the
+ * database check that wraps it.
+ */
+async function latestMigration(prisma: any): Promise<string> {
+  try {
+    const rows: { migration_name: string }[] = await prisma.$queryRawUnsafe(
+      'select migration_name from _prisma_migrations where finished_at is not null order by finished_at desc limit 1'
+    );
+    return rows[0]?.migration_name ? `migration ${rows[0].migration_name}` : 'no migrations recorded';
+  } catch {
+    return 'migration history unavailable';
+  }
+}
+
+/** Can we reach Redis, and is anything consuming the queues? */
+async function checkQueue(): Promise<DiagnosticCheck> {
+  const startedAt = Date.now();
+
+  try {
+    const queue = getQueue(echoJob.QUEUE_NAME);
+    const workers = await queue.getWorkers();
+    const counts = await queue.getJobCounts('waiting', 'delayed', 'failed');
+
+    return {
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+      // A queue with no consumer accepts jobs and runs none of them, which
+      // looks healthy from every angle except the one that matters.
+      detail:
+        `${workers.length} worker(s) attached; ` +
+        `${counts.waiting} waiting, ${counts.delayed} delayed, ${counts.failed} failed`,
+    };
+  } catch (err) {
+    return { ok: false, latencyMs: Date.now() - startedAt, detail: (err as Error).message };
+  }
+}
+
+/** Present or absent. Never a value. */
+function describeConfiguration(): Record<string, string> {
+  const present = (name: string) => (process.env[name] ? 'set' : 'MISSING');
+
+  return {
+    NODE_ENV: process.env.NODE_ENV ?? 'unset',
+    DATABASE_URL: present('DATABASE_URL'),
+    REDIS_URL: present('REDIS_URL'),
+    JWT_SECRET: process.env.JWT_SECRET
+      ? `set (${process.env.JWT_SECRET.length} chars)`
+      : 'MISSING',
+    ESCROWPAY_API_KEY: process.env.ESCROWPAY_API_KEY
+      ? // The prefix decides which book the money moves in, and confusing the
+        // two is the single most consequential configuration mistake available
+        // here. It is worth saying out loud.
+        `set (${process.env.ESCROWPAY_API_KEY.slice(0, 8)}…)`
+      : 'MISSING',
+    ESCROWPAY_WEBHOOK_SECRET: present('ESCROWPAY_WEBHOOK_SECRET'),
+    ESCROWPAY_WEBHOOK_SECRET_PREVIOUS: present('ESCROWPAY_WEBHOOK_SECRET_PREVIOUS'),
+    WEB_ORIGIN: process.env.WEB_ORIGIN ?? 'unset (defaults to localhost)',
+    RUN_WORKERS_IN_WEB: process.env.RUN_WORKERS_IN_WEB ?? 'unset',
+    QUEUE_PREFIX: process.env.QUEUE_PREFIX ?? 'unset (defaults to artist-escrow)',
+    AUTO_RELEASE_GRACE_HOURS: process.env.AUTO_RELEASE_GRACE_HOURS ?? 'unset (defaults to 48)',
+  };
 }
 
 module.exports = { router, parseDelay, MAX_DELAY_MS };

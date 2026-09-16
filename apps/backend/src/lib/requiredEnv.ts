@@ -44,11 +44,22 @@ const FOR_WORKERS: EnvRequirement[] = [
 ];
 
 /**
- * Only in production. Absent locally these merely disable provider calls; in
- * production they mean bookings cannot be funded and webhooks cannot be
- * verified — which is indistinguishable, from the outside, from an outage.
+ * Capabilities, not prerequisites.
+ *
+ * WITHOUT THESE THE SERVICE STILL WORKS — it just cannot move money. Auth,
+ * artist discovery, admin and the queues are unaffected, so refusing to boot
+ * takes down more than it protects.
+ *
+ * This was fatal until it blocked four consecutive deploys, including the
+ * deploy of the diagnostics endpoint that would have explained why. A check
+ * that prevents shipping the tool which diagnoses the check is worse than the
+ * problem it guards against — and that problem, a missing value being
+ * invisible, is now solved better: by the banner below, by `/health` reporting
+ * which build is live, and by `GET /admin/diagnostics`.
+ *
+ * The one genuinely unsafe arrangement is still fatal — see `assertCoherent`.
  */
-const IN_PRODUCTION: EnvRequirement[] = [
+const CAPABILITIES: EnvRequirement[] = [
   {
     name: 'ESCROWPAY_API_KEY',
     why: 'No booking can be funded, released or refunded.',
@@ -62,6 +73,32 @@ const IN_PRODUCTION: EnvRequirement[] = [
 ];
 
 /**
+ * The combination that is unsafe, as opposed to merely incomplete.
+ *
+ * An API key WITHOUT a webhook secret is the one arrangement where money can be
+ * LOST rather than simply not moved: a client funds an escrow — which the key
+ * makes possible — the provider notifies us, we reject the delivery as
+ * unsigned, and their money sits in escrow against a booking that stays
+ * `PENDING_PAYMENT` forever. Nobody is told, on either side.
+ *
+ * With neither set, nothing can be funded at all, so nothing is at risk. That
+ * is an incomplete deployment, not a dangerous one, and the difference is worth
+ * the extra check.
+ */
+function assertCoherent(): void {
+  if (process.env.ESCROWPAY_API_KEY && !process.env.ESCROWPAY_WEBHOOK_SECRET) {
+    throw new Error(
+      'Refusing to start. ESCROWPAY_API_KEY is set but ESCROWPAY_WEBHOOK_SECRET is not.\n\n' +
+        "  That combination can take a client's money and never record it: the key lets an\n" +
+        "  escrow be funded, and without the secret the provider's notification is rejected\n" +
+        '  as unsigned, leaving the booking in PENDING_PAYMENT with the money held.\n\n' +
+        '  Set ESCROWPAY_WEBHOOK_SECRET (whsec_…, shown once when the webhook endpoint was\n' +
+        '  created), or unset ESCROWPAY_API_KEY to run without the money path at all.'
+    );
+  }
+}
+
+/**
  * Throws with everything that is wrong, or returns silently.
  *
  * @param runsWorkers whether this process will start job workers
@@ -70,11 +107,9 @@ function assertRequiredEnv({
   runsWorkers = false,
   servesHttp = true,
 }: { runsWorkers?: boolean; servesHttp?: boolean } = {}): void {
-  const required = [
-    ...ALWAYS,
-    ...(runsWorkers ? FOR_WORKERS : []),
-    ...(process.env.NODE_ENV === 'production' ? IN_PRODUCTION : []),
-  ];
+  // Prerequisites only. A capability gap is reported loudly below and does not
+  // stop the process.
+  const required = [...ALWAYS, ...(runsWorkers ? FOR_WORKERS : [])];
 
   const problems: string[] = [];
 
@@ -111,13 +146,35 @@ function assertRequiredEnv({
     );
   }
 
-  if (problems.length === 0) return;
+  if (problems.length > 0) {
+    throw new Error(
+      `Refusing to start. ${problems.length} configuration problem${problems.length > 1 ? 's' : ''}:\n\n` +
+        problems.join('\n') +
+        '\n\nSet these on the service and redeploy. See DEPLOYMENT-CHECKLIST.md.'
+    );
+  }
 
-  throw new Error(
-    `Refusing to start. ${problems.length} configuration problem${problems.length > 1 ? 's' : ''}:\n\n` +
-      problems.join('\n') +
-      '\n\nSet these on the service and redeploy. See DEPLOYMENT-CHECKLIST.md.'
-  );
+  // Unsafe rather than incomplete. This one does stop the process.
+  assertCoherent();
+
+  // Capability gaps: loud, specific, and impossible to read as routine — but
+  // not fatal. `GET /admin/diagnostics` reports the same thing on demand, and
+  // `/health` says which build is answering.
+  const missing = CAPABILITIES.filter((c) => !process.env[c.name]);
+  if (missing.length > 0) {
+    console.warn('');
+    console.warn('  ───────────────────────────────────────────────────────────────');
+    console.warn(`  DEGRADED — ${missing.length} capabilit${missing.length === 1 ? 'y' : 'ies'} unavailable`);
+    console.warn('');
+    for (const { name, why, how } of missing) {
+      console.warn(`    ${name} is not set — ${why}`);
+      if (how) console.warn(`      ${how}`);
+    }
+    console.warn('');
+    console.warn('  Starting anyway. Everything except the money path works.');
+    console.warn('  ───────────────────────────────────────────────────────────────');
+    console.warn('');
+  }
 }
 
-module.exports = { assertRequiredEnv, ALWAYS, FOR_WORKERS, IN_PRODUCTION };
+module.exports = { assertRequiredEnv, assertCoherent, ALWAYS, FOR_WORKERS, CAPABILITIES };

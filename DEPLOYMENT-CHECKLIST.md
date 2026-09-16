@@ -480,6 +480,32 @@ code is worse than one that is obviously absent.
 
 ---
 
+### Configuration severity
+
+Three levels, because "the process will not start" is a heavier hammer than
+most missing values deserve:
+
+| Level | Variables | Behaviour |
+|---|---|---|
+| **Prerequisite** | `DATABASE_URL`, `JWT_SECRET`, `REDIS_URL` (workers only) | Refuses to start. Nothing works without them |
+| **Unsafe pairing** | `ESCROWPAY_API_KEY` set while `ESCROWPAY_WEBHOOK_SECRET` is not | Refuses to start |
+| **Capability** | `ESCROWPAY_API_KEY`, `ESCROWPAY_WEBHOOK_SECRET` (both absent) | Starts **degraded**, with a banner in the log and `MISSING` in `/admin/diagnostics` |
+
+The provider credentials were prerequisites until that blocked four consecutive
+deploys — including the deploy of the diagnostics endpoint that would have
+explained the block. Without them the service still serves auth, discovery,
+admin and the queues; it cannot move money. Refusing to boot took down more than
+it protected, and the invisibility it was guarding against is now covered by
+`/health` reporting the running commit and by `/admin/diagnostics`.
+
+**The pairing is different and stays fatal.** An API key without a webhook
+secret is the one arrangement where money is lost rather than merely not moved:
+the key lets a client fund an escrow, the provider's notification is then
+rejected as unsigned, and the money sits against a booking stuck in
+`PENDING_PAYMENT` with neither side told.
+
+---
+
 ## #41 — Pre-launch
 
 **Status:** ☐
@@ -505,8 +531,8 @@ Maintained alongside `apps/backend/.env.example`.
 | `JWT_SECRET` | auth | generated — **32 characters minimum; the service refuses to start without it** |
 | `JWT_EXPIRES_IN` | auth | default `7d` |
 | `ESCROWPAY_BASE_URL` | provider client | #17 |
-| `ESCROWPAY_API_KEY` | provider client | #17 — **the service refuses to start without it in production** |
-| `ESCROWPAY_WEBHOOK_SECRET` | webhook verification | #17 — **the service refuses to start without it in production**. Not the API key |
+| `ESCROWPAY_API_KEY` | provider client | #17 — absent, the service starts **degraded**: no booking can be funded, released or refunded |
+| `ESCROWPAY_WEBHOOK_SECRET` | webhook verification | #17 — **required whenever `ESCROWPAY_API_KEY` is set**; that pairing is fatal to start without. Not the API key |
 | `ESCROWPAY_WEBHOOK_SECRET_PREVIOUS` | webhook verification during rotation | #20 — optional, set only for the 24h overlap |
 | `ESCROWPAY_AMOUNT_UNIT` | provider client | `kobo` or `naira` — open item `docs/00` §11.8 |
 | `ESCROWPAY_TIMEOUT_MS` | provider client | below the host timeout recorded at #2 |
