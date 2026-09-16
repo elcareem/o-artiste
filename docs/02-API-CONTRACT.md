@@ -189,6 +189,9 @@ The preview returns the applicable tier, the exact refund, the exact artist comp
 | `GET` | `/admin/disputes` | `ADMIN` |
 | `POST` | `/admin/disputes/:id/resolve` | `ADMIN` — written reason mandatory |
 | `POST` | `/admin/cancellations/:id/reclassify` | `ADMIN` — written reason mandatory |
+| `GET` | `/admin/config/strikes` | `ADMIN` — the rule set in force, and whether it is published or the shipped default |
+| `PUT` | `/admin/config/strikes` | `SUPER_ADMIN` — append-only; the whole set is submitted |
+| `GET` | `/admin/users/:id/strikes` | `ADMIN` — one user's conduct record in full |
 | `POST` | `/admin/queue/echo` | `ADMIN` | Schedules the do-nothing job; `delayMs` defaults to 10,000 |
 | `GET` | `/admin/queue/echo/:id` | `ADMIN` | Whether it ran, and when |
 | `GET` | `/admin/queue/dead-letter` | `ADMIN` | Jobs that exhausted every retry |

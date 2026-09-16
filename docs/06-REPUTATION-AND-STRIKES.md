@@ -42,6 +42,20 @@ The right numbers are not knowable until there is real data on how often each tr
 
 Every strike records its **triggering booking, reason, weight, and timestamp**, and strikes are queryable per user for admin review. A strike whose cause cannot be reconstructed is not reviewable, and every one of these is appealable.
 
+### How it is stored (#33)
+
+A versioned, append-only `StrikeRule` table, exactly like `CommissionRate` and `CancellationTier` — **not** environment variables. The requirement is that changing a threshold changes accrual *without a deploy*, and an environment variable cannot satisfy that on a host that redeploys to apply one.
+
+Rows sharing a `versionId` are one published set; the set in force is the most recent whose `effectiveFrom` has passed. A strike issued last month can therefore still be explained by the rules that were in force when it was issued.
+
+**Absence is meaningful.** A cancellation seven or more days out matches no row, and no row means no strike — §2's first line, expressed as data rather than as a special case in code.
+
+**A partial set is refused, naming what is missing.** An admin editing the artist bands and submitting only those would silently switch off client misconduct entirely, and nothing would say so. The set is submitted whole, the way a tier set is. This was found by test interference behaving exactly as the production failure would: not as an error, but as a record that quietly under-reports.
+
+**An empty table falls back to the shipped defaults**, and the admin surface reports `isDefault` so "nobody has decided yet" is distinguishable from "somebody decided this". A system that stops recording misconduct because a table is empty is worse than one that refuses to start.
+
+Enforcement — suspension, restricted booking, removal — is §5 and #34. A strike changes nothing about an account on its own.
+
 ## 5. Enforcement ladders
 
 **The account consequence, not the fee, is the real deterrent.** A ₦2,000 fee liability is a rounding error to a working artist; losing listing visibility is not.

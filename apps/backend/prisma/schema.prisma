@@ -177,6 +177,7 @@ model User {
   strikes        Strike[]
   feeLiabilities FeeLiability[]
   auditLogs      AuditLog[]     @relation("AuditActor")
+  strikeRules    StrikeRule[]   @relation("StrikeRuleAuthor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -615,6 +616,45 @@ model CancellationTier {
 // ---------------------------------------------------------------------------
 // Reputation, audit, webhooks
 // ---------------------------------------------------------------------------
+
+/// Strike accrual configuration — docs/06 §4, issue #33.
+///
+/// Versioned and append-only, exactly like `CommissionRate` and
+/// `CancellationTier`, because the requirement is that changing a threshold
+/// changes accrual behaviour **without a deploy** — which an environment
+/// variable cannot satisfy on a host that redeploys to apply one.
+///
+/// Rows sharing a `versionId` are one published set. The set in force is the
+/// most recent whose `effectiveFrom` has passed.
+///
+/// ABSENCE IS MEANINGFUL. A cancellation seven or more days out matches no row,
+/// and no row means no strike — which is exactly docs/06 §2's first line. The
+/// artist still bears the fee liability, because the fees were still incurred;
+/// there is simply nothing to deter, since a week is enough time to rebook.
+model StrikeRule {
+  id String @id @default(cuid())
+
+  /// Shared by every row of one published set.
+  versionId String
+
+  trigger StrikeTrigger
+  weight  Int
+
+  /// The day band this trigger covers, for the timing-based triggers.
+  /// Inclusive on both ends; `null` in `maxDaysBefore` means open-ended.
+  /// Both are null for the dispute triggers, which are not timing-based.
+  minDaysBefore Int?
+  maxDaysBefore Int?
+
+  effectiveFrom DateTime
+  setByUserId   String
+  setBy         User     @relation("StrikeRuleAuthor", fields: [setByUserId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([versionId])
+  @@index([effectiveFrom])
+}
 
 model Strike {
   id     String @id @default(cuid())

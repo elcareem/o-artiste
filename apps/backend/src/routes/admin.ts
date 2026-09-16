@@ -19,6 +19,11 @@ const {
   resolveTierSet,
   listTierVersions,
 } = require('../services/cancellationTierService.ts');
+const {
+  resolveRules,
+  setStrikeRules,
+  strikesFor,
+} = require('../services/strikeService.ts');
 
 const router = express.Router();
 
@@ -135,6 +140,86 @@ router.put(
       });
 
       res.status(201).json({ current: saved });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/config/strikes
+ *
+ * The rule set in force, and whether it is a published one — issue #33.
+ *
+ * `isDefault` matters: an empty table falls back to the shipped defaults so a
+ * fresh deployment accrues correctly rather than silently accruing nothing, and
+ * an admin should be able to tell "nobody has decided yet" from "somebody
+ * decided this".
+ *
+ * Readable by ADMIN. Seeing how conduct is priced does not carry the risk that
+ * changing it does.
+ */
+router.get(
+  '/admin/config/strikes',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const { rules, versionId, isDefault } = await resolveRules();
+      res.json({ current: { versionId, isDefault, rules } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /admin/config/strikes
+ *
+ * SUPER_ADMIN only, and deliberately not ADMIN — the same line drawn for the
+ * commission rate (docs/07 §1). An admin reviewing one strike affects one
+ * person; this changes how every future one is priced.
+ *
+ * Append-only. The previous set is never edited, so a strike issued last month
+ * can still be explained by the rules in force when it was issued.
+ */
+router.put(
+  '/admin/config/strikes',
+  requireAuth,
+  requireRole('SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { rules, effectiveFrom } = req.body ?? {};
+
+      const published = await setStrikeRules({
+        rules,
+        actorUserId: req.user.id,
+        ...(effectiveFrom ? { effectiveFrom: new Date(effectiveFrom) } : {}),
+      });
+
+      res.status(201).json({ published });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/users/:id/strikes
+ *
+ * One user's conduct record — docs/06 §4.
+ *
+ * The whole record, not a count. Every strike is appealable, and a total tells
+ * an admin what happened to an account while only the individual reasons tell
+ * them whether it should have.
+ */
+router.get(
+  '/admin/users/:id/strikes',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      res.json({ history: await strikesFor(req.params.id) });
     } catch (err) {
       next(err);
     }

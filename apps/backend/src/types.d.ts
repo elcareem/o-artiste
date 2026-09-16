@@ -602,3 +602,52 @@ interface CancellationSummary {
   clientSunkFeeKobo: Kobo | null;
   moneyOutFeeKobo: Kobo | null;
 }
+
+// ── Strikes (`services/strikeService.ts`, issue #33) ─────────────────────────
+
+type StrikeTrigger = import('@prisma/client').StrikeTrigger;
+type StrikeRow = import('@prisma/client').Strike;
+type StrikeRuleRow = import('@prisma/client').StrikeRule;
+
+/** A rule as submitted, before it is versioned and stored. */
+interface StrikeRuleInput {
+  trigger: StrikeTrigger;
+  /** Whole, at least 1. Weight is what #34's ladders read, not a count. */
+  weight: number;
+  /** Inclusive; null on both for the dispute triggers, which are not timed. */
+  minDaysBefore?: number | null;
+  maxDaysBefore?: number | null;
+}
+
+interface AccrueStrikeInput {
+  userId: string;
+  rule: Pick<StrikeRuleRow, 'trigger' | 'weight'>;
+  bookingId?: string | null;
+  /** Recorded verbatim. Every strike is appealable, so its cause must survive. */
+  reason: string;
+}
+
+interface CancellationStrikeInput {
+  userId: string;
+  by: 'ARTIST' | 'CLIENT';
+  daysBefore: number;
+  bookingId?: string | null;
+  at?: Date;
+}
+
+interface DisputeStrikeInput {
+  userId: string;
+  /** The heavier case: a no-show claim contradicted by a check-in record. */
+  falseNoShowClaim: boolean;
+  bookingId?: string | null;
+  at?: Date;
+}
+
+interface StrikeHistory {
+  userId: string;
+  total: number;
+  activeCount: number;
+  /** Summed weight of active strikes — what enforcement reads. */
+  activeWeight: number;
+  strikes: StrikeRow[];
+}

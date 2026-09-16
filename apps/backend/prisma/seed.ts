@@ -32,6 +32,7 @@ const SEED_PASSWORD = 'seed password not for production';
 
 /** Deterministic ids, so a second run recognises what the first created. */
 const COMMISSION_RATE_ID = 'seed_commission_rate_v1';
+const STRIKE_VERSION_ID = 'seed_strike_rules_v1';
 const TIER_VERSION_ID = 'seed_cancellation_tiers_v1';
 
 const DEFAULT_COMMISSION_BPS = 500; // 5%
@@ -198,6 +199,39 @@ async function seedCancellationTiers(setByUserId: string) {
 }
 
 /**
+ * The strike weights, as configuration records — issue #33.
+ *
+ * Seeded for the same reason the commission rate is (#6): so they are DATA from
+ * day one and no later issue is tempted to hardcode them. The service falls
+ * back to its shipped defaults when the table is empty, which keeps a fresh
+ * deployment accruing correctly — but a fallback is a safety net, not a
+ * decision, and the admin surface is careful to say which it is looking at.
+ */
+async function seedStrikeRules(setByUserId: string) {
+  const existing = await prisma.strikeRule.findMany({ where: { versionId: STRIKE_VERSION_ID } });
+  if (existing.length > 0) return existing;
+
+  const { DEFAULT_RULES } = require('../src/services/strikeService.ts');
+
+  return prisma.$transaction(
+    DEFAULT_RULES.map((rule: StrikeRuleInput, index: number) =>
+      prisma.strikeRule.create({
+        data: {
+          id: `${STRIKE_VERSION_ID}_${index}`,
+          versionId: STRIKE_VERSION_ID,
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+          setByUserId,
+          trigger: rule.trigger,
+          weight: rule.weight,
+          minDaysBefore: rule.minDaysBefore ?? null,
+          maxDaysBefore: rule.maxDaysBefore ?? null,
+        },
+      })
+    )
+  );
+}
+
+/**
  * Refuses to seed a rate the escrow provider could never process. Catching it
  * here rather than at checkout means the failure surfaces where the number was
  * chosen, not where a client tries to pay it.
@@ -225,10 +259,12 @@ async function main() {
   // have set it. An audit trail with no actor is not an audit trail.
   const rate = await seedCommissionRate(superAdmin.id);
   const tiers = await seedCancellationTiers(superAdmin.id);
+  const strikeRules = await seedStrikeRules(superAdmin.id);
 
   console.log(`[seed] users            ${users.length}`);
   console.log(`[seed] commission rate  ${rate.rateBasisPoints} bps`);
   console.log(`[seed] cancellation tiers ${tiers.length} rows, version ${TIER_VERSION_ID}`);
+  console.log(`[seed] strike rules     ${strikeRules.length} rows, version ${STRIKE_VERSION_ID}`);
   console.log('[seed] done');
 }
 
@@ -254,6 +290,7 @@ module.exports = {
   SEED_PASSWORD,
   COMMISSION_RATE_ID,
   TIER_VERSION_ID,
+  STRIKE_VERSION_ID,
   MIN_RATE_KOBO,
   MAX_RATE_KOBO,
 };
