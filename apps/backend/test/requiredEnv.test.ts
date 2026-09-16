@@ -185,6 +185,32 @@ test('a missing WEB_ORIGIN warns but does not stop the service', () => {
   assert.match(warnings[0], /blocked by the browser/);
 });
 
+test('a worker is not warned about CORS, which it has nothing to do with', () => {
+  // Noise in exactly the log someone reads when a job has gone wrong.
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+
+  try {
+    withEnv(
+      {
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://u:p@x/db',
+        JWT_SECRET: GOOD_SECRET,
+        REDIS_URL: 'redis://localhost:6379',
+        ESCROWPAY_API_KEY: 'sk_test_x',
+        ESCROWPAY_WEBHOOK_SECRET: 'whsec_x',
+        WEB_ORIGIN: undefined,
+      },
+      () => assertRequiredEnv({ runsWorkers: true, servesHttp: false })
+    );
+  } finally {
+    console.warn = original;
+  }
+
+  assert.deepEqual(warnings, []);
+});
+
 test('the API refuses to start, rather than 500ing the first person who logs in', () => {
   // The end-to-end property. An empty JWT_SECRET rather than an absent one,
   // because Prisma loads apps/backend/.env when it initialises and dotenv never

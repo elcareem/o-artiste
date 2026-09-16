@@ -499,7 +499,7 @@ Maintained alongside `apps/backend/.env.example`.
 | `ESCROWPAY_WEBHOOK_SECRET_PREVIOUS` | webhook verification during rotation | #20 — optional, set only for the 24h overlap |
 | `ESCROWPAY_AMOUNT_UNIT` | provider client | `kobo` or `naira` — open item `docs/00` §11.8 |
 | `ESCROWPAY_TIMEOUT_MS` | provider client | below the host timeout recorded at #2 |
-| `AUTO_RELEASE_GRACE_HOURS` | auto-release job | open item `docs/00` §11.5 |
+| `AUTO_RELEASE_GRACE_HOURS` | auto-release job | #25 — default `48`; open item `docs/00` §11.5. A malformed value throws rather than falling back |
 | `CHECKIN_WINDOW_BEFORE_HOURS` | check-in codes | #22 — default `2`; artists arrive early to set up |
 | `CHECKIN_WINDOW_AFTER_HOURS` | check-in codes | #22 — default `12`; a forgotten check-in must not become a payment dispute |
 | `CHECKIN_CODE_SMS_LEAD_HOURS` | check-in codes | #22 — default `24`; when the SMS goes out, not when the code is issued |

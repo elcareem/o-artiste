@@ -52,6 +52,11 @@ function publicBooking(booking: BookingRow) {
     clientConfirmedAt: booking.clientConfirmedAt,
     artistConfirmedAt: booking.artistConfirmedAt,
     clientNoShowClaimedAt: booking.clientNoShowClaimedAt,
+
+    // When silence releases the money (#25, docs/04 §4). Disclosed because the
+    // client is being told that not responding has a consequence, and that only
+    // works if they are told when.
+    autoReleaseAt: booking.autoReleaseAt,
   };
 }
 

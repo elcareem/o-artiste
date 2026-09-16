@@ -80,9 +80,22 @@ function assertTransition(from: BookingState, to: BookingState): void {
 /**
  * Performs a guarded transition.
  *
- * The state is re-read and checked **inside the transaction**, so two
- * concurrent requests cannot both pass the guard against a stale value — the
- * check and the write are atomic together, not merely adjacent.
+ * THE WRITE IS A COMPARE-AND-SWAP, and that is the whole substance of this
+ * function. Re-reading inside the transaction is not enough on its own:
+ * PostgreSQL's default READ COMMITTED lets two transactions both read
+ * `AWAITING_CONFIRMATION`, both pass the guard, and then the second one's
+ * `UPDATE` simply waits for the first to commit and succeeds anyway — setting
+ * the state to a value it already holds, reporting success, and returning to a
+ * caller that goes on to write a second full set of ledger entries.
+ *
+ * Found by #25's concurrency test: three simultaneous auto-release runs
+ * produced two releases. The provider deduplicates on our idempotency key so
+ * no real money moved twice, but the ledger would have recorded a payout that
+ * never happened — and the ledger is the thing we reconcile against.
+ *
+ * So the update is conditioned on the state we just validated. Exactly one
+ * writer can match it; the losers see zero rows affected and are told what the
+ * booking became.
  */
 async function transition({
   bookingId,
@@ -101,10 +114,31 @@ async function transition({
 
     assertTransition(booking.state, to);
 
-    return tx.booking.update({
-      where: { id: bookingId },
+    const { count } = await tx.booking.updateMany({
+      // `state` in the filter is what makes this a compare-and-swap. Without
+      // it the guard above is advisory.
+      where: { id: bookingId, state: booking.state },
       data: { state: to, ...data } as import('@prisma/client').Prisma.BookingUncheckedUpdateInput,
     });
+
+    if (count === 0) {
+      // Somebody else moved it between our read and our write. Re-read and let
+      // the transition map explain, so the loser of a release race is told
+      // "already paid out" rather than something about concurrency.
+      const current = await tx.booking.findUnique({ where: { id: bookingId } });
+      if (!current) throw new AppError(404, 'Booking not found.');
+      assertTransition(current.state, to);
+
+      // The state changed but the transition is still legal from where it
+      // landed. Retrying would be safe, but doing it silently here would hide a
+      // race from the caller that needs to know about it.
+      throw new AppError(
+        409,
+        'This booking changed while your request was in flight. Check its status and try again.'
+      );
+    }
+
+    return (await tx.booking.findUnique({ where: { id: bookingId } })) as BookingRow;
   };
 
   // If a transaction client was passed in, join it rather than nesting.

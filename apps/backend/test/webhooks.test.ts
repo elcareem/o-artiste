@@ -9,7 +9,10 @@
 // Isolate this file's jobs the way db.ts isolates its schema. Funding now
 // enqueues a check-in code delivery (#22), so this file puts real jobs on a
 // real queue.
-process.env.QUEUE_PREFIX = `test-webhooks-${process.pid}`;
+// Unique per RUN, not merely per process: Redis keeps keys forever and the
+// OS reuses pids, so a prefix of pid alone can land on a dead run's queue —
+// including its job-id counter, which makes `getJob('1')` return a stranger.
+process.env.QUEUE_PREFIX = `test-webhooks-${process.pid}-${Date.now()}`;
 
 const { prisma, hasDatabase, ready } = require('./db.ts')('webhooks');
 

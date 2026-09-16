@@ -128,8 +128,14 @@ SRC="apps/backend/src"
 if [ ! -d "$SRC" ]; then
   skip "escrowService.ts is the sole caller of release/refund" "$SRC not present yet"
 else
+  # Comment lines are dropped before matching, the same way `absent` does it.
+  # Without that this rule fires on its own documentation — a section heading
+  # reading "Auto-release (jobs/autoReleaseJob.ts)" matched `release\s*\(` and
+  # failed the build. A check that cannot tell a violation from a sentence about
+  # the violation is a check nobody trusts.
   hits="$(grep -rnE 'escrowpay\.(release|refund)|(release|refund)\s*\(' "$SRC" 2>/dev/null \
-          | grep -vE '(services/escrowService\.(js|ts)|lib/escrowpay\.(js|ts))' || true)"
+          | grep -vE '(services/escrowService\.(js|ts)|lib/escrowpay\.(js|ts))' \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
   if [ -z "$hits" ]; then
     pass "escrowService.ts is the sole caller of release/refund"
   else
@@ -201,6 +207,20 @@ absent "Nothing in services or lib writes CheckIn.redeemedAt" \
        "redeemedAt is set by PostgreSQL. A caller-supplied time is an assertion, not evidence. docs/04-CONFIRMATION-AND-DISPUTES.md §2." \
        "apps/backend/src/services apps/backend/src/lib apps/backend/src/jobs" \
        'redeemedAt'
+
+# ── No shadowing of Node's `process` — issue #25 ────────────────────────────
+# BullMQ processors are conventionally called `process`, and a function
+# DECLARATION by that name shadows Node's global for the entire module. Every
+# `process.env` read in the file then silently becomes a property lookup on the
+# function.
+#
+# Found in #25: it turned a configurable grace period into one that could never
+# be configured, and would have read as "the setting does nothing" rather than
+# as an error. Jobs declare `run` and export it as `process` instead.
+absent "No job declares a function named process, shadowing Node's global" \
+       "Declare it as \`run\` and export \`process: run\`. A declaration named process shadows the global for the whole module." \
+       "apps/backend/src" \
+       '^(async )?function process\('
 
 echo
 printf 'passed %s   failed %s   skipped %s\n' "$PASS" "$FAIL" "$SKIP"

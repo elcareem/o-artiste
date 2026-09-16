@@ -305,6 +305,11 @@ async function releaseBooking({
     return next;
   });
 
+  // The pending auto-release is now moot. It would no-op anyway — it re-reads
+  // the booking and stops on a settled state — so this is housekeeping, to keep
+  // the queue a picture of what is actually outstanding.
+  await require('../jobs/autoReleaseJob.ts').cancel(booking.id);
+
   console.log(
     `[escrow] released ${settlement.payoutKobo} kobo to artist for booking ${booking.id}` +
       (settlement.settledKobo > 0 ? ` (${settlement.settledKobo} kobo of liability settled)` : '')
@@ -400,6 +405,8 @@ async function refundBooking({
 
     return next;
   });
+
+  await require('../jobs/autoReleaseJob.ts').cancel(booking.id);
 
   console.log(
     `[escrow] refunded ${breakdown.clientTotalReturnedKobo} kobo to client for booking ${booking.id}` +

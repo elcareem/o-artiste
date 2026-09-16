@@ -33,6 +33,7 @@ const checkInService = require('./checkInService.ts');
 // is called, which is what keeps the webhook endpoint answering when the queue
 // is the thing that is down.
 const checkInCodeJob = require('../jobs/checkInCodeJob.ts');
+const autoReleaseJob = require('../jobs/autoReleaseJob.ts');
 
 const EVENT_ID_HEADER = 'escrowpay-event-id';
 const DELIVERY_ID_HEADER = 'escrowpay-delivery-id';
@@ -285,6 +286,11 @@ async function handleTransactionFunded(payload: WebhookPayload): Promise<Webhook
   // have. `schedule` swallows its own failures for the same reason the code is
   // issued transactionally — the money movement must not depend on Redis.
   await checkInCodeJob.schedule(booking);
+
+  // Auto-release (#25), scheduled now because funding is the moment the event
+  // becomes certain. It fires months from now if nobody responds — and only if
+  // a check-in was recorded by then, which is re-checked when it wakes.
+  await autoReleaseJob.schedule(booking);
 
   console.log(`[webhook] booking ${booking.id} funded, ${fundedMinor} kobo held`);
   return { note: 'funded', bookingId: booking.id };

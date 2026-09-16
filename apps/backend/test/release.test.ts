@@ -6,6 +6,11 @@
  * both are asserted here rather than assumed.
  */
 
+// Unique per RUN, not merely per process: Redis keeps keys forever and the
+// OS reuses pids, so a prefix of pid alone can land on a dead run's queue —
+// including its job-id counter, which makes `getJob('1')` return a stranger.
+process.env.QUEUE_PREFIX = `test-release-${process.pid}-${Date.now()}`;
+
 const { prisma, hasDatabase, ready } = require('./db.ts')('release');
 
 const test = require('node:test');
@@ -542,4 +547,12 @@ describe('a liability too large to settle is disclosed but not deducted', async 
   } finally {
     await server.close();
   }
+});
+
+test.after(async () => {
+  // escrowService cancels the pending auto-release after a release or refund
+  // (#25), which opens a real queue connection. Without closing it this process
+  // never exits and the suite hangs rather than failing — which is the worse of
+  // the two, because a hang looks like a slow machine.
+  await require('../src/lib/queue.ts').closeAll();
 });

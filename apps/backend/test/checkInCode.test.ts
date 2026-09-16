@@ -11,7 +11,10 @@
 // Isolate this file's jobs the way db.ts isolates its schema. The funding path
 // enqueues a real delivery job, so without this one suite's workers would
 // consume another's.
-process.env.QUEUE_PREFIX = `test-checkin-${process.pid}`;
+// Unique per RUN, not merely per process: Redis keeps keys forever and the
+// OS reuses pids, so a prefix of pid alone can land on a dead run's queue —
+// including its job-id counter, which makes `getJob('1')` return a stranger.
+process.env.QUEUE_PREFIX = `test-checkin-${process.pid}-${Date.now()}`;
 
 const { prisma, hasDatabase, ready } = require('./db.ts')('checkincode');
 

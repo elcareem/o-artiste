@@ -89,7 +89,7 @@ async function schedule(booking: { id: string; eventDate: Date | string }): Prom
  * already checked in since. Texting a code for a cancelled booking is a support
  * ticket at best and a confused artist at a venue at worst.
  */
-async function process(job: import('bullmq').Job): Promise<CheckInCodeDelivery> {
+async function run(job: import('bullmq').Job): Promise<CheckInCodeDelivery> {
   const { bookingId } = job.data ?? {};
   if (!bookingId) throw new Error('check-in-code job has no bookingId');
 
@@ -141,4 +141,11 @@ async function process(job: import('bullmq').Job): Promise<CheckInCodeDelivery> 
   return { bookingId, sent: true, delivered: result.delivered, stubbed: result.stubbed };
 }
 
-module.exports = { QUEUE_NAME, JOB_NAME, jobIdFor, delayFor, schedule, process };
+module.exports = { QUEUE_NAME, JOB_NAME, jobIdFor, delayFor, schedule,
+  // Declared as `run`, exported under the name the worker expects. A function
+  // declaration called `process` shadows Node's global for the WHOLE module, so
+  // any `process.env` read in this file would silently become a property lookup
+  // on this function. Caught in #25, where it turned a configurable grace
+  // period into one that could never be configured.
+  process: run,
+};

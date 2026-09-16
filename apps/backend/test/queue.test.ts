@@ -8,7 +8,10 @@ require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 // Isolate this file's jobs the way test/db.js isolates its schema. Without it
 // one suite's workers consume another's jobs — the same class of flakiness the
 // database tests had.
-process.env.QUEUE_PREFIX = `test-queue-${process.pid}`;
+// Unique per RUN, not merely per process: Redis keeps keys forever and the
+// OS reuses pids, so a prefix of pid alone can land on a dead run's queue —
+// including its job-id counter, which makes `getJob('1')` return a stranger.
+process.env.QUEUE_PREFIX = `test-queue-${process.pid}-${Date.now()}`;
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

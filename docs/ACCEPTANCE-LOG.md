@@ -4591,3 +4591,173 @@ npm run test:backend → # tests 267  # pass 267  # fail 0   (257 + 10 new)
 npm run check:rules  → passed 10  failed 0  skipped 0
 npm run typecheck    → 0 errors
 ```
+
+---
+
+## #5 — closed on the deployed host
+
+Both remaining criteria, run against `o-artiste-api` with an `ADMIN` account
+created by `npm run create-admin`.
+
+**- [x] A job scheduled 10 seconds out executes at approximately the right time, on the deployed host**
+
+```
+scheduled  2026-09-16T04:38:11.950Z
+expected   2026-09-16T04:38:21.957Z
+ran        2026-09-16T04:38:22.046Z    ← 89ms late
+```
+
+`ranAt` is produced by the job processor, not by the queue. A `completed` state
+proves the queue finished the job; this proves a worker on the deployed host
+executed it.
+
+**- [x] Scheduled jobs survive a process restart**
+
+Not a manufactured restart — a real deploy. A job was queued with a 15-minute
+delay, then #24 was merged, which replaced the process:
+
+```
+scheduled  04:38:49.802   by the process the deploy then killed
+  deploy   ~04:40
+     ran   04:53:49.846   44ms late, in a process that did not exist when it was queued
+```
+
+That merge also confirmed two fixes shipped with it: the deployed database
+gained `confirmation_timestamps` automatically (the build-time `migrate
+deploy`), and the service booted past the new configuration check, which means
+`JWT_SECRET` is now set.
+
+---
+
+## #25 — Auto-release
+
+Branch `feat/25-auto-release`, from `main` at `520731d`.
+
+The one money movement in the system that happens because nobody asked for it.
+Everything here is about the conditions under which it must **not** fire, since
+that is the expensive direction: a release that should not have happened pays
+for an event that may never have occurred, and there is no unwinding it.
+
+### Acceptance criteria
+
+**- [x] With the grace period set to 1 minute in test, a silent client results in release**
+
+`AUTO_RELEASE_GRACE_HOURS=1/60`, an event ended an hour ago, a check-in on
+record, the client silent. The job releases, the booking reaches `RELEASED`, and
+the ledger sums to zero.
+
+**- [x] Running the job twice releases once**
+
+The second run is executed with the provider rigged so that any call throws. It
+returns `already_settled` without reaching it, and exactly one `RELEASED` ledger
+entry exists.
+
+A third test fires **three runs concurrently**. That one found a real bug — see
+below.
+
+**- [x] A booking with no check-in does not auto-release**
+
+`no_check_in`, provider untouched, booking left in `FUNDED_HELD`. Nobody has
+evidence the event happened, so it waits for a person — `awaiting_response` in
+#24's matrix.
+
+**- [x] An open dispute suppresses auto-release**
+
+Tested twice: from `DISPUTED`, and from a non-disputed state that has an `OPEN`
+dispute row. The second is the one that matters — the dispute rows are checked,
+not merely the booking's state. Paying out on a timer would decide the dispute
+in the artist's favour by default, which docs/04 §5 forbids absolutely.
+
+**- [x] The scheduled job survives a worker restart**
+
+Queued with nothing running that could consume it, asserted `delayed`, then a
+worker spawned as a genuinely separate OS process — which is what makes
+auto-release survive a deploy. Also proven on the deployed host, above.
+
+### The bug this issue found
+
+Three concurrent auto-release runs produced **two releases**.
+
+The cause is not in this job. `bookingService.transition` — which every state
+change in the system goes through — re-read the state inside its transaction and
+then wrote unconditionally. That is not enough. PostgreSQL's default READ
+COMMITTED lets two transactions both read `AWAITING_CONFIRMATION`, both pass the
+guard, and then the second one's `UPDATE` simply waits for the first to commit
+and succeeds anyway, setting the state to a value it already holds and returning
+success to a caller that goes on to write a second full set of ledger entries.
+
+The function's own doc comment claimed "the check and the write are atomic
+together, not merely adjacent". It was describing an intention, not the code.
+
+The write is now a compare-and-swap conditioned on the state just validated:
+
+```ts
+const { count } = await tx.booking.updateMany({
+  where: { id: bookingId, state: booking.state },
+  data: { state: to, ...data },
+});
+if (count === 0) { /* re-read, and let the transition map explain */ }
+```
+
+Exactly one writer can match. The loser re-reads and is told what the booking
+became — "already paid out" rather than something about concurrency.
+
+**No real money was ever at risk**: the provider deduplicates on our idempotency
+key, so one payout would have left escrow either way. The damage would have been
+to the ledger, which would have recorded a payout that never happened — and the
+ledger is the thing we reconcile against. #19's balance assertion would still
+have passed, because a doubled pair of entries still sums to zero. That is the
+second time this project has found reconciliation to be necessary and not
+sufficient.
+
+Verified by three consecutive clean runs of the concurrency test, and the full
+suite twice.
+
+### A shadowing bug `tsc` caught
+
+The BullMQ convention is to call a processor `process`. A **function
+declaration** by that name shadows Node's global for the entire module, so
+`process.env` inside `graceHours()` became a property lookup on the function —
+the grace period would have been 48 hours forever, whatever the configuration
+said, and it would have read as "the setting does nothing" rather than as an
+error.
+
+All four job modules now declare `run` and export `process: run`, and
+`check:rules` gained an eleventh rule forbidding the declaration. The other
+three were not yet broken — none of them read `process.env` — but the trap was
+set for whoever added the first one.
+
+Fixing that exposed a second rule defect: `escrowService.ts is the sole caller of
+release/refund` matched a section heading in `types.d.ts` reading "Auto-release
+(`jobs/autoReleaseJob.ts`…)". That rule predated the `absent` helper and never
+stripped comments. It does now — a check that cannot tell a violation from a
+sentence about the violation is a check nobody trusts.
+
+### Two test-infrastructure fixes
+
+**The suite started hanging** rather than failing. `escrowService` now cancels
+the pending auto-release after a release or refund, which opens a Redis
+connection in any test that moves money — and an open connection keeps the
+process alive forever. `release.test.ts` and `confirmation.test.ts` gained
+teardown. This is the third time this exact trap has been sprung, so the test
+script now also passes **`--test-force-exit`**: a leaked handle becomes a clean
+exit rather than a suite that looks like a slow machine.
+
+**Queue prefixes are now unique per run**, not merely per process. Redis keeps
+keys forever and the OS reuses pids, so a prefix of pid alone can land on a dead
+run's queue — including its job-id counter, which makes `getJob('1')` return a
+stranger. That is the most likely cause of the one diagnostics failure seen in a
+parallel run and never reproducible alone. The same test now polls for `ranAt`
+rather than for `state`, closing the window between them.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 281  # pass 281  # fail 0   (twice, 267 + 14 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+NODE_ENV=production npm run start:worker
+  → [worker] listening on queues: maintenance, webhooks, notifications, releases
+```
