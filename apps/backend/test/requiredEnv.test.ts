@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
-const { assertRequiredEnv, ALWAYS, FOR_WORKERS, IN_PRODUCTION } = require('../src/lib/requiredEnv.ts');
+const { assertRequiredEnv, ALWAYS, FOR_WORKERS, CAPABILITIES } = require('../src/lib/requiredEnv.ts');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..');
 
@@ -85,15 +85,10 @@ test('every missing variable is reported at once', () => {
         const message = (err as Error).message;
         // Four names in one failure. Discovering them one restart at a time is
         // four deploys to learn four names.
-        for (const name of [
-          'DATABASE_URL',
-          'JWT_SECRET',
-          'ESCROWPAY_API_KEY',
-          'ESCROWPAY_WEBHOOK_SECRET',
-        ]) {
+        for (const name of ['DATABASE_URL', 'JWT_SECRET']) {
           assert.match(message, new RegExp(name), `${name} was not reported`);
         }
-        assert.match(message, /4 configuration problems/);
+        assert.match(message, /2 configuration problems/);
       }
     }
   );
@@ -120,24 +115,105 @@ test('a short signing key is refused as firmly as a missing one', () => {
   );
 });
 
-test('provider credentials are required in production and optional outside it', () => {
-  const base = { DATABASE_URL: 'postgresql://u:p@x/db', JWT_SECRET: GOOD_SECRET };
+test('a missing provider credential degrades the service, it does not stop it', () => {
+  // This was fatal until it blocked four consecutive deploys — including the
+  // deploy of the diagnostics endpoint that would have explained why. Without
+  // these the service still serves auth, discovery, admin and the queues; it
+  // simply cannot move money. Refusing to boot took down more than it protected.
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
 
-  withEnv(
-    { ...base, NODE_ENV: 'development', ESCROWPAY_API_KEY: undefined, ESCROWPAY_WEBHOOK_SECRET: undefined },
-    () => assertRequiredEnv()
-  );
+  try {
+    withEnv(
+      {
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://u:p@x/db',
+        JWT_SECRET: GOOD_SECRET,
+        WEB_ORIGIN: 'https://example.test',
+        ESCROWPAY_API_KEY: undefined,
+        ESCROWPAY_WEBHOOK_SECRET: undefined,
+      },
+      () => assertRequiredEnv()
+    );
+  } finally {
+    console.warn = original;
+  }
 
+  const banner = warnings.join('\n');
+  assert.match(banner, /DEGRADED/);
+  assert.match(banner, /ESCROWPAY_API_KEY/);
+  assert.match(banner, /ESCROWPAY_WEBHOOK_SECRET/);
+  assert.match(banner, /Starting anyway/);
+});
+
+test('an API key without a webhook secret refuses to start', () => {
+  // THE ONE ARRANGEMENT WHERE MONEY CAN BE LOST rather than merely not moved.
+  // The key lets a client fund an escrow; without the secret the provider's
+  // notification is rejected as unsigned, and their money sits against a
+  // booking that stays PENDING_PAYMENT forever, with nobody told.
   withEnv(
     {
-      ...base,
       NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@x/db',
+      JWT_SECRET: GOOD_SECRET,
+      WEB_ORIGIN: 'https://example.test',
+      ESCROWPAY_API_KEY: 'sk_test_abc',
+      ESCROWPAY_WEBHOOK_SECRET: undefined,
+    },
+    () => {
+      assert.throws(
+        () => assertRequiredEnv(),
+        (err: ThrownError) => {
+          assert.match(err.message, /ESCROWPAY_API_KEY is set but ESCROWPAY_WEBHOOK_SECRET is not/);
+          assert.match(err.message, /never record it/);
+          assert.match(err.message, /PENDING_PAYMENT/);
+          return true;
+        }
+      );
+    }
+  );
+
+  // Neither set is incomplete, not dangerous: nothing can be funded at all.
+  withEnv(
+    {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@x/db',
+      JWT_SECRET: GOOD_SECRET,
       WEB_ORIGIN: 'https://example.test',
       ESCROWPAY_API_KEY: undefined,
       ESCROWPAY_WEBHOOK_SECRET: undefined,
     },
     () => {
-      assert.throws(() => assertRequiredEnv(), /ESCROWPAY_API_KEY/);
+      const original = console.warn;
+      console.warn = () => {};
+      try {
+        assertRequiredEnv();
+      } finally {
+        console.warn = original;
+      }
+    }
+  );
+
+  // And a webhook secret without a key is harmless — nothing can be funded, so
+  // no delivery can arrive to be rejected.
+  withEnv(
+    {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@x/db',
+      JWT_SECRET: GOOD_SECRET,
+      WEB_ORIGIN: 'https://example.test',
+      ESCROWPAY_API_KEY: undefined,
+      ESCROWPAY_WEBHOOK_SECRET: 'whsec_abc',
+    },
+    () => {
+      const original = console.warn;
+      console.warn = () => {};
+      try {
+        assertRequiredEnv();
+      } finally {
+        console.warn = original;
+      }
     }
   );
 });
@@ -260,33 +336,36 @@ test('a missing provider credential says where to find one', () => {
   // The person reading a failed deploy at 2am is often not the person who knows
   // where the secret lives. A real failure of this exact check said only what
   // was absent, which sent the operator back to the source.
-  withEnv(
-    {
-      NODE_ENV: 'production',
-      DATABASE_URL: 'postgresql://u:p@x/db',
-      JWT_SECRET: GOOD_SECRET,
-      WEB_ORIGIN: 'https://example.test',
-      ESCROWPAY_API_KEY: undefined,
-      ESCROWPAY_WEBHOOK_SECRET: undefined,
-    },
-    () => {
-      try {
-        assertRequiredEnv();
-        assert.fail('should have thrown');
-      } catch (err) {
-        const message = (err as Error).message;
-        assert.match(message, /EscrowPay dashboard/);
-        // The two are different secrets and get confused for one another.
-        assert.match(message, /sk_test_/);
-        assert.match(message, /whsec_/);
-        assert.match(message, /Not the API key/);
-      }
-    }
-  );
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+
+  try {
+    withEnv(
+      {
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://u:p@x/db',
+        JWT_SECRET: GOOD_SECRET,
+        WEB_ORIGIN: 'https://example.test',
+        ESCROWPAY_API_KEY: undefined,
+        ESCROWPAY_WEBHOOK_SECRET: undefined,
+      },
+      () => assertRequiredEnv()
+    );
+  } finally {
+    console.warn = original;
+  }
+
+  const banner = warnings.join('\n');
+  assert.match(banner, /EscrowPay dashboard/);
+  // The two are different secrets and get confused for one another.
+  assert.match(banner, /sk_test_/);
+  assert.match(banner, /whsec_/);
+  assert.match(banner, /Not the API key/);
 });
 
 test('every requirement that can be obtained says how', () => {
-  for (const requirement of [...ALWAYS, ...FOR_WORKERS, ...IN_PRODUCTION]) {
+  for (const requirement of [...ALWAYS, ...FOR_WORKERS, ...CAPABILITIES]) {
     assert.ok(
       requirement.how && requirement.how.length > 10,
       `${requirement.name} gives no way to obtain a value`
@@ -298,7 +377,7 @@ test('the requirements say what breaks, not merely that they are required', () =
   // A configuration error is read by someone under time pressure who did not
   // write the code. "X is required" sends them to the source; "logins return
   // 500" sends them to the fix.
-  for (const requirement of [...ALWAYS, ...IN_PRODUCTION]) {
+  for (const requirement of [...ALWAYS, ...CAPABILITIES]) {
     assert.ok(requirement.why.length > 20, `${requirement.name}: "${requirement.why}"`);
     assert.doesNotMatch(
       requirement.why,

@@ -4885,3 +4885,51 @@ npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
 npm run check:rules           → passed 11  failed 0  skipped 0
 npm run typecheck / lint      → clean
 ```
+
+### Correcting the configuration check: three severities, not two
+
+The check introduced above was too blunt, and the evidence was unambiguous: it
+blocked four consecutive deploys, including the deploy of the diagnostics
+endpoint that would have explained the block. A check that prevents shipping the
+tool which diagnoses the check is worse than the problem it guards against.
+
+It also produced a false reading on my part. After one of those failed deploys I
+scheduled a queue job, saw it run, and concluded the service had started with
+the provider credentials set. It had not — the queue endpoints shipped in an
+earlier release, so the job ran on the **previous** build that the failed deploy
+had left serving. `/health` returning a bare `ok` is exactly what made that
+inference possible, and is why the build identity above was added.
+
+| Level | Variables | Behaviour |
+|---|---|---|
+| Prerequisite | `DATABASE_URL`, `JWT_SECRET`, `REDIS_URL` (workers only) | Refuses to start |
+| Unsafe pairing | `ESCROWPAY_API_KEY` set, `ESCROWPAY_WEBHOOK_SECRET` not | Refuses to start |
+| Capability | both provider credentials absent | Starts degraded, loudly |
+
+The reasoning for the middle row is the substance. **An API key without a
+webhook secret is the one arrangement where money is lost rather than merely not
+moved.** The key lets a client fund an escrow; the provider's notification is
+then rejected as unsigned; their money sits in escrow against a booking that
+stays `PENDING_PAYMENT` forever, and neither side is told. With neither
+credential set nothing can be funded at all, so nothing is at risk — that is an
+incomplete deployment, not a dangerous one.
+
+Verified by booting the real entry point three ways:
+
+```
+both absent                  → exit 124 (stayed up), DEGRADED banner, listening
+key set, secret absent       → exit 1, "can take a client's money and never record it"
+JWT_SECRET absent            → exit 1, unchanged
+```
+
+What was kept from the original: everything reported at once, each requirement
+saying what breaks and where to find a value, and the `JWT_SECRET` length floor.
+What changed is only which of them stop the process.
+
+### Verification
+
+```
+npm run test:backend → # tests 292  # pass 292  # fail 0
+npm run check:rules  → passed 11  failed 0  skipped 0
+npm run typecheck / lint → clean
+```
