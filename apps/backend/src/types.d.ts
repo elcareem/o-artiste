@@ -583,3 +583,22 @@ interface DiagnosticCheck {
   /** Human-readable. Carries an error message on failure, never a credential. */
   detail: string;
 }
+
+/** What a client cancellation reports (#27). */
+interface CancellationSummary {
+  bookingId: string;
+  state: BookingState;
+  /** True when the booking was already CANCELLED and no provider call was made. */
+  alreadyCancelled: boolean;
+  /** True when the booking was never funded, so there was nothing to split. */
+  unfunded: boolean;
+  daysBeforeEvent: number | null;
+  /** A copy of the band applied, from the booking's own snapshot. */
+  appliedTier: CancellationTierSnapshot | null;
+  clientRefundKobo: Kobo | null;
+  artistCompensationKobo: Kobo | null;
+  commissionKobo: Kobo | null;
+  /** Paid at funding, consumed, not refundable — the client's own cost. */
+  clientSunkFeeKobo: Kobo | null;
+  moneyOutFeeKobo: Kobo | null;
+}

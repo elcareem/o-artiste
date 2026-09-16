@@ -4933,3 +4933,116 @@ npm run test:backend → # tests 292  # pass 292  # fail 0
 npm run check:rules  → passed 11  failed 0  skipped 0
 npm run typecheck / lint → clean
 ```
+
+---
+
+## #27 — Client-initiated cancellation
+
+Branch `feat/27-client-cancellation`, from `main` at `e603c61`.
+
+### Acceptance criteria
+
+**- [x] Each tier produces the documented split, verified by test**
+
+One case per band of docs/05 §5, at ₦200,000 and 5% commission, each run twice
+— once through the preview and once through the cancellation:
+
+| Days out | Refund | Client gets | Artist gets |
+|---|---|---|---|
+| 10 | 10000 bps | ₦200,000 | ₦0 |
+| 5 | 7000 bps | ₦140,000 | ₦57,000 |
+| 2 | 4000 bps | ₦80,000 | ₦114,000 |
+| 0 | 1500 bps | ₦30,000 | ₦161,500 |
+
+Each case also asserts that refund + compensation + commission sums to the
+booking total **exactly** — R2, so flooring both sides independently cannot lose
+a kobo — and that the ledger sums to zero.
+
+**- [x] A cancellation where fees exceed the refund yields ₦0, not a negative value**
+
+Asserted across the whole permitted range — ₦20,000 through ₦3,000,000 — against
+every band, plus a degenerate 0 bps band. The default table never actually
+reaches the floor: at the provider's minimum of ₦20,000 the harshest band still
+returns ₦3,000 against a ₦400 money-in fee. The floor is tested anyway, because
+the table is **configuration** and a future one can get there.
+
+**- [x] The preview states the exact refund, exact artist compensation, and exact fees**
+
+The preview calls the **same function** the cancellation calls against the
+**same snapshot**, and each tier test asserts the two agree to the kobo. A
+preview that rounds differently from the thing it previews is the failure
+`docs/00` §10 exists to prevent, with extra steps.
+
+Every money field is asserted to be a kobo integer. `clientSunkFeeKobo` is
+surfaced by name because it is the figure a client is most likely to feel
+misled about: paid at funding, on top of the amount, and consumed whether or not
+the event happens.
+
+The preview is open to **both** parties. It is the artist's date being held, and
+they are entitled to know what a cancellation today would pay them.
+
+**- [x] A cancellation on a booking created under an older tier table uses the older table**
+
+The booking is snapshotted with a generous old table, the live table is then
+replaced with a much harsher one, and the cancellation is run two days out. The
+live table would refund 40%; the snapshot says 100%, and 100% is what executes.
+
+The `Cancellation` row stores a **copy** of the applied tier rather than a
+pointer to a configuration version — so editing a table later cannot change what
+a settled cancellation meant.
+
+### Counting days is a calendar problem, not an arithmetic one
+
+`daysBeforeEvent` shifts both instants into Lagos and truncates to midnight
+before subtracting, so the answer is a difference of dates rather than of
+durations.
+
+My own first test expectation here was wrong, and the failure was the useful
+kind: I asserted that 23:00 UTC the day before the event was day 1. It is day
+**0**, because 23:00 UTC is already midnight in Lagos. A UTC reading would have
+refunded that client 40% where the table says 15% — which is precisely why the
+rule specifies Lagos, and the corrected test now pins both sides of that
+boundary.
+
+### Two provider legs, and the order matters
+
+A client cancellation **splits** the escrow, so unlike a release or a refund it
+instructs two movements. Either can be zero, and a zero leg is skipped rather
+than sent as a zero-amount instruction — asserted by a recording fake that
+captures every call.
+
+**The artist is instructed first.** Both legs are retryable under stable
+references, so a failure between them is recoverable either way; the order
+decides who waits on the retry. It should not be the party who did not choose
+this — the client asked to cancel and knows their money is moving, while the
+artist is finding out that a booked date has evaporated.
+
+### A leak the tests caught
+
+`assertTransition`'s generic branch produced `A booking cannot go from
+CHECKED_IN to CANCELLED.` — raw state names, to an end user, in violation of
+docs/02 §2. Every other message in the system had been written by hand, so the
+one **generated from the state machine** was the one nobody had read.
+
+It now reads `This booking is checked in at the event, so it cannot be
+cancelled.` Two maps, one describing where a booking is and one phrasing what
+the caller asked for. #24's test had pinned the old wording and failed on the
+change, which is what it is for.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 305  # pass 305  # fail 0   (292 + 13 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+```
+
+### Carried forward
+
+#28 is the mirror image: the artist cancels, the client is made whole including
+the fee they paid at funding, and the cost accrues to the artist as a
+`FeeLiability`. `escrowService.refundBooking` already implements those economics
+— it was built for #24's uncontradicted no-show — so #28 is largely the route,
+the `Cancellation` row with `initiatedBy: 'ARTIST'`, and the strike.

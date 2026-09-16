@@ -118,6 +118,16 @@ Consequence worth stating: **never compute both sides of a split from their own 
 
 Bands are inclusive on both ends. `null` in `maxDaysBefore` means open-ended. `daysBeforeEvent` is **whole days**, floored, computed in **Africa/Lagos** from the cancellation timestamp to the event start. Day 0 means cancelling on the event day.
 
+### Why Lagos, and why calendar days
+
+Not elapsed hours divided by 24. Both instants are shifted into Lagos (UTC+1, no daylight saving) and truncated to midnight before subtracting, so the answer is a **difference of dates**, not of durations.
+
+A client cancelling at 23:00 Monday for a Wednesday 09:00 event has 34 hours in hand, which floors to 1 — but in the only calendar anyone involved is using, that is two days before. The tiers are read as "a week before", "the day before", and the boundary between a 70% refund and a 40% one must fall where a person would put it.
+
+The offset changes answers at the boundary in a way UTC would get wrong: 23:00 UTC is already midnight in Lagos, so a cancellation then is on the **event day** — day 0, 15% back — where a UTC reading would call it day 1 and refund 40%.
+
+A cancellation after the event returns a negative number, which no band covers. It is refused, not guessed: the caller is told to confirm the booking or report a no-show instead.
+
 ### Validation (#8)
 
 A tier set is rejected unless **all** hold:

@@ -22,9 +22,11 @@ const { assertCanTransact, assertTransition, transition } = require('./bookingSe
 const {
   moneyInFee,
   computeCompletion,
+  computeClientCancellation,
   computeArtistCancellation,
   applyFeeLiabilities,
 } = require('./feeService.ts');
+const { applicableTier } = require('./cancellationService.ts');
 const ledger = require('./ledgerService.ts');
 
 /**
@@ -324,6 +326,207 @@ async function releaseBooking({
 }
 
 /**
+ * A client cancels — issue #27, docs/05 §5.
+ *
+ * THE ESCROW IS SPLIT, so there are two provider legs rather than one: the
+ * client's tiered refund, and the artist's compensation for a date they can no
+ * longer refill. Either can be zero — at seven days out the artist gets
+ * nothing, and no tier gives the client nothing — and a zero leg is skipped
+ * rather than sent as a zero-amount instruction.
+ *
+ * ORDER: THE ARTIST IS PAID FIRST. Both legs are retryable under stable
+ * references, so a failure between them is recoverable either way. The order
+ * matters for which party is left waiting on a retry, and the answer is the one
+ * who did not choose this: the client asked to cancel and knows their money is
+ * moving, while the artist is finding out that a booked date has evaporated.
+ *
+ * THE TIER COMES FROM THE BOOKING'S SNAPSHOT. A cancellation on a booking made
+ * under an older table uses the older table — that is the whole point of #15.
+ */
+async function cancelByClient({
+  bookingId,
+  clientUserId,
+  reason,
+}: {
+  bookingId: string;
+  clientUserId: string;
+  reason?: string;
+}): Promise<CancellationSummary> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { client: true, artist: { include: { user: true } }, cancellation: true },
+  });
+
+  if (!booking) throw new AppError(404, 'Booking not found.');
+
+  // 404, never 403 — confirming a booking exists is itself information.
+  if (booking.client.userId !== clientUserId) throw new AppError(404, 'Booking not found.');
+
+  if (booking.state === 'CANCELLED') {
+    return cancellationSummaryFor(booking, { alreadyCancelled: true });
+  }
+
+  assertTransition(booking.state, 'CANCELLED');
+
+  const { tier, daysBefore } = applicableTier(booking);
+
+  // Never funded: nothing to split, nobody to pay. The booking is simply
+  // withdrawn, and no tier applies to money that never moved.
+  if (booking.state === 'PENDING_PAYMENT' || !booking.escrowId) {
+    const withdrawn = await prisma.$transaction(async (tx: PrismaTx) => {
+      const next = await transition({
+        bookingId: booking.id,
+        to: 'CANCELLED',
+        client: tx,
+        data: { cancelledAt: new Date() },
+      });
+      await recordCancellationRow(tx, booking, {
+        tier,
+        daysBefore,
+        clientRefundKobo: 0,
+        artistCompensationKobo: 0,
+        escrowFeesKobo: 0,
+      });
+      return next;
+    });
+
+    return cancellationSummaryFor(withdrawn, { tier, daysBefore, unfunded: true });
+  }
+
+  const breakdown = computeClientCancellation({
+    amountKobo: booking.amountKobo,
+    commissionBps: booking.commissionRateBpsSnapshot,
+    clientRefundBps: tier.clientRefundBps,
+    artistCompensationBps: tier.artistCompensationBps,
+  });
+
+  // --- The irreversible steps, in order. -----------------------------------
+  if (breakdown.artistCompensationKobo > 0) {
+    if (!booking.artist.user.escrowPartyId) {
+      throw new AppError(409, 'This artist cannot receive payments yet.');
+    }
+    await escrowpay.release({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_cxl_artist`,
+      amountKobo: breakdown.artistCompensationKobo,
+      reason: reason
+        ? `Client cancelled ${daysBefore} day(s) before the event: ${reason}`
+        : `Client cancelled ${daysBefore} day(s) before the event`,
+    });
+  }
+
+  if (breakdown.clientRefundKobo > 0) {
+    await escrowpay.refund({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_cxl_client`,
+      amountKobo: breakdown.clientRefundKobo,
+      reason: `Cancellation refund at ${tier.clientRefundBps} bps`,
+    });
+  }
+
+  // --- Recorded now, in ONE transaction with the state change. -------------
+  const updated = await prisma.$transaction(async (tx: PrismaTx) => {
+    const next = await transition({
+      bookingId: booking.id,
+      to: 'CANCELLED',
+      client: tx,
+      data: { cancelledAt: new Date() },
+    });
+
+    await ledger.recordClientCancellation(tx, booking, tier);
+
+    await recordCancellationRow(tx, booking, {
+      tier,
+      daysBefore,
+      clientRefundKobo: breakdown.clientRefundKobo,
+      artistCompensationKobo: breakdown.artistCompensationKobo,
+      escrowFeesKobo: breakdown.clientSunkFeeKobo + breakdown.moneyOutFeeKobo,
+    });
+
+    return next;
+  });
+
+  console.log(
+    `[escrow] booking ${booking.id} cancelled by client ${daysBefore} day(s) out — ` +
+      `${breakdown.clientRefundKobo} kobo refunded, ${breakdown.artistCompensationKobo} kobo to artist`
+  );
+
+  return cancellationSummaryFor(updated, { tier, daysBefore, breakdown });
+}
+
+/**
+ * The cancellation record.
+ *
+ * `appliedTier` is a COPY of the tier, not a pointer to a configuration
+ * version. A pointer would let the meaning of a settled cancellation change
+ * when someone edits a table, which is exactly what the snapshot exists to
+ * prevent — and this row is the evidence if the split is ever questioned.
+ */
+function recordCancellationRow(
+  tx: PrismaTx,
+  booking: BookingRow & { client: ClientRow },
+  {
+    tier,
+    daysBefore,
+    clientRefundKobo,
+    artistCompensationKobo,
+    escrowFeesKobo,
+  }: {
+    tier: CancellationTierSnapshot;
+    daysBefore: number;
+    clientRefundKobo: Kobo;
+    artistCompensationKobo: Kobo;
+    escrowFeesKobo: Kobo;
+  }
+) {
+  return tx.cancellation.create({
+    data: {
+      bookingId: booking.id,
+      initiatedBy: 'CLIENT',
+      initiatedByUserId: booking.client.userId,
+      daysBeforeEvent: daysBefore,
+      appliedTier: tier as unknown as import('@prisma/client').Prisma.InputJsonValue,
+      clientRefundKobo,
+      artistCompensationKobo,
+      escrowFeesKobo,
+      // docs/05 §6: the client chose to cancel, so the client carries the cost.
+      feeBearer: 'CLIENT',
+    },
+  });
+}
+
+function cancellationSummaryFor(
+  booking: BookingRow,
+  {
+    tier = null,
+    daysBefore = null,
+    breakdown = null,
+    alreadyCancelled = false,
+    unfunded = false,
+  }: {
+    tier?: CancellationTierSnapshot | null;
+    daysBefore?: number | null;
+    breakdown?: ClientCancellationBreakdown | null;
+    alreadyCancelled?: boolean;
+    unfunded?: boolean;
+  } = {}
+): CancellationSummary {
+  return {
+    bookingId: booking.id,
+    state: booking.state,
+    alreadyCancelled,
+    unfunded,
+    daysBeforeEvent: daysBefore,
+    appliedTier: tier,
+    clientRefundKobo: breakdown?.clientRefundKobo ?? (unfunded ? 0 : null),
+    artistCompensationKobo: breakdown?.artistCompensationKobo ?? (unfunded ? 0 : null),
+    commissionKobo: breakdown?.commissionKobo ?? (unfunded ? 0 : null),
+    clientSunkFeeKobo: breakdown?.clientSunkFeeKobo ?? (unfunded ? 0 : null),
+    moneyOutFeeKobo: breakdown?.moneyOutFeeKobo ?? (unfunded ? 0 : null),
+  };
+}
+
+/**
  * Refunds the client in full, at the artist's cost — #24's uncontradicted
  * no-show, and the shape #28's artist-fault reclassification reuses.
  *
@@ -537,4 +740,10 @@ async function withCheckoutSession(booking: BookingRow): Promise<FundingInstruct
   }
 }
 
-module.exports = { createEscrowForBooking, fundingInstructionFor, releaseBooking, refundBooking };
+module.exports = {
+  createEscrowForBooking,
+  fundingInstructionFor,
+  releaseBooking,
+  refundBooking,
+  cancelByClient,
+};
