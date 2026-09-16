@@ -122,6 +122,59 @@ function triggerForDispute(rules: StrikeRuleRow[], falseNoShowClaim: boolean): S
 }
 
 /**
+ * What a cancellation costs the artist's standing, in words — docs/06 §2.
+ *
+ * The weight is a number for the enforcement ladders; this is the sentence an
+ * artist reads BEFORE deciding. "Strike + suspension pending review" is a
+ * materially different decision from "no strike", and discovering which one
+ * applied afterwards is not a deterrent, it is a grievance.
+ */
+function consequenceOfArtistCancellation(
+  rule: StrikeRuleRow | null
+): ArtistCancellationConsequence {
+  if (!rule) {
+    return {
+      trigger: null,
+      weight: 0,
+      // Seven days out is a normal business event. The fees were still
+      // incurred, so the liability stands — there is simply nothing to deter.
+      summary: 'No strike. You will still owe the escrow fees for this booking.',
+      suspends: false,
+      publishesRate: false,
+    };
+  }
+
+  switch (rule.trigger) {
+    case 'ARTIST_CANCEL_DAY_OF':
+      return {
+        trigger: rule.trigger,
+        weight: rule.weight,
+        summary:
+          'A strike, and your account is suspended pending review — you will not appear in search or be bookable until someone has looked at it.',
+        suspends: true,
+        publishesRate: true,
+      };
+    case 'ARTIST_CANCEL_1_2_DAYS':
+      return {
+        trigger: rule.trigger,
+        weight: rule.weight,
+        summary:
+          'A strike, and your cancellation rate becomes visible to clients on your profile.',
+        suspends: false,
+        publishesRate: true,
+      };
+    default:
+      return {
+        trigger: rule.trigger,
+        weight: rule.weight,
+        summary: 'A strike on your account.',
+        suspends: false,
+        publishesRate: false,
+      };
+  }
+}
+
+/**
  * Records a strike, inside the caller's transaction.
  *
  * Takes the transaction because a strike and the event that caused it must
@@ -368,6 +421,7 @@ async function strikesFor(userId: string): Promise<StrikeHistory> {
 module.exports = {
   resolveRules,
   triggerForCancellation,
+  consequenceOfArtistCancellation,
   triggerForDispute,
   accrue,
   accrueForCancellation,

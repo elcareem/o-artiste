@@ -20,7 +20,11 @@ const {
   cancelByArtist,
 } = require('../services/escrowService.ts');
 const { applicableTier } = require('../services/cancellationService.ts');
-const { computeClientCancellation } = require('../services/feeService.ts');
+const {
+  computeClientCancellation,
+  computeArtistCancellation,
+} = require('../services/feeService.ts');
+const strikeService = require('../services/strikeService.ts');
 const { codeForClient, redeem } = require('../services/checkInService.ts');
 const { confirm, claimNoShow } = require('../services/confirmationService.ts');
 
@@ -467,6 +471,15 @@ router.get(
           // Never negative. docs/05 §6: a shortfall is not recovered from
           // anyone, but it must be SHOWN rather than discovered.
           unrecoveredShortfallKobo: breakdown.unrecoveredShortfallKobo,
+
+          // THE ARTIST'S OWN DECISION IS A DIFFERENT ONE (#30).
+          //
+          // The figures above answer "what happens if the client cancels". An
+          // artist weighing whether to cancel needs what it costs THEM: the
+          // client is made whole, they are paid nothing, they owe the fees, and
+          // their standing changes. Showing them the client's split would be
+          // answering a question they did not ask.
+          ifArtistCancels: await artistOutcome(booking, daysBefore),
         },
       });
     } catch (err) {
@@ -519,6 +532,33 @@ router.post(
     }
   }
 );
+
+/**
+ * What cancelling costs the artist, in money and in standing.
+ *
+ * Both halves, because both are consequences they should be able to weigh
+ * before deciding rather than discover on their next payout (#30). The strike
+ * band is read from the rules in force, not hardcoded — #33 makes those
+ * configurable and a preview quoting stale numbers is worse than none.
+ */
+async function artistOutcome(booking: BookingRow, daysBefore: number) {
+  const corrected = computeArtistCancellation({ amountKobo: booking.amountKobo });
+  const { rules } = await strikeService.resolveRules();
+  const rule = strikeService.triggerForCancellation(rules, 'ARTIST', daysBefore);
+
+  return {
+    // The client is made whole, whatever the timing.
+    clientRefundKobo: corrected.clientRefundKobo,
+    clientFeeReimbursementKobo: corrected.clientFeeReimbursementKobo,
+    clientTotalReturnedKobo: corrected.clientTotalReturnedKobo,
+
+    // Nothing for the artist, and a debt.
+    artistCompensationKobo: 0,
+    feeLiabilityKobo: corrected.feeLiabilityKobo,
+
+    consequence: strikeService.consequenceOfArtistCancellation(rule),
+  };
+}
 
 /** Whether a cancellation is still possible, for the preview's own use. */
 function canBeCancelled(state: BookingState): boolean {
