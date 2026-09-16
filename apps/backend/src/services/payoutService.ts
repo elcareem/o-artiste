@@ -126,9 +126,17 @@ async function walletId(): Promise<string> {
   if (cachedWalletId) return cachedWalletId;
 
   const response = await escrowpay.listWallets();
-  const wallets = response?.data ?? response?.wallets ?? response ?? [];
-  const ngn =
-    wallets.find?.((w: any) => (w.currency ?? 'NGN') === 'NGN') ?? (Array.isArray(wallets) ? wallets[0] : null);
+
+  // `items` is what the provider actually returns — verified against the test
+  // book, after a first version guessed `data` / `wallets` and would have
+  // thrown on every payout. The alternatives are kept because a paginated
+  // collection is exactly the shape an API changes its mind about, and the cost
+  // of being wrong here is an artist not being paid.
+  const wallets: any[] = Array.isArray(response)
+    ? response
+    : (response?.items ?? response?.data ?? response?.wallets ?? []);
+
+  const ngn = wallets.find((w: any) => (w.currency ?? 'NGN') === 'NGN' && w.enabled !== false) ?? wallets[0];
 
   const id = ngn?.id ?? ngn?.wallet_id;
   if (!id) {

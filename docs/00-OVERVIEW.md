@@ -159,7 +159,7 @@ Items that are not resolved and are not ours alone to close. Each must be **reso
 
 | # | Item | Blocked on | Interim behaviour |
 |---|---|---|---|
-| **11.1** | Whether a refund leg to the client incurs the EscrowPay money-out fee | EscrowPay confirmation | Implemented as a configurable flag, **defaulting to charged**. Assumption noted in `feeService.js`. |
+| **11.1** | Whether a refund leg to the client incurs the EscrowPay money-out fee | EscrowPay confirmation | Configurable flag, **defaulting to charged**. Narrowed on 16 Sep 2026: the provider accepts only three fee types — `escrow_service`, `payout`, `identity_verification` — so if a refund costs anything it costs the `payout` fee. Evidence, not proof; settling it needs a real refund in the sandbox with `GET /transactions/{id}/fees` read afterwards. |
 | **11.9** | **Automatic payout is disabled on this EscrowPay business** (`automatic_payout_disabled`), so a release lands in our wallet and we send it on | EscrowPay | Two-leg payout implemented: `release` then `POST /wallets/{id}/payouts`. The window in which the platform holds an artist's money is seconds, not days, and `GET /admin/payouts/awaiting` lists any that stayed open. **Ask EscrowPay to enable automatic payout** — if they do, the wallet leg disappears and §3 stops being strained. |
 | **11.2** | EscrowPay commercial terms, uptime and support expectations in writing | EscrowPay | None — commercial, not technical |
 | **11.3** | Legal counsel on our own regulatory position | Counsel | None — proceed with the custody rules in §3, which are the conservative posture |

@@ -481,3 +481,88 @@ exist on releases, refunds and payouts for exactly this.
 `transaction.partially_funded` matters too: we set `funding_mode: "exact"`, so an
 underpayment should not fund the booking — but the event still arrives and must
 be handled rather than ignored.
+
+
+---
+
+# Measured against the live test book — 16 September 2026
+
+Run with a real `sk_test_` key through `lib/escrowpay.ts`, not read from a
+document. Everything below is an observation.
+
+## Fees: our hardcoded schedule is correct at every boundary
+
+`POST /fees/estimates` accepts exactly three `fee_type` values — the provider
+named them in a validation error: **`escrow_service`, `payout`,
+`identity_verification`**.
+
+### Money in (`escrow_service`)
+
+| Booking | Ours | Theirs | |
+|---|---|---|---|
+| ₦20,000 | ₦400 | ₦400 | ✅ |
+| ₦126,667 | ₦2,000 | ₦2,000 | ✅ cap binds here |
+| ₦200,000 | ₦2,000 | ₦2,000 | ✅ |
+| ₦250,000 | ₦2,000 | ₦2,000 | ✅ |
+| ₦3,000,000 | ₦24,000 | ₦24,000 | ✅ 0.8% band |
+
+`payer: "payer"`, `timing: "at_funding"` — **the client bears it, at funding.**
+Independent confirmation of the corrected fee-bearer model from #18.
+
+### Money out (`payout`)
+
+| Payout | Ours | Theirs | |
+|---|---|---|---|
+| ₦20,000 | ₦40 | ₦40 | ✅ |
+| ₦49,999 | ₦40 | ₦40 | ✅ |
+| ₦50,000 | ₦40 | ₦40 | ✅ boundary |
+| ₦50,001 | ₦70 | ₦70 | ✅ boundary |
+| ₦100,000 | ₦70 | ₦70 | ✅ |
+| ₦200,000 | ₦70 | ₦70 | ✅ |
+| ₦3,000,000 | ₦70 | ₦70 | ✅ flat above the band |
+
+`payer: "business"`, `timing: "at_payout"` — **the platform bears it, at
+payout.** Also #18's model, confirmed.
+
+One nuance worth knowing: `at_payout` means the fee is incurred on the
+wallet→artist leg, not on the release. The ledger records it at release. The two
+happen back-to-back and each booking still reconciles to zero, so the difference
+is presentational rather than arithmetic — but a reconciliation against the
+provider's own fee records should expect their timestamp, not ours.
+
+### Identity verification
+
+`amount_minor: 5000` — **₦50**, `payer: "business"`. A platform cost that never
+touches per-booking economics, which is how #10 treats it.
+
+## What this does and does not settle
+
+**Settles:** `#14`'s schedule is not an approximation of the published rates, it
+is the rates. Both fee bearers are confirmed by the provider's own `payer`
+field rather than by our reading of a pricing page.
+
+**Does not settle §11.1** — whether a refund leg to the client incurs the
+money-out fee. There is no `refund` fee type; if a refund costs anything it
+costs the `payout` fee. That is evidence, not proof. Settling it needs a real
+funded transaction refunded in the sandbox and `GET /transactions/{id}/fees`
+read afterwards.
+
+## Shapes, as actually returned
+
+`GET /wallets` → `{ "items": [ … ] }` — **not** `data`, not `wallets`. A first
+version of the payout code guessed `data`/`wallets` and would have thrown on
+every payout; the probe caught it before any artist was owed money.
+
+```json
+{ "id": "WLT_…", "business_id": "BUS_…", "environment": "test",
+  "currency": "NGN", "enabled": true,
+  "balances": { "escrow_held": 0, "available": 0, "reserved": 0, … } }
+```
+
+`GET /banks` → 7 banks in test. `bank_code` `"999"` is *EscrowPay Bank*, the
+test wallet funding destination and valid for account resolution.
+
+```json
+{ "bank_code": "999", "bank_name": "EscrowPay Bank",
+  "bank_short_name": "ESCPAY", "bank_logo_url": null, "notes": "…" }
+```

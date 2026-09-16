@@ -5484,3 +5484,54 @@ result so a returning user triggers neither a provider call nor a second charge.
 The remaining question is whether a *failed* attempt bills, which decides
 whether the retry path — added so a network blip cannot permanently lock a
 legitimate user out — carries a cost. Recorded as §11.10.
+
+### Probed against the live sandbox, and it found a bug
+
+With a working key in place, the payout code was exercised against the real test
+book rather than only against the OpenAPI document it was written from.
+
+**`GET /wallets` returns `{ items: [...] }`** — not `data`, not `wallets`. The
+first version of `walletId()` guessed those two and fell through to a `.find` on
+an object, so it would have thrown `did not return a wallet to pay out from` on
+**every payout**. Unit tests passed throughout, because the fake returned the
+shape the code expected.
+
+That is the failure mode of building against a spec: the tests agree with the
+code about something neither of them checked. Fixed, and the resolver now
+tolerates all three shapes, because a paginated collection is exactly what an
+API changes its mind about and the cost of being wrong is an artist not paid.
+
+### And it confirmed #14 outright
+
+`POST /fees/estimates` accepts exactly three fee types — the provider named them
+in a validation error: `escrow_service`, `payout`, `identity_verification`.
+
+Our hardcoded schedule matches the provider at **every boundary tested**:
+
+```
+money in   ₦20,000 → ₦400   ₦126,667 → ₦2,000 (cap)   ₦3,000,000 → ₦24,000 (0.8%)
+money out  ₦50,000 → ₦40    ₦50,001  → ₦70            ₦3,000,000 → ₦70
+```
+
+Including the exact switch at ₦50,000/₦50,001 and the point where the ₦2,000 cap
+begins to bind.
+
+**Both fee bearers are confirmed by the provider's own `payer` field**, not by
+our reading of a pricing page: money-in is `payer: "payer"` at `at_funding`,
+money-out is `payer: "business"` at `at_payout`. That is exactly the corrected
+model from #18, arrived at independently.
+
+Identity verification returns `amount_minor: 5000` — ₦50 — with
+`payer: "business"`, which is how #10 treats it: a platform cost that never
+touches per-booking economics.
+
+**§11.1 is narrowed but not closed.** There is no `refund` fee type, so if a
+refund leg costs anything it costs the `payout` fee. Evidence, not proof —
+settling it needs a real funded transaction refunded in the sandbox with
+`GET /transactions/{id}/fees` read afterwards.
+
+One nuance now recorded in the provider map: `timing: "at_payout"` means the
+money-out fee is incurred on the wallet→artist leg, while our ledger records it
+at release. The two happen back-to-back and every booking still reconciles to
+zero, so the difference is presentational — but a reconciliation against the
+provider's own fee records should expect their timestamp, not ours.
