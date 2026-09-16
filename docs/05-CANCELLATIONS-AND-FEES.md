@@ -149,6 +149,22 @@ A tier set is rejected unless **all** hold:
 
 The validation matters more than it first appears. A gap means a booking cancelled in that window has **no applicable rule**, and there is no safe default: refunding everything harms the artist, refunding nothing is FCCPA exposure. The validation makes an unresolvable state unsaveable — which is the only way to guarantee it never has to be resolved under pressure with money already held.
 
+### Artist-fault reclassification (#29)
+
+Not every client cancellation is the client's fault. Where the artist changed terms after booking, misrepresented what they were providing, or disclosed costs late, the client cancelling is a consequence of the artist's conduct — and charging them a cancellation fee for it is the situation the FCCPA addresses.
+
+An `ADMIN` reclassifies through `POST /admin/cancellations/:id/reclassify`, with a **mandatory written reason**. The decision moves money on a settled booking and accrues a strike against a named artist; without a recorded justification it is indefensible when questioned, and it will be.
+
+**The reversal is offsetting entries, never edits.** Each original entry of the cancellation gets its exact negation, typed `CORRECTION` and carrying `offsetsEntryId`, and the corrected position is then written fresh. The originals stay queryable, because the sequence — charged, then reversed, and why — is the record that matters. An edited ledger can only say what someone last decided; this one says what happened.
+
+**Where the money comes from.** The escrow is empty: a client cancellation disburses both legs. The difference owed to the client is therefore refunded with `source: wallet_available` — the platform's own funds — and recovered from the artist.
+
+**What the artist owes is one debt with two halves.** The compensation they already received and should not have, plus the fees the platform now fronts. Both are recorded as a single `FeeLiability` and settle against their next payout (#26).
+
+The client's lifetime position on the booking ends at **exactly zero**: funding recorded `−(amount + money-in fee)` and an artist-fault outcome returns both halves. That is what "made whole" means here, and it is the assertion the test makes — stronger than checking the refund line, which would still pass if the fee reimbursement had been forgotten.
+
+Reclassifying twice is refused rather than applied twice: `reverseEntries` skips anything already offset, and the cancellation row carries the decision.
+
 ### Commission is not part of the split
 
 The tier percentages divide **the booking total**, summing to 10000 bps. Platform commission is applied to the artist's share **afterwards**, not carved out of the split. These are two separate operations in validation and in computation, and conflating them silently changes what the client was shown.

@@ -24,7 +24,10 @@ const {
   setStrikeRules,
   strikesFor,
 } = require('../services/strikeService.ts');
-const { writeOffLiabilities } = require('../services/escrowService.ts');
+const {
+  writeOffLiabilities,
+  reclassifyAsArtistFault,
+} = require('../services/escrowService.ts');
 
 const router = express.Router();
 
@@ -260,6 +263,41 @@ router.post(
       });
 
       res.json({ writeOff: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /admin/cancellations/:id/reclassify
+ *
+ * Reclassifies a client cancellation as artist-fault — issue #29.
+ *
+ * Not every client cancellation is the client's fault. Where the artist changed
+ * terms after booking or disclosed costs late, charging the client a
+ * cancellation fee is the situation the FCCPA addresses.
+ *
+ * A WRITTEN REASON IS MANDATORY. This moves money on a settled booking and
+ * accrues a strike against a named artist; a decision like that without a
+ * recorded justification is indefensible when it is questioned, and it will be.
+ * The deciding admin is named in `AuditLog`.
+ */
+router.post(
+  '/admin/cancellations/:id/reclassify',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { reason } = req.body ?? {};
+
+      const reclassification = await reclassifyAsArtistFault({
+        cancellationId: req.params.id,
+        actorUserId: req.user.id,
+        reason,
+      });
+
+      res.json({ reclassification });
     } catch (err) {
       next(err);
     }

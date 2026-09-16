@@ -5303,3 +5303,90 @@ npm run check:rules           → passed 11  failed 0  skipped 0
 npm run lint                  → clean
 npm run seed (twice)          → idempotent
 ```
+
+---
+
+## #29 — Artist-fault reclassification
+
+Branch `feat/29-artist-fault-reclassification`, from `main` at `1201b5b`.
+
+### Acceptance criteria
+
+**- [x] Reclassifying produces offsetting entries that reconcile to the correct net position**
+
+Every original entry of the cancellation is negated exactly — the test walks
+each `CORRECTION` back to the entry it offsets and asserts
+`correction.amountKobo === -source.amountKobo` — and the booking still
+reconciles to zero afterwards.
+
+**- [x] Original entries remain intact and queryable**
+
+Every pre-reclassification entry is re-fetched by id and asserted unchanged in
+amount, type, party and `createdAt`. Nothing is edited, nothing is removed, and
+the row count only grows.
+
+**- [x] Reclassification without a written reason is rejected**
+
+Four shapes — absent, empty, whitespace, null — each `400`, each with the
+provider rigged to throw so a leak would fail loudly. Afterwards the
+cancellation is asserted un-reclassified with zero corrections written: refused,
+not half-applied.
+
+**- [x] The audit record names the deciding admin**
+
+`actorUserId`, the verbatim reason, and `before`/`after` carrying the fee bearer
+on each side, so the decision can be reconstructed rather than inferred. The
+`Cancellation` row separately records who decided, why, and when.
+
+### Where the money comes from
+
+The escrow is **empty** — a client cancellation disburses both legs — so there
+is nothing left in the transaction to refund from. The difference owed to the
+client is refunded with `source: wallet_available`, the platform's own funds,
+and recovered from the artist. The test asserts that source explicitly, because
+`escrow_held` would simply fail at the provider and the failure would look like
+an outage rather than a modelling error.
+
+### What the artist owes is one debt with two halves
+
+The compensation they already received and should not have — which cannot be
+clawed back from a provider because it has left the escrow — plus the fees the
+platform now fronts. Recorded as a single `FeeLiability` that settles against
+their next payout, exactly like #28's.
+
+A strike accrues as though the artist had cancelled, at the band the
+cancellation actually fell in. The test asserts it lands on the **artist**, not
+the client who cancelled.
+
+### A correction to my own assertion
+
+I first asserted the client's net ledger position should equal
+`clientTotalReturned − amount`. It came back `0`.
+
+Zero is right, and it is the better statement: funding records
+`−(amount + money-in fee)`, so a client who is genuinely made whole nets to
+exactly nothing across the booking. The test now asserts that, plus that both
+halves of the return are actually present — a check on the total alone would
+still pass if the fee reimbursement had been forgotten and the refund
+overstated.
+
+### `check:rules` caught a boundary I had crossed
+
+The first implementation read `tx.ledgerEntry.findMany` from `escrowService` to
+decide what to negate, and the "ledgerService is the sole writer" rule failed it.
+
+The rule is blunt on purpose and it was right: a read that decides what to
+negate is one edit away from being a write, and "which entries constitute the
+original cancellation" is knowledge about the ledger. It moved into
+`ledgerService.reverseEntries`, which also skips anything already offset — so a
+second reclassification cannot quietly double the correction.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 336  # pass 336  # fail 0   (326 + 10 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+```

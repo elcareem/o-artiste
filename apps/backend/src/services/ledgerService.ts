@@ -312,6 +312,49 @@ async function recordFeeLiabilitySettlement(tx: PrismaTx, bookingId: string, set
 }
 
 /**
+ * Reverses every un-offset entry of the given types on a booking — #29.
+ *
+ * Lives here rather than in the caller because "which entries constitute the
+ * original cancellation" is knowledge about the ledger, and because
+ * `check:rules` holds this module as the sole point of contact with the table.
+ * The rule is blunt on purpose: a read that decides what to negate is one edit
+ * away from being a write.
+ *
+ * ALREADY-OFFSET ENTRIES ARE SKIPPED, so a reclassification cannot be applied
+ * twice and quietly double the correction.
+ */
+async function reverseEntries(
+  tx: PrismaTx,
+  {
+    bookingId,
+    entryTypes,
+    reason,
+  }: { bookingId: string; entryTypes: LedgerEntryType[]; reason: string }
+): Promise<LedgerEntryRow[]> {
+  assertTransactionClient(tx);
+
+  const originals = await tx.ledgerEntry.findMany({
+    where: { bookingId, entryType: { in: entryTypes }, offsetsEntryId: null },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  // An entry that something already offsets must not be offset again.
+  const offsets = await tx.ledgerEntry.findMany({
+    where: { bookingId, offsetsEntryId: { not: null } },
+    select: { offsetsEntryId: true },
+  });
+  const alreadyOffset = new Set(offsets.map((o: { offsetsEntryId: string | null }) => o.offsetsEntryId));
+
+  const written: LedgerEntryRow[] = [];
+  for (const entry of originals) {
+    if (alreadyOffset.has(entry.id)) continue;
+    written.push(await recordCorrection(tx, { offsetsEntryId: entry.id, reason }));
+  }
+
+  return written;
+}
+
+/**
  * Reverses an entry by writing its exact negation — never by editing it.
  *
  * The original stays visible, because the sequence (charged, then reversed, and
@@ -402,6 +445,7 @@ module.exports = {
   recordArtistCancellation,
   recordFeeLiabilitySettlement,
   recordCorrection,
+  reverseEntries,
   reconcile,
   assertBalanced,
 };
