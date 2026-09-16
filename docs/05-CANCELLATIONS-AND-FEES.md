@@ -128,6 +128,16 @@ The offset changes answers at the boundary in a way UTC would get wrong: 23:00 U
 
 A cancellation after the event returns a negative number, which no band covers. It is refused, not guessed: the caller is told to confirm the booking or report a no-show instead.
 
+### The snapshot is validated on the way in, too (#28)
+
+#8 makes an invalid tier set unsaveable, which guards the **write**. `createBooking` validates the set it resolves before freezing it onto a booking, which guards the **read**.
+
+A set that has become partial — a version half-written, a row removed by hand, a resolver returning less than it should — would otherwise snapshot onto the booking and fail only at cancellation, with money already held and no applicable rule. §5 is explicit that there is no safe default there.
+
+Failing at creation costs a booking that was never made. Failing at cancellation costs a decision nobody is authorised to make.
+
+Found when the guard immediately rejected most of the test suite's own fixtures: they published four one-band versions instead of one four-band version, so every booking they created carried a single-band snapshot. Every one of those bookings would have been uncancellable outside that one band.
+
 ### Validation (#8)
 
 A tier set is rejected unless **all** hold:

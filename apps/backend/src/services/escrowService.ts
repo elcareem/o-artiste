@@ -26,8 +26,10 @@ const {
   computeArtistCancellation,
   applyFeeLiabilities,
 } = require('./feeService.ts');
-const { applicableTier } = require('./cancellationService.ts');
+const { applicableTier, daysBeforeEvent } = require('./cancellationService.ts');
+const strikeService = require('./strikeService.ts');
 const ledger = require('./ledgerService.ts');
+const { recordAudit } = require('../lib/audit.ts');
 
 /**
  * Creates the escrow for a booking and returns the bank transfer instruction.
@@ -455,6 +457,221 @@ async function cancelByClient({
 }
 
 /**
+ * An artist cancels — issue #28, docs/05 §7.
+ *
+ * THIS CASE HAS A PROBLEM THE CLIENT CASE DOES NOT: the artist bears the fees
+ * and has no money in escrow to deduct them from. The client's payment is the
+ * only money in the transaction and all of it is going back to the client.
+ *
+ * Resolved with a `FeeLiability` — the platform fronts the cost and recovers it
+ * from the artist's next payout (#26). If they never book again it is written
+ * off, because pursuing a ₦2,000 debt through collections costs more than the
+ * debt.
+ *
+ * THE CLIENT RECEIVES 100%, PLUS THE FEE THEY PAID AT FUNDING. Not a
+ * fee-reduced amount. They did nothing wrong, and passing them any part of the
+ * cost of the artist's decision would undermine the guarantee the platform
+ * exists to make.
+ *
+ * Timing does not change the money here — unlike a client cancellation, where
+ * the tier splits the escrow. It changes the CONDUCT consequence: seven days
+ * out is a normal business event, and the day of the event is not (docs/06 §2).
+ */
+async function cancelByArtist({
+  bookingId,
+  artistUserId,
+  reason,
+}: {
+  bookingId: string;
+  artistUserId: string;
+  reason?: string;
+}): Promise<CancellationSummary> {
+  const booking = await prisma.booking.findUnique({
+    where: { id: bookingId },
+    include: { client: true, artist: true, cancellation: true },
+  });
+
+  if (!booking) throw new AppError(404, 'Booking not found.');
+  if (booking.artist.userId !== artistUserId) throw new AppError(404, 'Booking not found.');
+
+  if (booking.state === 'CANCELLED' || booking.state === 'REFUNDED') {
+    return cancellationSummaryFor(booking, { alreadyCancelled: true });
+  }
+
+  assertTransition(booking.state, booking.escrowId ? 'REFUNDED' : 'CANCELLED');
+
+  const daysBefore = daysBeforeEvent(booking.eventDate);
+  if (daysBefore < 0) {
+    throw new AppError(
+      409,
+      'This event has already taken place, so it cannot be cancelled. Confirm it or report a no-show instead.'
+    );
+  }
+
+  // Never funded: no money moved, so no fees were incurred and there is nothing
+  // to front. The conduct consequence still applies — the client has lost the
+  // date either way.
+  if (!booking.escrowId || booking.state === 'PENDING_PAYMENT') {
+    const withdrawn = await prisma.$transaction(async (tx: PrismaTx) => {
+      const next = await transition({
+        bookingId: booking.id,
+        to: 'CANCELLED',
+        client: tx,
+        data: { cancelledAt: new Date() },
+      });
+
+      await recordArtistCancellationRow(tx, booking, {
+        daysBefore,
+        clientRefundKobo: 0,
+        escrowFeesKobo: 0,
+      });
+
+      await strikeService.accrueForCancellation(tx, {
+        userId: artistUserId,
+        by: 'ARTIST',
+        daysBefore,
+        bookingId: booking.id,
+      });
+
+      return next;
+    });
+
+    return cancellationSummaryFor(withdrawn, { daysBefore, unfunded: true });
+  }
+
+  const summary = await refundBooking({
+    bookingId: booking.id,
+    reason: reason
+      ? `Artist cancelled ${daysBefore} day(s) before the event: ${reason}`
+      : `Artist cancelled ${daysBefore} day(s) before the event`,
+
+    // Everything that must be true if this refund happened, committed with it.
+    alsoRecord: async (tx, { breakdown }) => {
+      await recordArtistCancellationRow(tx, booking, {
+        daysBefore,
+        clientRefundKobo: breakdown.clientTotalReturnedKobo,
+        escrowFeesKobo: breakdown.feeLiabilityKobo,
+      });
+
+      // Returns null seven or more days out, which is not an error: a week is
+      // enough time for the client to rebook, so there is nothing to deter. The
+      // fee liability is incurred regardless — the fees were still paid.
+      await strikeService.accrueForCancellation(tx, {
+        userId: artistUserId,
+        by: 'ARTIST',
+        daysBefore,
+        bookingId: booking.id,
+      });
+    },
+  });
+
+  const cancelled = await prisma.booking.findUnique({ where: { id: booking.id } });
+
+  console.log(
+    `[escrow] booking ${booking.id} cancelled by artist ${daysBefore} day(s) out — ` +
+      `${summary.clientTotalReturnedKobo} kobo returned, ${summary.feeLiabilityKobo} kobo accrued`
+  );
+
+  return {
+    bookingId: booking.id,
+    state: cancelled.state,
+    alreadyCancelled: false,
+    unfunded: false,
+    daysBeforeEvent: daysBefore,
+    // No tier: an artist cancellation returns everything whatever the timing.
+    appliedTier: null,
+    clientRefundKobo: summary.clientRefundKobo,
+    artistCompensationKobo: 0,
+    commissionKobo: 0,
+    clientSunkFeeKobo: 0,
+    moneyOutFeeKobo: null,
+    clientFeeReimbursementKobo: summary.clientFeeReimbursementKobo,
+    feeLiabilityKobo: summary.feeLiabilityKobo,
+  };
+}
+
+/** The cancellation record for an artist-initiated one. */
+function recordArtistCancellationRow(
+  tx: PrismaTx,
+  booking: BookingRow & { artist: ArtistRow },
+  {
+    daysBefore,
+    clientRefundKobo,
+    escrowFeesKobo,
+  }: { daysBefore: number; clientRefundKobo: Kobo; escrowFeesKobo: Kobo }
+) {
+  return tx.cancellation.create({
+    data: {
+      bookingId: booking.id,
+      initiatedBy: 'ARTIST',
+      initiatedByUserId: booking.artist.userId,
+      daysBeforeEvent: daysBefore,
+      // No tier applies: the split is not timing-dependent when the artist is
+      // at fault. Recorded as an empty object rather than a tier that was never
+      // consulted, so the row cannot be misread later.
+      appliedTier: {} as unknown as import('@prisma/client').Prisma.InputJsonValue,
+      clientRefundKobo,
+      artistCompensationKobo: 0,
+      escrowFeesKobo,
+      // docs/05 §7: the artist chose to cancel, so the artist carries the cost
+      // — fronted by the platform and recovered at their next payout.
+      feeBearer: 'ARTIST',
+    },
+  });
+}
+
+/**
+ * Writes off an artist's outstanding liabilities.
+ *
+ * Pursuing a ₦2,000 debt through collections costs more than the debt, so a
+ * liability against an account that will never transact again is written off
+ * rather than carried indefinitely. The write-off is RECORDED, not deleted: the
+ * platform bore that cost and the ledger has to keep saying so.
+ *
+ * #34 calls this on permanent removal; until then it is an admin action.
+ */
+async function writeOffLiabilities({
+  artistUserId,
+  reason,
+  actorUserId,
+}: {
+  artistUserId: string;
+  reason: string;
+  actorUserId: string;
+}): Promise<{ writtenOff: number; totalKobo: Kobo }> {
+  if (!reason) throw new AppError(400, 'A write-off must record why.');
+
+  return prisma.$transaction(async (tx: PrismaTx) => {
+    const outstanding = await tx.feeLiability.findMany({
+      where: { artistUserId, status: 'OUTSTANDING' },
+    });
+
+    if (outstanding.length === 0) return { writtenOff: 0, totalKobo: 0 };
+
+    await tx.feeLiability.updateMany({
+      where: { id: { in: outstanding.map((l: FeeLiabilityRow) => l.id) } },
+      data: { status: 'WRITTEN_OFF', writtenOffAt: new Date(), writeOffReason: reason },
+    });
+
+    const totalKobo = outstanding.reduce(
+      (sum: number, l: FeeLiabilityRow) => sum + l.amountKobo,
+      0
+    );
+
+    await recordAudit(tx, {
+      actorUserId,
+      action: 'FEE_LIABILITIES_WRITTEN_OFF',
+      entityType: 'User',
+      entityId: artistUserId,
+      reason,
+      after: { count: outstanding.length, totalKobo },
+    });
+
+    return { writtenOff: outstanding.length, totalKobo };
+  });
+}
+
+/**
  * The cancellation record.
  *
  * `appliedTier` is a COPY of the tier, not a pointer to a configuration
@@ -546,13 +763,24 @@ function cancellationSummaryFor(
 async function refundBooking({
   bookingId,
   reason,
+  alsoRecord,
 }: {
   bookingId: string;
   reason?: string;
+  /**
+   * Extra rows to write INSIDE this function's transaction — #28's
+   * `Cancellation` row and its strike.
+   *
+   * A hook rather than a second transaction, because the alternative is a
+   * refund that succeeded with no record of why it happened: the money is
+   * correct and irreversible, and the explanation is missing. Anything that
+   * must be true if this refund happened has to commit with it.
+   */
+  alsoRecord?: (tx: PrismaTx, context: ArtistFaultRefundContext) => Promise<void>;
 }): Promise<RefundSummary> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
-    include: { artist: { include: { user: true } } },
+    include: { client: true, artist: { include: { user: true } } },
   });
 
   if (!booking) throw new AppError(404, 'Booking not found.');
@@ -595,8 +823,9 @@ async function refundBooking({
     // The obligation is recorded as a row, not only as ledger entries: #26
     // settles it against the artist's next payout, and it needs something to
     // find and mark SETTLED.
+    let liability: FeeLiabilityRow | null = null;
     if (breakdown.feeLiabilityKobo > 0) {
-      await tx.feeLiability.create({
+      liability = await tx.feeLiability.create({
         data: {
           artistUserId: booking.artist.userId,
           originBookingId: booking.id,
@@ -605,6 +834,8 @@ async function refundBooking({
         },
       });
     }
+
+    if (alsoRecord) await alsoRecord(tx, { booking, breakdown, liability });
 
     return next;
   });
@@ -746,4 +977,6 @@ module.exports = {
   releaseBooking,
   refundBooking,
   cancelByClient,
+  cancelByArtist,
+  writeOffLiabilities,
 };

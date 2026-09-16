@@ -40,6 +40,20 @@ test.after(async () => {
 
 let seq = 0;
 const uniq = () => `${Date.now()}${seq++}`;
+
+/**
+ * One versionId for the whole set.
+ *
+ * `resolveTierSet` returns the rows sharing the LATEST version's id, so giving
+ * each row its own id publishes four one-band versions and snapshots a single
+ * band onto the booking. Its cancellation then has no applicable rule for most
+ * days — caught in #28 by the snapshot guard `createBooking` now applies.
+ */
+function tierSetFor<T>(tiers: T[]): (T & { versionId: string })[] {
+  const versionId = `v_${uniq()}`;
+  return tiers.map((t) => ({ ...t, versionId }));
+}
+
 const N = (naira: number) => naira * 100;
 
 const DEFAULT_TIERS: CancellationTierSnapshot[] = [
@@ -155,9 +169,8 @@ async function funded({
     data: { rateBasisPoints: 500, effectiveFrom: new Date(), setByUserId: admin.id },
   });
   await prisma.cancellationTier.createMany({
-    data: tiers.map((t) => ({
+    data: tierSetFor(tiers).map((t: any) => ({
       ...t,
-      versionId: `v_${uniq()}`,
       effectiveFrom: new Date(),
       setByUserId: admin.id,
     })),
@@ -455,9 +468,8 @@ describe('a booking made under an older tier table is cancelled under that table
   // The platform then replaces the live table with something much harsher.
   const admin = await makeUser('SUPER_ADMIN');
   await prisma.cancellationTier.createMany({
-    data: DEFAULT_TIERS.map((t) => ({
+    data: tierSetFor(DEFAULT_TIERS).map((t: any) => ({
       ...t,
-      versionId: `v_new_${uniq()}`,
       effectiveFrom: new Date(),
       setByUserId: admin.id,
     })),
@@ -583,12 +595,27 @@ describe('a booking that has already concluded cannot be cancelled', async () =>
   }
 });
 
-describe('an artist cannot cancel through the client path', async () => {
-  const { booking, artistUser } = await funded({ daysOut: 5 });
+describe('an artist on this path gets the artist economics, not the client ones', async () => {
+  const { booking, artistUser, amountKobo } = await funded({ daysOut: 5 });
   const token = await login(artistUser.email);
 
-  // An artist cancelling is a different economic event — the client is made
-  // whole and the artist accrues a liability — and it arrives at #28.
-  const res = await call('POST', `/bookings/${booking.id}/cancel`, token, {});
-  assert.equal(res.status, 403);
+  // One endpoint, two economic events, decided by who is calling (docs/02 §7).
+  // Until #28 this returned 403; the route now dispatches on the caller's part
+  // in the booking, resolved server-side from the token.
+  const provider = recordingProvider();
+  const res = await withProvider(provider.overrides, () =>
+    call('POST', `/bookings/${booking.id}/cancel`, token, {})
+  );
+
+  assert.equal(res.status, 200);
+
+  // Five days out, a CLIENT cancellation would refund 70% and compensate the
+  // artist. An ARTIST cancellation returns everything and compensates nobody.
+  assert.equal(res.body.cancellation.clientRefundKobo, amountKobo);
+  assert.equal(res.body.cancellation.artistCompensationKobo, 0);
+  assert.equal(res.body.cancellation.appliedTier, null);
+
+  const record = await prisma.cancellation.findUnique({ where: { bookingId: booking.id } });
+  assert.equal(record.initiatedBy, 'ARTIST');
+  assert.equal(record.feeBearer, 'ARTIST');
 });

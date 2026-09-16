@@ -14,7 +14,11 @@ const {
   acknowledgeTerms,
   assertAcknowledged,
 } = require('../services/acknowledgementService.ts');
-const { createEscrowForBooking, cancelByClient } = require('../services/escrowService.ts');
+const {
+  createEscrowForBooking,
+  cancelByClient,
+  cancelByArtist,
+} = require('../services/escrowService.ts');
 const { applicableTier } = require('../services/cancellationService.ts');
 const { computeClientCancellation } = require('../services/feeService.ts');
 const { codeForClient, redeem } = require('../services/checkInService.ts');
@@ -474,26 +478,40 @@ router.get(
 /**
  * POST /bookings/:id/cancel
  *
- * The client cancels. Tiered refund and artist compensation, both computed from
- * the booking's own snapshot.
+ * **Behaviour differs by caller role** — docs/02 §7. Both parties use this
+ * path, and which one is calling is resolved server-side from the token against
+ * the booking, never from the request body.
  *
- * `CLIENT` only here. An artist cancelling is a different economic event
- * entirely — the client is made whole and the artist accrues a liability — and
- * it arrives at #28 rather than sharing this path.
+ * | Caller | Outcome |
+ * |---|---|
+ * | `CLIENT` | Tiered split from the booking's snapshot; the client bears the fees (#27) |
+ * | `ARTIST` | Client made whole including the fee they paid; the artist accrues a liability (#28) |
+ *
+ * These are different economic events, not one event with a parameter. A client
+ * cancelling has made a choice with a price attached, which they acknowledged
+ * at #16. An artist cancelling has removed the thing that was bought.
  */
 router.post(
   '/bookings/:id/cancel',
   requireAuth,
-  requireRole('CLIENT'),
+  requireRole('CLIENT', 'ARTIST'),
   async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { reason } = req.body ?? {};
+      const trimmed = reason ? String(reason).slice(0, 2000) : undefined;
 
-      const cancellation = await cancelByClient({
-        bookingId: req.params.id,
-        clientUserId: req.user.id,
-        reason: reason ? String(reason).slice(0, 2000) : undefined,
-      });
+      const cancellation =
+        req.user.role === 'ARTIST'
+          ? await cancelByArtist({
+              bookingId: req.params.id,
+              artistUserId: req.user.id,
+              reason: trimmed,
+            })
+          : await cancelByClient({
+              bookingId: req.params.id,
+              clientUserId: req.user.id,
+              reason: trimmed,
+            });
 
       res.json({ cancellation });
     } catch (err) {

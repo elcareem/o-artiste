@@ -601,6 +601,10 @@ interface CancellationSummary {
   /** Paid at funding, consumed, not refundable — the client's own cost. */
   clientSunkFeeKobo: Kobo | null;
   moneyOutFeeKobo: Kobo | null;
+  /** Artist-initiated only (#28): the money-in fee returned to the client. */
+  clientFeeReimbursementKobo?: Kobo | null;
+  /** Artist-initiated only: fronted by the platform, recovered at the next payout. */
+  feeLiabilityKobo?: Kobo | null;
 }
 
 // ── Strikes (`services/strikeService.ts`, issue #33) ─────────────────────────
@@ -650,4 +654,12 @@ interface StrikeHistory {
   /** Summed weight of active strikes — what enforcement reads. */
   activeWeight: number;
   strikes: StrikeRow[];
+}
+
+/** Handed to `refundBooking`'s `alsoRecord` hook, inside its transaction (#28). */
+interface ArtistFaultRefundContext {
+  booking: BookingRow & { client: ClientRow; artist: ArtistRow & { user: UserRow } };
+  breakdown: ArtistCancellationBreakdown;
+  /** Null when the computed liability was zero. */
+  liability: FeeLiabilityRow | null;
 }

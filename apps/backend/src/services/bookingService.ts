@@ -20,7 +20,7 @@ const crypto = require('node:crypto');
 const prisma = require('../lib/prisma.ts');
 const { AppError } = require('../lib/errors.ts');
 const { resolveCommissionRate } = require('./commissionService.ts');
-const { resolveTierSet } = require('./cancellationTierService.ts');
+const { resolveTierSet, validateTierSet } = require('./cancellationTierService.ts');
 const { MIN_TRANSACTION_KOBO, MAX_TRANSACTION_KOBO } = require('../lib/escrowpay.ts');
 const { formatNairaForMessage } = require('../lib/money.ts');
 
@@ -236,6 +236,28 @@ async function createBooking({
   // Resolved ONCE, here, and frozen. Read at creation time so the snapshot is
   // what was in force at the moment the booking was made.
   const [commission, tierSet] = await Promise.all([resolveCommissionRate(), resolveTierSet()]);
+
+  // THE SNAPSHOT IS VALIDATED BEFORE IT IS FROZEN, not only when it was saved.
+  //
+  // #8 makes an invalid set unsaveable, but that guards the write. This guards
+  // the read: a set that has become partial — a version half-written, a row
+  // removed by hand, a resolver returning less than it should — would snapshot
+  // onto the booking and only fail at cancellation, with money already held and
+  // no applicable rule. docs/05 §5 is explicit that there is no safe default
+  // there: refunding everything harms the artist, refunding nothing is FCCPA
+  // exposure.
+  //
+  // Failing here costs a booking that was never created. Failing there costs a
+  // decision nobody is authorised to make.
+  try {
+    validateTierSet(tierSet.tiers);
+  } catch (err) {
+    throw new AppError(
+      500,
+      'Booking is temporarily unavailable: the cancellation terms are not currently valid. ' +
+        `Nothing has been charged. (${(err as Error).message})`
+    );
+  }
 
   return prisma.booking.create({
     data: {
