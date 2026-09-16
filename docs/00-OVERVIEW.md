@@ -160,8 +160,10 @@ Items that are not resolved and are not ours alone to close. Each must be **reso
 | # | Item | Blocked on | Interim behaviour |
 |---|---|---|---|
 | **11.1** | Whether a refund leg to the client incurs the EscrowPay money-out fee | EscrowPay confirmation | Implemented as a configurable flag, **defaulting to charged**. Assumption noted in `feeService.js`. |
+| **11.9** | **Automatic payout is disabled on this EscrowPay business** (`automatic_payout_disabled`), so a release lands in our wallet and we send it on | EscrowPay | Two-leg payout implemented: `release` then `POST /wallets/{id}/payouts`. The window in which the platform holds an artist's money is seconds, not days, and `GET /admin/payouts/awaiting` lists any that stayed open. **Ask EscrowPay to enable automatic payout** — if they do, the wallet leg disappears and §3 stops being strained. |
 | **11.2** | EscrowPay commercial terms, uptime and support expectations in writing | EscrowPay | None — commercial, not technical |
 | **11.3** | Legal counsel on our own regulatory position | Counsel | None — proceed with the custody rules in §3, which are the conservative posture |
+| **11.10** | ~~Whether the ₦50 identity-verification charge is per person or per transaction~~ — **resolved: one-time per person** | — | Confirmed by the maintainer. `#10` already caches the result so a returning user triggers neither a provider call nor a second charge; the remaining question is whether a *failed* attempt bills, which decides whether the retry path has a cost. |
 | **11.4** | Handling for bookings above ₦3,000,000 | EscrowPay / product | **Hard rejection** with a message naming the ceiling. No workaround path may be built. |
 | **11.5** | Final auto-release grace period value | Product decision, needs real data | Configurable, default 48–72h. Never hardcoded. |
 | **11.6** | Final strike thresholds and weights | Product decision, needs real data | Configurable. Never hardcoded. |

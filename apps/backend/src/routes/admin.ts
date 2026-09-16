@@ -28,6 +28,7 @@ const {
   writeOffLiabilities,
   reclassifyAsArtistFault,
 } = require('../services/escrowService.ts');
+const payoutService = require('../services/payoutService.ts');
 
 const router = express.Router();
 
@@ -298,6 +299,42 @@ router.post(
       });
 
       res.json({ reclassification });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/payouts/awaiting
+ *
+ * Bookings released but not paid out — money in our wallet that belongs to
+ * someone else.
+ *
+ * EscrowPay rejects automatic payout on this business, so a release lands in
+ * our wallet and the transfer to the artist is a second call that can fail.
+ * When it does, the release is still correct and the artist is still owed;
+ * `docs/00` §3 says the platform never holds client money, and this is the query
+ * that says whether it currently is.
+ */
+router.get(
+  '/admin/payouts/awaiting',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const bookings = await payoutService.awaitingPayout();
+
+      res.json({
+        awaiting: bookings.map((b: any) => ({
+          bookingId: b.id,
+          releasedAt: b.releasedAt,
+          artist: b.artist?.stageName ?? null,
+          hasPayoutAccount: Boolean(b.artist?.payoutAccountId),
+          failureReason: b.payoutFailureReason,
+        })),
+        total: bookings.length,
+      });
     } catch (err) {
       next(err);
     }

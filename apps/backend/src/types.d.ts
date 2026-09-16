@@ -209,6 +209,11 @@ interface FundingInstruction {
 
 /** What a release did — `escrowService.releaseBooking`. */
 interface ReleaseSummary {
+  /** The provider payout id, once the money has left our wallet for the artist. */
+  payoutId?: string | null;
+  /** False means released into our wallet but not yet sent on. */
+  paidOut?: boolean;
+  payoutFailureReason?: string | null;
   bookingId: string;
   state: BookingState;
   amountKobo: Kobo;
@@ -226,6 +231,8 @@ interface ReleaseSummary {
 
 /** Extra context passed into `releaseSummaryFor`. */
 interface ReleaseSummaryExtra {
+  /** The wallet-to-artist leg, where the money actually reaches them. */
+  payout?: PayoutResult;
   completion?: CompletionBreakdown;
   settlement?: LiabilitySettlement;
   liabilities?: FeeLiabilityRow[];
@@ -679,4 +686,33 @@ interface ReclassificationSummary {
   artistClawbackKobo: Kobo;
   /** The clawback plus the fees the platform now fronts, as one debt. */
   liabilityKobo: Kobo;
+}
+
+// ── Payouts (`services/payoutService.ts`) ────────────────────────────────────
+
+interface RegisterPayoutAccountInput {
+  artistUserId: string;
+  bankCode: string;
+  /** Ten digits. Sent to the provider once and never stored. */
+  accountNumber: string;
+  accountName?: string | null;
+}
+
+/** What an artist is shown about the account on file. Never the full number. */
+interface PayoutAccountView {
+  registered: boolean;
+  bankCode: string | null;
+  accountLast4: string | null;
+  accountName: string | null;
+  verifiedAt: Date | null;
+}
+
+interface PayoutResult {
+  bookingId: string;
+  /** True only when THIS call moved the money. */
+  paid: boolean;
+  alreadyPaid?: boolean;
+  payoutId?: string | null;
+  reason?: 'nothing_to_pay' | 'no_payout_account' | 'provider_error';
+  detail?: string;
 }

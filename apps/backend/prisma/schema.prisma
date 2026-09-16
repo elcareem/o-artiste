@@ -205,6 +205,30 @@ model Artist {
 
   profileComplete Boolean @default(false)
 
+  // --- Payout destination (the money-out leg) -------------------------------
+  // EscrowPay rejects `payout_preference: automatic` on this business
+  // (`automatic_payout_disabled`), so a release lands in OUR wallet and the
+  // payout to the artist is ours to issue. That requires a registered payout
+  // account, which requires their bank details.
+  //
+  // THE ACCOUNT NUMBER IS NOT STORED. It is sent to the provider once, at
+  // registration, and they hold it; we keep the id they return plus the last
+  // four digits so a person can recognise which account they registered. Same
+  // reasoning as the NIN in #10: retaining the identifier is exposure with no
+  // operational benefit, because every later payout is addressed by id.
+
+  /// The provider's payout account id (`PAC_…` / similar). This is what a
+  /// payout is addressed to.
+  payoutAccountId String? @unique
+
+  /// For display only, so an artist can tell which account is on file.
+  payoutBankCode      String?
+  payoutAccountLast4  String?
+  payoutAccountName   String?
+
+  /// Set when the provider confirms the account resolves to a real holder.
+  payoutAccountVerifiedAt DateTime?
+
   bookings Booking[]
 
   createdAt DateTime @default(now())
@@ -294,6 +318,15 @@ model Booking {
   /// service refuses the second of the two rather than storing it.
   clientNoShowClaimedAt DateTime?
   clientNoShowReason    String?
+
+  // --- Payout (the money-out leg) ------------------------------------------
+  /// The provider's payout id, once the artist's money has been instructed out
+  /// of our wallet. Null means released-but-not-paid-out, which is a state a
+  /// person needs to be able to find.
+  payoutId   String?
+  paidOutAt  DateTime?
+  /// Set when a payout fails, so it can be retried rather than lost.
+  payoutFailureReason String?
 
   /// When auto-release will fire: `eventEndAt` + the grace period, fixed at
   /// funding (#25). Stored rather than recomputed because it is DISCLOSED to

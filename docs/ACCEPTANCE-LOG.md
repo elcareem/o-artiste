@@ -5390,3 +5390,97 @@ npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
 npm run check:rules           → passed 11  failed 0  skipped 0
 npm run lint                  → clean
 ```
+
+---
+
+## The money-out leg — #26's missing half
+
+Branch `feat/payout-to-artist`, stacked on `feat/29-artist-fault-reclassification`.
+
+Not a backlog issue. Found while answering a question about EscrowPay, and it
+is the most serious gap the project has had.
+
+### What was wrong
+
+EscrowPay rejects `payout_preference: automatic` on this business
+(`policy_violation: automatic_payout_disabled`), which the provider map had
+already recorded and verified against the test book. The consequence had not
+been carried through to the code:
+
+- `payout_preference: 'manual'` was set at transaction creation
+- **`payout_account_id` was never supplied** — the parameter existed, nothing
+  passed one
+- **nothing called `POST /wallets/{wallet_id}/payouts`**
+
+So a release moved escrow into **our wallet** and stopped. The artist was never
+paid. Every other path in Phase 3 — auto-release, confirmation, liability
+settlement, cancellation — was built on the assumption that a release ends with
+the artist paid, and it did not.
+
+`docs/00` §3 says the platform never holds client money. It was holding all of
+it, indefinitely, by construction.
+
+### What was built
+
+**A payout destination on the artist.** `POST /payout-accounts` with
+`owner_type: 'party'`, registered against the provider party that identity
+verification creates in #10 — so an unverified artist is told to verify first
+rather than getting a provider error.
+
+**The account number is not stored.** It goes to the provider once and every
+payout afterwards is addressed by their id; keeping it would be exposure with no
+operational benefit, the same reasoning as the NIN in #10. We keep the id, the
+bank code and the last four digits so an artist can recognise their own account.
+Asserted: the full number appears neither in the response nor on the row.
+
+**The second leg, after release.** `payoutService.payOut` sends the settled
+amount — what actually left escrow after any liability was netted off, not the
+gross, since paying the gross would hand back the debt just collected.
+
+### Three decisions worth recording
+
+**A failed payout does not undo the release.** The release already happened and
+is recorded correctly; turning a payout problem into a failed release would roll
+back a movement that has already left the escrow. A failure sets
+`payoutFailureReason`, leaves `paidOutAt` null, and logs loudly — because money
+is then sitting in our wallet that belongs to someone else.
+
+**`GET /admin/payouts/awaiting` exists for exactly that state.** It is the query
+that answers whether the platform is currently holding money it should not be.
+Without it, a released-but-unpaid booking is invisible until the artist
+complains.
+
+**A zero payout is not a failure.** A release can be fully consumed by an
+outstanding liability (#26), and that is a correct outcome with nothing to send.
+Asserted with the provider rigged to throw on any payout call.
+
+### Verified by breaking it
+
+Removing the `payOut` call from `releaseBooking` turned **six of eleven** tests
+red, including the two that check the money reached the artist at all and the
+one that checks an admin can find it when it did not.
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 347  # pass 347  # fail 0   (336 + 11 new)
+npm test --workspace apps/web → # tests 14   # pass 14   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+```
+
+### Still to ask EscrowPay
+
+**Enable automatic payout on this business.** If they do, this whole leg
+becomes unnecessary, the wallet balance disappears, and `docs/00` §3 stops being
+strained. Recorded as open item §11.9.
+
+Until then the window in which the platform holds an artist's money is seconds
+rather than days — which is defensible, and is not the same as zero.
+
+### Resolved: the ₦50 verification charge
+
+**One-time per person**, confirmed by the maintainer. #10 already caches the
+result so a returning user triggers neither a provider call nor a second charge.
+The remaining question is whether a *failed* attempt bills, which decides
+whether the retry path — added so a network blip cannot permanently lock a
+legitimate user out — carries a cost. Recorded as §11.10.

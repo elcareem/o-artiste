@@ -314,6 +314,21 @@ async function releaseBooking({
   // the queue a picture of what is actually outstanding.
   await require('../jobs/autoReleaseJob.ts').cancel(booking.id);
 
+  // THE SECOND HALF OF THE MONEY-OUT LEG. `release` moved the escrow into OUR
+  // wallet, because EscrowPay rejects automatic payout on this business. Until
+  // this call the artist has not been paid.
+  //
+  // Deliberately AFTER the transaction and deliberately not thrown on: the
+  // release has already happened and is recorded correctly, and turning a
+  // payout problem into a failed release would roll back a movement that has
+  // already left the escrow. A failure sets `payoutFailureReason` and leaves
+  // `paidOutAt` null, which `payoutService.awaitingPayout` lists.
+  const payout = await require('./payoutService.ts').payOut({
+    bookingId: booking.id,
+    amountKobo: settlement.payoutKobo,
+    reason: `Payment for booking ${booking.id}`,
+  });
+
   console.log(
     `[escrow] released ${settlement.payoutKobo} kobo to artist for booking ${booking.id}` +
       (settlement.settledKobo > 0 ? ` (${settlement.settledKobo} kobo of liability settled)` : '')
@@ -324,6 +339,7 @@ async function releaseBooking({
     settlement,
     liabilities,
     providerReleaseId: release?.id ?? null,
+    payout,
   });
 }
 
@@ -1150,6 +1166,12 @@ function releaseSummaryFor(booking: BookingRow, extra: ReleaseSummaryExtra = {})
     platformNetKobo: completion.platformNetKobo,
 
     alreadyReleased: extra.alreadyReleased ?? false,
+
+    // Whether the money actually reached the artist, as opposed to reaching our
+    // wallet. Released-but-not-paid-out is a real state and must be visible.
+    payoutId: extra.payout?.payoutId ?? booking.payoutId ?? null,
+    paidOut: extra.payout?.paid ?? Boolean(booking.paidOutAt),
+    payoutFailureReason: extra.payout?.detail ?? booking.payoutFailureReason ?? null,
     providerReleaseId: extra.providerReleaseId ?? null,
   };
 }
