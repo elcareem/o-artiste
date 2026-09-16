@@ -5046,3 +5046,118 @@ the fee they paid at funding, and the cost accrues to the artist as a
 `FeeLiability`. `escrowService.refundBooking` already implements those economics
 — it was built for #24's uncontradicted no-show — so #28 is largely the route,
 the `Cancellation` row with `initiatedBy: 'ARTIST'`, and the strike.
+
+---
+
+## #33 — Strike service, both parties
+
+Branch `feat/33-strike-service`, stacked on `feat/27-client-cancellation`.
+
+Built before #28 to break the circular dependency in the backlog: #33 listed
+#28 as a dependency and #28 listed #33 (docs/08 §2). Separating the accrual
+**engine** from its **triggers** resolves it — the engine depends on nothing in
+Phase 3, and #28, #29 and #32 call it.
+
+### Acceptance criteria
+
+**- [x] Each trigger produces a strike of the correct weight, verified by test**
+
+Every band of docs/06 §2 and §3, plus both dispute triggers, asserted through
+the resolver and then through a real accrual:
+
+```
+artist  30d → none   7d → none   6d,3d → 3_6   2d,1d → 1_2   0d → DAY_OF
+client  30d → none   7d → none   3d → none     2d,1d → 1_2   0d → DAY_OF
+dispute ruled against → standard   false no-show → heavier
+```
+
+The client bands are deliberately narrower than the artist's. A client
+cancelling three days out has given notice; an artist doing the same has left a
+date unfillable.
+
+**- [x] A false-no-show ruling produces a heavier strike than a late cancellation**
+
+Asserted as a **relationship**, not a number — `fraud.weight > late.weight` and
+`fraud.weight > ordinary.weight` — so it survives the weights being retuned,
+which they will be (open item `00` §11.6). This is the whole point of docs/06
+§1: a client who cancels late has inconvenienced an artist, while a client who
+receives a performance and then claims it never happened has attempted theft.
+
+**- [x] A 7+ day artist cancellation produces a fee liability but no strike**
+
+`null` at 7, 8, 30 and 365 days, and zero strike rows afterwards. `null` is a
+real answer here rather than a failure: a week is enough time for the client to
+rebook, so there is nothing to deter. The fee liability is still incurred —
+that is #28's concern, not this module's.
+
+**- [x] Changing a threshold in config changes accrual behaviour without a deploy**
+
+The test accrues at 7 days out (nothing), publishes a new set through
+`PUT /admin/config/strikes` extending the 3–6 band to 7 and raising the day-of
+weight to 9, then accrues again **in the same running process** — no restart, no
+redeploy. The new band and the new weight both take effect.
+
+Older strikes keep the weight in force when they were issued, because the table
+is append-only. The change is attributed in `AuditLog`.
+
+This is why the rules are a **database table and not environment variables**:
+on a host that redeploys to apply an environment variable, "without a deploy" is
+not achievable that way.
+
+### A design hole found by test interference
+
+One case published an artist-only rule set. Two later cases in the same file
+then stopped recording client strikes — and did not error. They simply recorded
+less.
+
+That is precisely how it would present in production: an admin edits the artist
+bands on #36's settings screen, submits, and client misconduct silently stops
+accruing with nothing to indicate it.
+
+`validateRules` now **refuses a partial set and names what is missing**. The set
+is submitted whole, the way #8's tier set is. The tests build theirs from a
+`completeSet()` helper with overrides, which is both closer to what the admin
+screen will send and immune to the same trap.
+
+A second order-dependence surfaced immediately after: a test asserting
+`activeWeight === 4` was asserting the shipped defaults while the service was
+correctly using the set a previous case had published. It now derives the
+expectation from the rules in force and separately asserts the ordering that
+must hold whatever the numbers are.
+
+### Other decisions
+
+- **`accrue` takes the caller's transaction.** A cancellation recorded without
+  its strike is a conduct record that under-reports; a strike recorded without
+  its cancellation cannot be reviewed. They commit together or not at all, and
+  the `AuditLog` row with them — this is an adverse action against a person's
+  account.
+- **The history endpoint returns the whole record, not a count.** Every strike
+  is appealable (docs/06 §5); a total tells an admin what happened to an
+  account, and only the individual reasons tell them whether it should have.
+- **`activeWeight` is reported alongside the count**, because weight is what
+  #34's ladders read. Three late cancellations and one attempted fraud are not
+  the same account.
+- **`PUT` is `SUPER_ADMIN`, `GET` is `ADMIN`** — the same line drawn for the
+  commission rate. An admin reviewing one strike affects one person; this
+  changes how every future one is priced.
+- **The rules are seeded**, for the reason #6 gives for seeding the commission
+  rate: so they are data from day one and no later issue is tempted to hardcode
+  them. Verified idempotent.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 317  # pass 317  # fail 0   (305 + 12 new)
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+npm run seed (twice)          → 7 strike rules, version seed_strike_rules_v1, unchanged
+```
+
+### Carried forward
+
+Two of #33's criteria in the original issue reference a dispute ruling, which
+arrives at #32. The engine is exercised here through `accrueForDispute`
+directly; #32 wires it to a real resolution. #34 reads `activeWeight` for the
+enforcement ladders.
