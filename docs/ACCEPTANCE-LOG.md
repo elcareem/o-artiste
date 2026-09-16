@@ -5535,3 +5535,107 @@ money-out fee is incurred on the wallet→artist leg, while our ledger records i
 at release. The two happen back-to-back and every booking still reconciles to
 zero, so the difference is presentational — but a reconciliation against the
 provider's own fee records should expect their timestamp, not ours.
+
+---
+
+## #30 — Cancellation flows for both portals
+
+Branch `feat/30-cancellation-ui`, stacked on `feat/payout-to-artist`.
+
+### Acceptance criteria
+
+**- [x] No cancellation can complete without the exact figures having been displayed**
+
+Structural, not remembered. The component has three steps and **the confirm
+step cannot render without a preview object in hand** — there is no state in
+which the confirm button exists and the figures do not. `canConfirm` is a type
+guard, so the compiler enforces it too.
+
+The figures come from the backend, which computes them with the same function
+the cancellation itself uses against the same snapshot. Nothing is recomputed in
+the browser: a second place where money is calculated is a place the two can
+disagree, and the first time they did, a client would be shown one number and
+charged another.
+
+**- [x] A ₦0 outcome renders as a readable sentence, not an empty or zero field**
+
+```
+You will not receive a refund for this booking. Cancelling on the day of the
+event means the full amount goes to the artist, because they can no longer fill
+the date.
+```
+
+It says **why**, not just what. An empty field or a bare `₦0` reads as a
+rendering fault, and a reader who thinks the page is broken has not been told
+anything — which is the same position as not showing it.
+
+The zero still appears in the figures table as well, so the row is not missing;
+omitting it would leave the reader to infer it.
+
+**- [x] The artist sees both the liability and the strike consequence before confirming**
+
+This needed a backend change: `/bookings/:id/cancellation-preview` answered
+"what happens if the *client* cancels", which is not the question an artist
+weighing their own cancellation is asking. It now carries `ifArtistCancels`
+alongside — the client made whole, nothing for the artist, the fee liability,
+and the standing consequence as a sentence.
+
+```
+You will owe          ₦2,070    Taken from your next payout. Not billed separately.
+What this does to your account: A strike, and your cancellation rate becomes
+visible to clients on your profile.
+```
+
+The consequence is read from the strike rules **in force**, not hardcoded — #33
+made those configurable, and a preview quoting stale numbers is worse than none.
+
+Three cases are tested explicitly: a day-of cancellation warns about suspension
+and is marked severe (which drives extra visual friction), 1–2 days warns about
+the published rate, and seven days out says **both** "no strike" *and* "you will
+still owe the fees" — because "no strike" alone would let an artist think it is
+free.
+
+A separate test asserts the client-cancellation split never leaks into the
+artist's view. Showing an artist the 40/60 tier figures would answer a question
+they did not ask.
+
+**- [x] A failed cancellation leaves the booking view intact and usable**
+
+The error is held in the panel's own state, not the page's. A failure renders a
+sentence inside the panel and changes nothing else — the booking details, the
+polling loop and the funding instructions all stay as they were. Both the
+network-failure and the backend-rejection paths say plainly that nothing has
+been cancelled.
+
+### Other decisions
+
+- **Two steps, never one click.** The destructive action is not the default: it
+  sits beside "Keep this booking", which is the plain-text option.
+- **An uncancellable booking explains itself** rather than dead-ending on a
+  disabled button. Seven states each get a sentence naming what to do instead —
+  `AWAITING_CONFIRMATION` sends the reader to confirm or report a no-show — and
+  a test asserts no raw enum name reaches a person.
+- **The sunk money-in fee is disclosed as already-paid, charged by the bank at
+  funding**, not as a cancellation penalty. It is the figure most likely to feel
+  like a hidden deduction, and telling someone otherwise invites the dispute
+  this disclosure exists to prevent.
+- **Every amount goes through `formatNaira`**, asserted by a test that would
+  catch a raw kobo integer rendering as ₦20,000,000 for a ₦200,000 booking.
+
+### A migration lesson, again
+
+`import { formatNaira } from './currency'` failed under `node:test` — its ESM
+loader does not guess an extension. Same lesson as the TypeScript migration, in
+a different runtime. Fixed with the explicit `.ts`, which Next resolves
+identically.
+
+### Verification
+
+```
+npm run build --workspace apps/web → routes for /api/bookings/[id]/cancel
+                                     and /cancellation-preview registered
+npm test --workspace apps/web      → # tests 27  # pass 27  # fail 0  (14 + 13 new)
+npm run test:backend               → # tests 347 # pass 347 # fail 0
+npm run check:rules                → passed 11  failed 0  skipped 0
+npm run lint                       → clean
+```

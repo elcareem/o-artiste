@@ -12,6 +12,7 @@ import {
   type FundingInstruction,
 } from '@/lib/booking-status';
 import { Copyable } from './copyable';
+import { CancelBooking } from './cancel-booking';
 
 /**
  * The post-checkout status page — issue #21.
@@ -38,11 +39,14 @@ export function BookingStatusView({
   initialBooking,
   initialFunding,
   initialError,
+  party = 'CLIENT',
 }: {
   bookingId: string;
   initialBooking: Booking | null;
   initialFunding: FundingInstruction | null;
   initialError: string | null;
+  /** Which side is looking. Decides which cancellation economics are shown. */
+  party?: 'CLIENT' | 'ARTIST';
 }) {
   const [booking, setBooking] = useState(initialBooking);
   const [error, setError] = useState(initialError);
@@ -188,6 +192,21 @@ export function BookingStatusView({
         {booking.eventLocation && <Row label="Location" value={booking.eventLocation} />}
         <Row label="Reference" value={booking.escrowReference} />
       </dl>
+
+      {/* Only while there is something to cancel. A terminal booking has no
+          decision left to make, and offering one would be a dead end. */}
+      {!stopped && (
+        <div className="mt-6">
+          <CancelBooking
+            bookingId={bookingId}
+            party={party}
+            /* The page polls, so the cancelled state arrives on its own within
+               a few seconds. Clearing the error is what makes the view usable
+               again immediately rather than showing a stale failure. */
+            onCancelled={() => setError(null)}
+          />
+        </div>
+      )}
 
       <p className="mt-4 text-xs text-[var(--color-muted)]">
         {stopped

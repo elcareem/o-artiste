@@ -716,3 +716,13 @@ interface PayoutResult {
   reason?: 'nothing_to_pay' | 'no_payout_account' | 'provider_error';
   detail?: string;
 }
+
+/** What a cancellation costs an artist's standing, for showing before they decide (#30). */
+interface ArtistCancellationConsequence {
+  trigger: StrikeTrigger | null;
+  weight: number;
+  /** A sentence, not a code. Read by the artist at the moment of deciding. */
+  summary: string;
+  suspends: boolean;
+  publishesRate: boolean;
+}
