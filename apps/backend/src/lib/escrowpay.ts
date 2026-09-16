@@ -485,6 +485,60 @@ function createPayoutAccount({
   });
 }
 
+/**
+ * Our own wallets.
+ *
+ * Needed because a release does not reach the artist on this account: EscrowPay
+ * rejects `payout_preference: automatic` here (`automatic_payout_disabled`), so
+ * released funds land in OUR wallet and the payout out of it is ours to issue.
+ */
+function listWallets(): Promise<any> {
+  return request({ method: 'GET', path: '/wallets' });
+}
+
+/**
+ * Sends money from our wallet to a registered payout account.
+ *
+ * THE SECOND HALF OF THE MONEY-OUT LEG. `release` moves escrow into our wallet;
+ * this moves it to the artist. Without it the platform is holding money that is
+ * not its own, which `docs/00` §3 says it never does.
+ *
+ * `transaction_id` is passed where we have one so the provider can tie the
+ * payout back to the escrow it came from — which is also what makes their
+ * `payout.completed` webhook identifiable as ours.
+ */
+function walletPayout({
+  walletId,
+  amountKobo,
+  payoutAccountId,
+  reference,
+  transactionId,
+  reason,
+}: {
+  walletId: string;
+  amountKobo: Kobo;
+  payoutAccountId: string;
+  reference: string;
+  transactionId?: string | null;
+  reason?: string;
+}): Promise<any> {
+  assertInteger(amountKobo, 'amountKobo');
+
+  return request({
+    method: 'POST',
+    path: `/wallets/${walletId}/payouts`,
+    // A stable key, so a payout retried after a timeout returns the original
+    // rather than sending the artist their fee twice.
+    idempotencyKey: reference,
+    body: {
+      amount_minor: amountKobo,
+      payout_account_id: payoutAccountId,
+      ...(transactionId ? { transaction_id: transactionId } : {}),
+      ...(reason ? { reason } : {}),
+    },
+  });
+}
+
 function listBanks() {
   return request({ method: 'GET', path: '/banks' });
 }
@@ -625,6 +679,8 @@ module.exports = {
   onboardParty,
   getParty,
   createPayoutAccount,
+  listWallets,
+  walletPayout,
   listBanks,
   estimateFees,
   getTransactionFees,

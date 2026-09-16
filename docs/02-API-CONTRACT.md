@@ -62,6 +62,24 @@ Implementation: `lib/errors.js` exports `AppError(status, message)`. Route handl
 | `GET` | `/artists/:id` | public | Full profile, rate card, `cancellationRate` |
 | `POST` | `/artists` | `ARTIST` | Create own profile |
 | `PATCH` | `/artists/:id` | `ARTIST` (owner) | Another artist's id → `403` |
+| `GET` | `/artists/banks` | `ARTIST` | The banks a payout account can be registered against, read from the provider |
+| `GET` | `/artists/me/payout-account` | `ARTIST` | What is on file — **last four digits only** |
+| `PUT` | `/artists/me/payout-account` | `ARTIST` | Registers where their money goes |
+
+### Where an artist's money actually goes
+
+EscrowPay rejects `payout_preference: automatic` on this business
+(`automatic_payout_disabled`), so a release moves escrow into **our wallet** and
+the transfer to the artist is a second call we make. Without a registered payout
+account that second leg cannot happen and the artist is never paid.
+
+The account number is sent to the provider **once** and is not stored. Every
+payout afterwards is addressed by the provider's id, so keeping the number would
+be exposure with no operational benefit — the same reasoning as the NIN in #10.
+The API returns the last four digits, which is enough for an artist to recognise
+their own account and useless to anyone else.
+
+The path is `me` rather than `:id`, so there is no identifier to get wrong.
 
 `baseRateKobo` is validated against **₦20,000 – ₦3,000,000** (2,000,000 – 300,000,000 kobo). Outside that range returns `400` with a message naming the limit. The bound is the provider's transaction range, not product policy — a booking outside it cannot be funded at all, so the artist finds out when setting their rate rather than the client at the point of payment.
 
@@ -195,6 +213,7 @@ The preview returns the applicable tier, the exact refund, the exact artist comp
 | `POST` | `/admin/queue/echo` | `ADMIN` | Schedules the do-nothing job; `delayMs` defaults to 10,000 |
 | `GET` | `/admin/queue/echo/:id` | `ADMIN` | Whether it ran, and when |
 | `GET` | `/admin/queue/dead-letter` | `ADMIN` | Jobs that exhausted every retry |
+| `GET` | `/admin/payouts/awaiting` | `ADMIN` | Bookings released but not paid out — money in our wallet that is not ours |
 | `GET` | `/admin/diagnostics` | `ADMIN` | Whether the dependencies actually answer. `503` when one does not |
 
 ### Health versus diagnostics

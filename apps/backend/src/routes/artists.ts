@@ -10,6 +10,7 @@ const express = require('express');
 const prisma = require('../lib/prisma.ts');
 const { AppError } = require('../lib/errors.ts');
 const { requireAuth, requireRole } = require('../middleware/auth.ts');
+const payoutService = require('../services/payoutService.ts');
 const {
   updateProfileAsOwner,
   isListable,
@@ -159,5 +160,81 @@ router.put('/artists/:id', requireAuth, requireRole('ARTIST'), async (req: Authe
     next(err);
   }
 });
+
+/**
+ * GET /artists/banks
+ *
+ * The banks a payout account can be registered against, read from the provider
+ * rather than hardcoded — a stale bank list is a payout that silently goes
+ * nowhere.
+ */
+router.get('/artists/banks', requireAuth, requireRole('ARTIST'), async (req: Req, res: Res, next: Next) => {
+  try {
+    res.json({ banks: await payoutService.banks() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /artists/me/payout-account
+ *
+ * What is on file. NEVER the full account number — the last four digits only,
+ * which is enough for an artist to recognise their own account and useless to
+ * anyone else.
+ */
+router.get(
+  '/artists/me/payout-account',
+  requireAuth,
+  requireRole('ARTIST'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const artist = await prisma.artist.findUnique({ where: { userId: req.user.id } });
+      if (!artist) throw new AppError(404, 'Create your artist profile first.');
+
+      res.json({ payoutAccount: payoutService.publicPayoutAccount(artist) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /artists/me/payout-account
+ *
+ * Registers where an artist's money goes — issue #26's missing half.
+ *
+ * EscrowPay rejects automatic payout on this business, so a release lands in
+ * OUR wallet and we send it on. Without an account here that second leg cannot
+ * happen, and the artist is never actually paid.
+ *
+ * The account number is sent to the provider and **not stored**. Every payout
+ * afterwards is addressed by the provider's id, so keeping the number would be
+ * exposure with no operational benefit — the same reasoning as the NIN in #10.
+ *
+ * Own account only: the path says `me` rather than taking an id, so there is no
+ * identifier to get wrong.
+ */
+router.put(
+  '/artists/me/payout-account',
+  requireAuth,
+  requireRole('ARTIST'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { bankCode, accountNumber, accountName } = req.body ?? {};
+
+      const payoutAccount = await payoutService.registerPayoutAccount({
+        artistUserId: req.user.id,
+        bankCode,
+        accountNumber,
+        accountName,
+      });
+
+      res.json({ payoutAccount });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 module.exports = { router, publicArtist };
