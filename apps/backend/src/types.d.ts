@@ -536,3 +536,13 @@ interface ConfirmationResult extends ConfirmationVerdict {
   refund?: RefundSummary;
   disputeId?: string;
 }
+
+/** One environment variable the process cannot start without (`lib/requiredEnv.ts`). */
+interface EnvRequirement {
+  name: string;
+  /** What breaks without it, in terms of what a user would see. */
+  why: string;
+  minLength?: number;
+  /** A command that produces an acceptable value, shown in the failure. */
+  generate?: string;
+}

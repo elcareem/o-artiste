@@ -7,7 +7,21 @@
 
 require('dotenv').config();
 
+const { assertRequiredEnv } = require('./lib/requiredEnv.ts');
 const { createApp } = require('./app.ts');
+
+const RUNS_WORKERS = process.env.RUN_WORKERS_IN_WEB === 'true';
+
+// Before anything binds. A deployment missing its signing key is not a running
+// service with a bug — it is a deploy that did not finish, and it should fail
+// like one rather than answering /health with `ok` and 500ing the first person
+// who logs in.
+try {
+  assertRequiredEnv({ runsWorkers: RUNS_WORKERS });
+} catch (err) {
+  console.error(`\n[backend] ${(err as Error).message}\n`);
+  process.exit(1);
+}
 
 const PORT = Number(process.env.PORT) || 4000;
 
@@ -31,7 +45,7 @@ const app = createApp();
  * but the flag should be turned off once a dedicated worker exists, so job load
  * stops competing with request handling.
  */
-const workers = process.env.RUN_WORKERS_IN_WEB === 'true' ? startInProcessWorkers() : null;
+const workers = RUNS_WORKERS ? startInProcessWorkers() : null;
 
 const server = app.listen(PORT, () => {
   console.log(`[backend] listening on :${PORT}`);

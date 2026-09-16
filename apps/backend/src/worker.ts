@@ -27,6 +27,16 @@ function startWorkers() {
 }
 
 if (require.main === module) {
+  // Only when this is the process being launched. Required lazily so that the
+  // API importing `startWorkers` for its in-process mode does not run the check
+  // twice with different expectations.
+  try {
+    require('./lib/requiredEnv.ts').assertRequiredEnv({ runsWorkers: true });
+  } catch (err) {
+    console.error(`\n[worker] ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+
   startWorkers();
 
   for (const signal of ['SIGTERM', 'SIGINT']) {

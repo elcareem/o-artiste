@@ -186,11 +186,24 @@ a `NEXT_PUBLIC_` prefix.
 - [x] Migration applied against the deployed database (16 tables verified)
 - [x] `DATABASE_URL` set on `o-artiste-api` from the **Internal** string
 
-> **Free-tier testing caveat.** Render deletes free PostgreSQL instances after
-> 30 days. If the build runs past a month the database disappears along with its
-> seed data. Not fatal by design — migrations are version-controlled and #6's
-> seed script is idempotent, so the state is reproducible with two commands. Do
-> not put anything in it that cannot be regenerated.
+> **`o-artiste-db` is deleted on 11 October 2026** unless it is upgraded to a
+> paid compute plan. Render states this on the instance page; it was created on
+> 12 September 2026 and free PostgreSQL lasts 30 days.
+>
+> Harmless while this is a test database — migrations are version-controlled and
+> #6's seed is idempotent, so the state is reproducible with two commands. It
+> becomes a hard deadline the moment anything irreplaceable is in it: a real
+> booking, a real identity verification, a real ledger entry. **Upgrade before
+> the first live booking, not before 11 October** — whichever comes first.
+>
+> Until then, nothing goes in it that cannot be regenerated. That includes the
+> ADMIN account created for #5's queue checks: it is recreated with
+> `npm run create-admin`, not backed up.
+>
+> Also noted from the instance page: connection pooling is **disabled**, and
+> storage is 1 GB (6.6% used). Pooling matters before launch — Prisma opens
+> `cpus * 2 + 1` connections per client by default and the worker is a second
+> client (#41).
 
 - [ ] Instance provisioned (Render → New → PostgreSQL, **same region as the web
       service**, Ohio)
@@ -478,7 +491,7 @@ Maintained alongside `apps/backend/.env.example`.
 | `WEB_ORIGIN` | backend CORS | Vercel URL |
 | `DATABASE_URL` | Prisma | #4 |
 | `REDIS_URL` | BullMQ | #5 |
-| `JWT_SECRET` | auth | generated |
+| `JWT_SECRET` | auth | generated — **32 characters minimum; the service refuses to start without it** |
 | `JWT_EXPIRES_IN` | auth | default `7d` |
 | `ESCROWPAY_BASE_URL` | provider client | #17 |
 | `ESCROWPAY_API_KEY` | provider client | #17 |
