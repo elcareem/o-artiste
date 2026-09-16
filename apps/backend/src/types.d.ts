@@ -543,8 +543,12 @@ interface EnvRequirement {
   /** What breaks without it, in terms of what a user would see. */
   why: string;
   minLength?: number;
-  /** A command that produces an acceptable value, shown in the failure. */
-  generate?: string;
+  /**
+   * How to obtain an acceptable value — a command to run, or where to find it.
+   * Shown in the failure, because the person reading it at 2am is often not the
+   * person who knows where the secret lives.
+   */
+  how?: string;
 }
 
 // ── Auto-release (`jobs/autoReleaseJob.ts`, issue #25) ───────────────────────

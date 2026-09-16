@@ -4761,3 +4761,68 @@ npm run lint                  → clean
 NODE_ENV=production npm run start:worker
   → [worker] listening on queues: maintenance, webhooks, notifications, releases
 ```
+
+### The configuration check earns its keep, twice more
+
+#25's deploy failed to start:
+
+```
+[backend] Refusing to start. 2 configuration problems:
+
+  ESCROWPAY_API_KEY is not set — No booking can be funded, released or refunded.
+  ESCROWPAY_WEBHOOK_SECRET is not set — Every inbound webhook is rejected as unsigned, so funding is never recorded.
+```
+
+Working as designed, and finding something real: **the deployed API has never
+had EscrowPay credentials.** It could not have created an escrow, funded,
+released, refunded, or verified a single webhook — every booking would have
+failed at the payment step and every inbound delivery been rejected as unsigned.
+That is the second dead configuration this check has surfaced, after
+`JWT_SECRET`, and neither was visible from the outside: `/health` answered `ok`
+throughout both.
+
+The deploy failing rather than starting is the correct outcome. The previous
+version kept serving, confirmed by `/health` and by a `GET /me` that still
+returned through the database.
+
+**What the failure was missing.** It said what breaks and not where to get a
+value. The person reading a failed deploy is often not the person who knows
+where the secret lives, so each requirement now carries a `how`:
+
+```
+  ESCROWPAY_API_KEY is not set — No booking can be funded, released or refunded.
+      EscrowPay dashboard → API keys. sk_test_… is the sandbox book, sk_live_… is real money.
+  ESCROWPAY_WEBHOOK_SECRET is not set — Every inbound webhook is rejected as unsigned, so funding is never recorded.
+      whsec_… shown once when the webhook endpoint was created. Not the API key.
+```
+
+The last line matters: those two secrets are routinely confused for each other,
+and the API key in the webhook slot fails in a way that looks like a provider
+problem rather than a configuration one.
+
+A test asserts **every** requirement carries a `how`. It immediately failed on
+`DATABASE_URL` and `REDIS_URL`, which had none — written to catch exactly the
+omission it caught.
+
+**Reporting everything at once was demonstrated, not just claimed.** The deploy
+log named both variables in one failure. Had they come one restart at a time,
+that would have been two failed deploys to learn two names.
+
+### Migrations apply before the process starts
+
+A side effect worth recording: the build succeeded, so `prisma migrate deploy`
+ran and applied `auto_release_deadline` — and only then did the process refuse
+to boot. The deployed database is therefore **ahead of the code serving
+against it**.
+
+```
+_prisma_migrations            Booking.autoReleaseAt
+  …                             present
+  20260916044134_auto_release_deadline
+```
+
+Harmless, and only because the migration is additive and nullable: the running
+code never selects a column it does not know about. It is a concrete reason the
+"no destructive migration on the automatic path" rule in
+`DEPLOYMENT-CHECKLIST.md` is not optional — a `DROP COLUMN` in that position
+would have taken the previous, still-serving version down with it.

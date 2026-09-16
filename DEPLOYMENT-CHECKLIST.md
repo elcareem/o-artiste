@@ -233,6 +233,17 @@ It is idempotent: a deploy with nothing pending prints `No pending migrations to
 apply` and moves on. Verified by applying all four migrations to an empty schema
 and then running it again.
 
+> **Migrations apply at BUILD time, before the process starts** — so a deploy
+> whose build succeeds and whose start then fails leaves the database ahead of
+> the running code. Observed on 16 September 2026: #25's
+> `auto_release_deadline` migration applied while the new process refused to
+> boot on missing provider credentials, leaving the previous version serving
+> against a schema it did not know about.
+>
+> Harmless, and only because every migration so far has been additive and
+> nullable — the previous code simply never selects the new column. It is
+> another reason the rule below is not optional.
+
 > **A destructive migration must not ride in on this.** Dropping or renaming a
 > column now happens automatically, before the code that expects the change is
 > live. Any migration that removes or rewrites data has to be split: ship the
@@ -494,8 +505,8 @@ Maintained alongside `apps/backend/.env.example`.
 | `JWT_SECRET` | auth | generated — **32 characters minimum; the service refuses to start without it** |
 | `JWT_EXPIRES_IN` | auth | default `7d` |
 | `ESCROWPAY_BASE_URL` | provider client | #17 |
-| `ESCROWPAY_API_KEY` | provider client | #17 |
-| `ESCROWPAY_WEBHOOK_SECRET` | webhook verification | #17 |
+| `ESCROWPAY_API_KEY` | provider client | #17 — **the service refuses to start without it in production** |
+| `ESCROWPAY_WEBHOOK_SECRET` | webhook verification | #17 — **the service refuses to start without it in production**. Not the API key |
 | `ESCROWPAY_WEBHOOK_SECRET_PREVIOUS` | webhook verification during rotation | #20 — optional, set only for the 24h overlap |
 | `ESCROWPAY_AMOUNT_UNIT` | provider client | `kobo` or `naira` — open item `docs/00` §11.8 |
 | `ESCROWPAY_TIMEOUT_MS` | provider client | below the host timeout recorded at #2 |
