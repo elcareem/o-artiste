@@ -196,6 +196,18 @@ The preview returns the applicable tier, the exact refund, the exact artist comp
 | `POST` | `/disputes/:id/evidence` | party |
 | `GET` | `/disputes/:id` | party or admin |
 
+**Opening one stops the clock.** Auto-release is cancelled, so a dispute raised near the grace boundary cannot be overtaken by an automatic payout while it is under review. The job also re-checks for an open dispute when it wakes — two guards, because a race here spends money in favour of whichever party the timer happened to suit.
+
+**A second dispute on the same booking returns the first**, from either party. Two disputes over one booking is two people deciding the same money.
+
+**Both parties see both submissions**, each tagged with the *role* that filed it rather than the user id. A dispute where one side cannot read the case against them is not a dispute; exposing the other party's identifier is not needed to fix that.
+
+Evidence is a statement, a file link, or both — never neither. `fileUrl` must be `http(s)`: it is rendered in the admin queue, so a `javascript:` or `data:` value would be a script running in the browser of the person deciding the case.
+
+The first evidence moves `OPEN → UNDER_REVIEW`, so the queue can tell "nobody has said anything yet" from "both sides have made their case". **Nothing on this path can reach a resolved state** — that is #32, and a test asserts this module never assigns one.
+
+Evidence is refused once a dispute is decided: after a ruling there is nothing for it to inform, and accepting it would imply a reconsideration that is not going to happen.
+
 ## 9. Admin — `routes/admin.js`
 
 | Method | Path | Auth |

@@ -5639,3 +5639,95 @@ npm run test:backend               → # tests 347 # pass 347 # fail 0
 npm run check:rules                → passed 11  failed 0  skipped 0
 npm run lint                       → clean
 ```
+
+---
+
+## #31 — Dispute opening and evidence submission
+
+Branch `feat/31-disputes`, from `main` at `5d5a128`.
+
+**The funds stay held and nothing resolves on a timer.** That is the whole
+design: any default outcome is gameable, because whichever party it favours
+simply waits for the clock.
+
+### Acceptance criteria
+
+**- [x] Opening a dispute prevents auto-release from firing**
+
+Two guards, both tested. The job re-checks for an open dispute when it wakes and
+returns `dispute_open` — run with the provider rigged so that **any** money
+movement fails by name — and the pending job is removed from the queue when the
+dispute opens.
+
+The second is not redundant. A dispute raised near the grace boundary would
+otherwise be a race, and losing it means money gone mid-review in favour of
+whichever party the timer suited.
+
+**- [x] Both parties can attach evidence to the same dispute**
+
+One dispute, both submissions, each tagged with the **role** that filed it.
+Separate records per party would let an admin read one without the other, and
+each side needs to see the case against them to answer it rather than guess.
+
+The other party's user id is asserted **not** to appear in the response. Knowing
+which side filed something is necessary; knowing their identifier is not.
+
+**- [x] A dispute cannot transition to resolved without an admin action**
+
+Enforced structurally: the money-moving half is #32 and is not in this module.
+
+The test asserts it against the **source** — no line assigns a `RESOLVED_*`
+state — rather than against the exported names. My first version checked names,
+matched its own `RESOLVED_STATES` constant, and would have passed a module that
+quietly resolved through a function called something else. A name-based check
+proves nothing.
+
+**- [x] The check-in record is attached automatically where one exists**
+
+It reduces "did the event happen?" to a timestamped fact, and an admin should
+not have to go looking for the one piece of evidence that settles it. `null`
+where there is none, rather than an empty object that reads as one.
+
+### One way a dispute comes into existence
+
+#24 opened disputes inline. That code now delegates to this service, so the
+check-in attachment, the idempotency and the audit row cannot drift apart
+between the automatic and manual paths. #24's own tests still pass unchanged,
+which is the check that the behaviour did not move.
+
+### Other decisions
+
+- **A second dispute returns the first**, from either party.
+- **`fileUrl` must be `http(s)`.** It is rendered in the admin queue, so a
+  `javascript:` or `data:` value is a script running in the browser of the
+  person deciding the case. Four hostile values are tested.
+- **A dispute must say what it is about.** A grievance with no statement cannot
+  be answered.
+- **Evidence is refused once a dispute is decided** — there is nothing left for
+  it to inform, and accepting it would imply a reconsideration that is not going
+  to happen.
+- **A stranger gets 404, not 403**, on all three endpoints.
+
+### A rule that was too blunt
+
+`check:rules` failed on the dispute view surfacing `checkIn.redeemedAt` — a
+**read**, and the entire reason a check-in is attached to a dispute.
+
+The rule matched the bare word. It is now an assignment pattern:
+`redeemedAt: new Date()` fails, `redeemedAt: checkIn.redeemedAt` passes, and a
+plain read does not match at all. Narrowed rather than allowlisted — a rule that
+forbids reading the thing it protects gets switched off, and an allowlisted
+service would have lost the guard entirely.
+
+Re-proven by adding `redeemedAt: new Date()` back into `checkInService`: it
+fails, naming the line. Reverted, green.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 360  # pass 360  # fail 0   (347 + 13 new)
+npm test --workspace apps/web → # tests 27   # pass 27   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+```
