@@ -27,6 +27,7 @@ const {
 const strikeService = require('../services/strikeService.ts');
 const { codeForClient, redeem } = require('../services/checkInService.ts');
 const { confirm, claimNoShow } = require('../services/confirmationService.ts');
+const disputeService = require('../services/disputeService.ts');
 
 const router = express.Router();
 
@@ -559,6 +560,79 @@ async function artistOutcome(booking: BookingRow, daysBefore: number) {
     consequence: strikeService.consequenceOfArtistCancellation(rule),
   };
 }
+
+/**
+ * POST /bookings/:id/disputes
+ *
+ * Either party raises a dispute — issue #31, docs/04 §5.
+ *
+ * #24 opens one automatically when a no-show claim is contradicted by a
+ * check-in. This is the manual path, for everything that is not that: a
+ * performance that happened but not as agreed, a client who says the artist
+ * left early, an artist who says the venue never let them in.
+ *
+ * OPENING ONE STOPS THE CLOCK. Auto-release is cancelled, so a dispute raised
+ * near the grace boundary cannot be overtaken by an automatic payout while it
+ * is under review.
+ */
+router.post('/bookings/:id/disputes', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
+  try {
+    const { reason } = req.body ?? {};
+
+    const dispute = await disputeService.raise({
+      bookingId: req.params.id,
+      userId: req.user.id,
+      reason,
+    });
+
+    res.status(201).json({ dispute });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /disputes/:id
+ *
+ * One dispute, for a party to it. Both sides see both submissions — a dispute
+ * where only one side can read the case against them is not one.
+ */
+router.get('/disputes/:id', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
+  try {
+    const dispute = await disputeService.forParty({
+      disputeId: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ dispute });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /disputes/:id/evidence
+ *
+ * A written statement, a file link, or both. Accepted while a dispute is open
+ * or under review; refused once it has been decided, because after a ruling
+ * there is nothing for it to inform and accepting it would imply a
+ * reconsideration that is not going to happen.
+ */
+router.post('/disputes/:id/evidence', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
+  try {
+    const { statement, fileUrl } = req.body ?? {};
+
+    const dispute = await disputeService.submitEvidence({
+      disputeId: req.params.id,
+      userId: req.user.id,
+      statement,
+      fileUrl,
+    });
+
+    res.status(201).json({ dispute });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /** Whether a cancellation is still possible, for the preview's own use. */
 function canBeCancelled(state: BookingState): boolean {

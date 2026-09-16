@@ -203,10 +203,27 @@ fi
 # evidence — which returns the dispute to the competing-recollection problem
 # the check-in code exists to eliminate. `routes/bookings.ts` may name it, and
 # only to serialise it back out in a response.
-absent "Nothing in services or lib writes CheckIn.redeemedAt" \
-       "redeemedAt is set by PostgreSQL. A caller-supplied time is an assertion, not evidence. docs/04-CONFIRMATION-AND-DISPUTES.md §2." \
-       "apps/backend/src/services apps/backend/src/lib apps/backend/src/jobs" \
-       'redeemedAt'
+# Matches an ASSIGNMENT, not a mention. `redeemedAt: new Date()` is the hazard;
+# `redeemedAt: checkIn.redeemedAt` is a view passing the database's own value
+# through, and `record.redeemedAt` is a plain read.
+#
+# The first version matched the bare word and fired on #31's dispute view, which
+# surfaces the check-in timestamp as evidence — the entire reason the check-in
+# is attached to a dispute. A rule that forbids reading the thing it is
+# protecting gets switched off, so it was narrowed rather than allowlisted.
+REDEEMED_PATHS="apps/backend/src/services apps/backend/src/lib apps/backend/src/jobs"
+if [ ! -d "apps/backend/src/services" ]; then
+  skip "Nothing in services, lib or jobs writes CheckIn.redeemedAt" "$REDEEMED_PATHS not present yet"
+else
+  hits="$(grep -rnP 'redeemedAt\s*:\s*(?!.*\.redeemedAt\b)' $REDEEMED_PATHS 2>/dev/null \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
+  if [ -z "$hits" ]; then
+    pass "Nothing in services, lib or jobs writes CheckIn.redeemedAt"
+  else
+    fail "Nothing in services, lib or jobs writes CheckIn.redeemedAt" \
+         "redeemedAt is set by PostgreSQL. A caller-supplied time is an assertion, not evidence. docs/04-CONFIRMATION-AND-DISPUTES.md §2." "$hits"
+  fi
+fi
 
 # ── No shadowing of Node's `process` — issue #25 ────────────────────────────
 # BullMQ processors are conventionally called `process`, and a function

@@ -726,3 +726,49 @@ interface ArtistCancellationConsequence {
   suspends: boolean;
   publishesRate: boolean;
 }
+
+// ── Disputes (`services/disputeService.ts`, issue #31) ───────────────────────
+
+type DisputeState = import('@prisma/client').DisputeState;
+type DisputeRow = import('@prisma/client').Dispute;
+type DisputeEvidenceRow = import('@prisma/client').DisputeEvidence;
+
+interface OpenDisputeInput {
+  bookingId: string;
+  openedByUserId: string;
+  /** Mandatory. A dispute with no stated grievance cannot be answered. */
+  reason: string;
+}
+
+interface SubmitEvidenceInput {
+  disputeId: string;
+  userId: string;
+  statement?: string | null;
+  /** http(s) only — it is rendered in the admin queue. */
+  fileUrl?: string | null;
+}
+
+interface DisputeEvidenceView {
+  id: string;
+  byYou: boolean;
+  party: 'CLIENT' | 'ARTIST' | null;
+  statement: string | null;
+  fileUrl: string | null;
+  createdAt: Date;
+}
+
+/** A dispute as one of its parties sees it. Both sides see both submissions. */
+interface DisputeView {
+  id: string;
+  bookingId: string;
+  state: DisputeState;
+  openedReason: string;
+  openedByYou: boolean;
+  createdAt: Date;
+  /** The timestamped fact that settles most of these, where one exists. */
+  checkIn: { redeemedAt: Date; hasLocation: boolean } | null;
+  resolvedAt: Date | null;
+  resolutionReason: string | null;
+  evidence: DisputeEvidenceView[];
+  viewerParty: 'CLIENT' | 'ARTIST' | null;
+}

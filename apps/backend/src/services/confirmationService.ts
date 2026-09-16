@@ -229,31 +229,21 @@ async function act(booking: ConfirmableBooking, actedBy: 'CLIENT' | 'ARTIST'): P
  * decided by a person (docs/04 §5).
  */
 async function openDispute(booking: ConfirmableBooking, reason: string) {
-  // No state pre-check here. `act` has just moved the booking, so the row in
-  // hand is stale by one write — and `transition` below re-reads it and
-  // validates against the transition map anyway. Checking a stale copy would
-  // be a guard that is wrong exactly when it matters.
-  return prisma.$transaction(async (tx: PrismaTx) => {
-    const existing = await tx.dispute.findFirst({
-      where: { bookingId: booking.id, state: 'OPEN' },
-    });
-    if (existing) return existing;
+  // Delegated to #31's service rather than duplicated. There is one way a
+  // dispute comes into existence — automatic here, manual there — so the
+  // check-in attachment, the idempotency and the audit row cannot drift apart
+  // between the two paths.
+  const disputeService = require('./disputeService.ts');
 
-    const dispute = await tx.dispute.create({
-      data: {
-        bookingId: booking.id,
-        openedByUserId: booking.client.userId,
-        openedReason: booking.clientNoShowReason
-          ? `${reason} Client's account: ${booking.clientNoShowReason}`
-          : reason,
-        checkInId: booking.checkIn?.id ?? null,
-      },
-    });
-
-    await transition({ bookingId: booking.id, to: 'DISPUTED', client: tx });
-
-    return dispute;
-  });
+  return prisma.$transaction((tx: PrismaTx) =>
+    disputeService.openDispute(tx, {
+      bookingId: booking.id,
+      openedByUserId: booking.client.userId,
+      reason: booking.clientNoShowReason
+        ? `${reason} Client's account: ${booking.clientNoShowReason}`
+        : reason,
+    })
+  );
 }
 
 /** The booking and the caller's part in it, or 404. */
