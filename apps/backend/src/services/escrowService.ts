@@ -621,6 +621,212 @@ function recordArtistCancellationRow(
 }
 
 /**
+ * Reclassifies a client cancellation as artist-fault — issue #29.
+ *
+ * NOT EVERY CLIENT CANCELLATION IS THE CLIENT'S FAULT. If the artist changed
+ * terms after booking, misrepresented what they were providing, or disclosed
+ * costs late, the client cancelling is a consequence of the artist's conduct.
+ * Charging them a cancellation fee for it is precisely the situation the FCCPA
+ * addresses, which gives consumers a right to a refund where a service is not
+ * rendered on the agreed terms.
+ *
+ * THE REVERSAL IS WRITTEN AS OFFSETTING ENTRIES, NEVER AS EDITS. Each original
+ * entry gets its exact negation, and the corrected position is then written
+ * fresh. The originals stay visible because the sequence — charged, then
+ * reversed, and why — is the record that matters if the decision is ever
+ * questioned. An edited ledger can only say what someone last decided; this one
+ * says what happened.
+ *
+ * WHERE THE MONEY COMES FROM. The escrow is empty: a client cancellation
+ * disburses both legs. So the difference owed to the client is refunded from
+ * `wallet_available` — the platform's own funds — and recovered from the artist
+ * as a liability, exactly as #28 does. The artist is also holding compensation
+ * they should not have received, and that is part of the same debt.
+ */
+async function reclassifyAsArtistFault({
+  cancellationId,
+  actorUserId,
+  reason,
+}: {
+  cancellationId: string;
+  actorUserId: string;
+  reason: string;
+}): Promise<ReclassificationSummary> {
+  // Mandatory, and checked before anything else. A money movement without a
+  // recorded justification is indefensible later (docs/07 §1).
+  if (!reason || !String(reason).trim()) {
+    throw new AppError(400, 'Record why this cancellation is being reclassified as artist-fault.');
+  }
+
+  const cancellation = await prisma.cancellation.findUnique({
+    where: { id: cancellationId },
+    include: { booking: { include: { artist: true, client: true } } },
+  });
+
+  if (!cancellation) throw new AppError(404, 'Cancellation not found.');
+
+  if (cancellation.initiatedBy !== 'CLIENT') {
+    throw new AppError(
+      409,
+      'Only a client cancellation can be reclassified as artist-fault. This one was already the artist’s.'
+    );
+  }
+
+  if (cancellation.reclassifiedAsArtistFault) {
+    throw new AppError(409, 'This cancellation has already been reclassified.');
+  }
+
+  const booking = cancellation.booking;
+  const tier = cancellation.appliedTier as unknown as CancellationTierSnapshot;
+
+  const original = computeClientCancellation({
+    amountKobo: booking.amountKobo,
+    commissionBps: booking.commissionRateBpsSnapshot,
+    clientRefundBps: tier.clientRefundBps,
+    artistCompensationBps: tier.artistCompensationBps,
+  });
+
+  const corrected = computeArtistCancellation({ amountKobo: booking.amountKobo });
+
+  // What the client should have received in total, less what they did.
+  const additionalToClient = corrected.clientTotalReturnedKobo - original.clientRefundKobo;
+
+  if (additionalToClient < 0) {
+    // Only reachable from a tier that returned more than the booking total,
+    // which #8 would not accept. Loud rather than silently refunding nothing.
+    throw new AppError(
+      500,
+      `Reclassification would owe the client ${additionalToClient} kobo, which cannot be right.`
+    );
+  }
+
+  // The artist keeps neither the compensation nor the cost of the fees.
+  const clawbackKobo = original.artistCompensationKobo;
+  const liabilityKobo = corrected.feeLiabilityKobo + clawbackKobo;
+
+  // --- The irreversible step. ---------------------------------------------
+  //
+  // From the platform's wallet, not from escrow: a client cancellation has
+  // already disbursed both legs, so there is nothing left in the transaction to
+  // refund from. The reference is stable, so a retry after a timeout returns the
+  // original refund rather than paying twice.
+  if (additionalToClient > 0) {
+    await escrowpay.refund({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_reclass`,
+      amountKobo: additionalToClient,
+      source: 'wallet_available',
+      reason: `Reclassified as artist-fault: ${reason}`,
+    });
+  }
+
+  const result = await prisma.$transaction(async (tx: PrismaTx) => {
+    // 1. Reverse every entry of the original cancellation, exactly.
+    const reversed = await ledger.reverseEntries(tx, {
+      bookingId: booking.id,
+      entryTypes: ['REFUNDED', 'ARTIST_COMPENSATION', 'COMMISSION', 'ESCROW_FEE_OUT'],
+      reason: `Reclassified as artist-fault: ${reason}`,
+    });
+
+    // 2. Write the position as it should have been.
+    await ledger.recordArtistCancellation(tx, booking);
+
+    // 3. The artist is holding compensation they should not have. A balanced
+    //    pair, like every other liability: no money moves on an accrual.
+    if (clawbackKobo > 0) {
+      await ledger.record(tx, {
+        bookingId: booking.id,
+        entryType: 'FEE_LIABILITY_ACCRUED',
+        party: 'ARTIST',
+        amountKobo: -clawbackKobo,
+        description: 'Compensation recovered after reclassification as artist-fault',
+      });
+      await ledger.record(tx, {
+        bookingId: booking.id,
+        entryType: 'FEE_LIABILITY_ACCRUED',
+        party: 'PLATFORM',
+        amountKobo: clawbackKobo,
+        description: 'Compensation receivable from the artist after reclassification',
+      });
+    }
+
+    // 4. One liability row covering both halves of what the artist now owes.
+    const liability =
+      liabilityKobo > 0
+        ? await tx.feeLiability.create({
+            data: {
+              artistUserId: booking.artist.userId,
+              originBookingId: booking.id,
+              amountKobo: liabilityKobo,
+              status: 'OUTSTANDING',
+            },
+          })
+        : null;
+
+    // 5. The cancellation row records the decision, not a rewritten outcome.
+    const updated = await tx.cancellation.update({
+      where: { id: cancellation.id },
+      data: {
+        reclassifiedAsArtistFault: true,
+        reclassifiedByUserId: actorUserId,
+        reclassificationReason: String(reason).slice(0, 2000),
+        reclassifiedAt: new Date(),
+        feeBearer: 'ARTIST',
+        clientRefundKobo: corrected.clientTotalReturnedKobo,
+        artistCompensationKobo: 0,
+        escrowFeesKobo: corrected.feeLiabilityKobo,
+      },
+    });
+
+    // 6. The conduct consequence, as though the artist had cancelled.
+    await strikeService.accrueForCancellation(tx, {
+      userId: booking.artist.userId,
+      by: 'ARTIST',
+      daysBefore: cancellation.daysBeforeEvent,
+      bookingId: booking.id,
+    });
+
+    await recordAudit(tx, {
+      actorUserId,
+      action: 'CANCELLATION_RECLASSIFIED_ARTIST_FAULT',
+      entityType: 'Cancellation',
+      entityId: cancellation.id,
+      reason: String(reason).slice(0, 2000),
+      before: {
+        feeBearer: 'CLIENT',
+        clientRefundKobo: original.clientRefundKobo,
+        artistCompensationKobo: original.artistCompensationKobo,
+      },
+      after: {
+        feeBearer: 'ARTIST',
+        clientRefundKobo: corrected.clientTotalReturnedKobo,
+        additionalToClientKobo: additionalToClient,
+        liabilityKobo,
+      },
+    });
+
+    return { updated, reversedCount: reversed.length, liability };
+  });
+
+  console.log(
+    `[escrow] cancellation ${cancellation.id} reclassified as artist-fault — ` +
+      `${additionalToClient} kobo more to the client, ${liabilityKobo} kobo owed by the artist`
+  );
+
+  return {
+    cancellationId: cancellation.id,
+    bookingId: booking.id,
+    reclassifiedByUserId: actorUserId,
+    reason: String(reason).slice(0, 2000),
+    entriesReversed: result.reversedCount,
+    additionalToClientKobo: additionalToClient,
+    clientTotalReturnedKobo: corrected.clientTotalReturnedKobo,
+    artistClawbackKobo: clawbackKobo,
+    liabilityKobo,
+  };
+}
+
+/**
  * Writes off an artist's outstanding liabilities.
  *
  * Pursuing a ₦2,000 debt through collections costs more than the debt, so a
@@ -978,5 +1184,6 @@ module.exports = {
   refundBooking,
   cancelByClient,
   cancelByArtist,
+  reclassifyAsArtistFault,
   writeOffLiabilities,
 };

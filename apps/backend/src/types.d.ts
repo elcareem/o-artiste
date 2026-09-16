@@ -663,3 +663,20 @@ interface ArtistFaultRefundContext {
   /** Null when the computed liability was zero. */
   liability: FeeLiabilityRow | null;
 }
+
+/** What an artist-fault reclassification reports (#29). */
+interface ReclassificationSummary {
+  cancellationId: string;
+  bookingId: string;
+  reclassifiedByUserId: string;
+  reason: string;
+  /** How many original entries were negated. The originals stay queryable. */
+  entriesReversed: number;
+  /** Paid from the platform's wallet, because the escrow is already empty. */
+  additionalToClientKobo: Kobo;
+  clientTotalReturnedKobo: Kobo;
+  /** Compensation the artist received and should not have. */
+  artistClawbackKobo: Kobo;
+  /** The clawback plus the fees the platform now fronts, as one debt. */
+  liabilityKobo: Kobo;
+}
