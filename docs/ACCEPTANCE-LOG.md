@@ -5731,3 +5731,128 @@ npm test --workspace apps/web → # tests 27   # pass 27   # fail 0
 npm run check:rules           → passed 11  failed 0  skipped 0
 npm run lint                  → clean
 ```
+
+---
+
+## #32 — Admin dispute queue and resolution
+
+Branch `feat/32-dispute-resolution`, from `main` at `a7bfa09`. The last issue of
+Phase 3.
+
+**Dispute authority sits with us, not the provider.** EscrowPay does not
+arbitrate on the API product; funds stay held until we instruct otherwise. This
+path is the only thing standing between a held escrow and a decision.
+
+### Acceptance criteria
+
+**- [x] A resolution produces the corresponding escrow instruction and ledger entries**
+
+All three verdicts, each asserting the provider calls in order and the booking
+reconciling to zero:
+
+| Verdict | Instructions | Ledger |
+|---|---|---|
+| Release | `release` then `payout` | Completion economics |
+| Refund | `refund` | Artist-fault economics **plus a `FeeLiability`** |
+| Split | `release`, `refund`, `payout` | `recordDisputeSplit` |
+
+The refund case accrues a liability against the artist, exactly as a
+cancellation decided against them would — the platform fronts the fees and
+recovers them from the next payout.
+
+**- [x] Resolving without a written reason is rejected**
+
+Three shapes — absent, empty, whitespace — each `400`, each with the provider
+rigged so that any money movement fails by name. Afterwards the dispute is
+asserted still `OPEN` with no `resolvedAt`, and the booking still `DISPUTED`:
+refused, not half-executed.
+
+**- [x] The dispute record names the deciding admin**
+
+`resolvedByUserId`, the verbatim reasoning, and an `AuditLog` row carrying the
+outcome and both split figures.
+
+**- [x] The check-in record appears above the fold in the detail view**
+
+Asserted twice. In the API payload, `checkIn` is ordered before `evidence` — a
+test compares the key positions. In the page, it is the first section, before
+the claim, before the statements and before the form.
+
+Where it **contradicts the client's own no-show claim**, that is said outright
+rather than left to be noticed: *"They reported a no-show, and the artist holds
+a code only the client could have given them in person. One of these accounts is
+untrue."* Leaving an admin to spot that themselves is how a five-minute decision
+becomes an afternoon.
+
+**- [x] A split resolution divides funds correctly and reconciles in the ledger**
+
+**The artist's share is the residual of the client's, never a second figure.**
+R2, docs/05 §4 — taking two numbers from an admin and trusting them to sum is
+how a booking ends up a kobo out, and a ledger that fails to reconcile over a
+typo would be reporting a fault that is not there.
+
+Tested with ₦83,333 of ₦200,000, chosen because the resulting commission does
+not divide evenly. The halves sum exactly, the artist is instructed first, and
+the booking reconciles to zero.
+
+`planSplit` is separately tested across the whole range, including both edges —
+everything to one side is a decision, not an error — and rejects a non-integer,
+a negative, and anything above the booking total.
+
+### The mediator field executes nothing
+
+docs/04 §6 says it is informational. The test proves it: the mediator
+recommended a full refund, the admin issued a **split**, and the recorded
+opinion sits beside a verdict that contradicts it. Nothing reads that field.
+
+### Strike accrual, and the case #33 was built for
+
+A ruling closes the last two of #33's criteria, which needed a real dispute:
+
+- **Release against a client who claimed a no-show contradicted by a check-in**
+  → `DISPUTE_FALSE_NO_SHOW_CLAIM`, the heavier weight.
+- **Release against a client with no such claim** → `DISPUTE_RULED_AGAINST`.
+- **Refund** → strikes the **artist**, asserted to land on the right party.
+- **Split** → strikes **nobody**. It is not a finding against either party, and
+  recording one would be a verdict the decision did not reach.
+
+The weights are read from the rules in force, and the test asserts the
+*relationship* — heavier than ordinary — so it survives retuning.
+
+### The admin UI
+
+The queue is ordered **oldest first**, because every row is money held from two
+people who both believe it is theirs and how long that has been true is the
+thing to act on. Ties break on value. `Check-in recorded` is a column rather
+than a detail: a dispute with one should be cheap to decide, and knowing before
+opening the row is what makes the queue triageable.
+
+The split preview computes the residual **the same way the backend does**,
+flooring the commission like `applyBps`. A second calculation that rounded
+differently would show an admin one figure and move another.
+
+Attached files open with `rel="noopener noreferrer nofollow"` — they are
+party-supplied URLs, and the backend already refuses anything but `http(s)`
+because this page is where they are rendered.
+
+### My own jargon test caught my copy
+
+The refund description read *"…owes the escrow fees."* The test that asserts no
+outcome description leaks system vocabulary failed on it. Reworded to "owes the
+bank charges, taken from their next payout" — which is also what it actually
+means to the artist reading it.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 375  # pass 375  # fail 0   (360 + 15 new)
+npm test --workspace apps/web → # tests 36   # pass 36   # fail 0   (27 + 9 new)
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+npm run build --workspace apps/web
+  → /admin/disputes, /admin/disputes/[id] and the resolve proxy registered
+```
+
+**Phase 3 is complete.** #22 through #32, plus #33 pulled forward and the payout
+leg found along the way.

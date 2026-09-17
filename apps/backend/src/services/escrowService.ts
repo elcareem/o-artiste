@@ -843,6 +843,293 @@ async function reclassifyAsArtistFault({
 }
 
 /**
+ * Resolves a dispute — issue #32, docs/04 §6.
+ *
+ * DISPUTE AUTHORITY SITS WITH US, NOT THE PROVIDER. EscrowPay does not
+ * arbitrate on the API product; funds stay held until we instruct otherwise.
+ * That is the correct arrangement — we know the users, the categories and the
+ * market — and it means this function is the only thing standing between a
+ * held escrow and a decision.
+ *
+ * A WRITTEN REASON IS MANDATORY. This moves money on a booking where two people
+ * disagree about who is owed it. A ruling without a recorded justification
+ * cannot be defended when it is questioned, and it will be.
+ *
+ * THE MEDIATOR OPINION EXECUTES NOTHING. It is recorded where one was sought,
+ * and no path reads it.
+ */
+async function resolveDispute({
+  disputeId,
+  outcome,
+  reason,
+  actorUserId,
+  splitClientKobo,
+  mediatorOpinion,
+}: ResolveDisputeInput): Promise<DisputeResolution> {
+  if (!reason || !String(reason).trim()) {
+    throw new AppError(400, 'Record the reasoning for this decision.');
+  }
+
+  const dispute = await prisma.dispute.findUnique({
+    where: { id: disputeId },
+    include: {
+      booking: { include: { client: true, artist: { include: { user: true } }, checkIn: true } },
+    },
+  });
+
+  if (!dispute) throw new AppError(404, 'Dispute not found.');
+
+  const disputeService = require('./disputeService.ts');
+  if (disputeService.isResolved(dispute.state)) {
+    throw new AppError(409, 'This dispute has already been decided.');
+  }
+
+  const booking = dispute.booking;
+  if (!booking.escrowId) {
+    throw new AppError(409, 'This booking was never funded, so there is nothing to decide.');
+  }
+
+  const nextDisputeState = DISPUTE_STATE_FOR[outcome];
+  if (!nextDisputeState) {
+    throw new AppError(400, 'Choose release, refund, or split.');
+  }
+  disputeService.assertDisputeTransition(dispute.state, nextDisputeState);
+
+  // Worked out before anything moves, so an impossible split is refused rather
+  // than half-executed.
+  const split =
+    outcome === 'SPLIT' ? planSplit(booking, splitClientKobo) : null;
+
+  // --- The irreversible steps. ---------------------------------------------
+  const movements = await instructProvider(booking, outcome, split, reason);
+
+  // --- Recorded now, in ONE transaction with the state change. -------------
+  const resolved = await prisma.$transaction(async (tx: PrismaTx) => {
+    await transition({
+      bookingId: booking.id,
+      to: 'RESOLVED',
+      client: tx,
+      data: outcome === 'REFUND' ? { refundedAt: new Date() } : { releasedAt: new Date() },
+    });
+
+    if (outcome === 'RELEASE') {
+      await ledger.recordRelease(tx, booking);
+    } else if (outcome === 'REFUND') {
+      await ledger.recordArtistCancellation(tx, booking);
+      // The artist bears the cost of a dispute decided against them, exactly as
+      // they would for a cancellation — the platform fronts it and recovers it.
+      const breakdown = computeArtistCancellation({ amountKobo: booking.amountKobo });
+      if (breakdown.feeLiabilityKobo > 0) {
+        await tx.feeLiability.create({
+          data: {
+            artistUserId: booking.artist.userId,
+            originBookingId: booking.id,
+            amountKobo: breakdown.feeLiabilityKobo,
+            status: 'OUTSTANDING',
+          },
+        });
+      }
+    } else {
+      await ledger.recordDisputeSplit(tx, booking, split!);
+    }
+
+    const updated = await tx.dispute.update({
+      where: { id: dispute.id },
+      data: {
+        state: nextDisputeState,
+        resolvedByUserId: actorUserId,
+        resolutionReason: String(reason).slice(0, 4000),
+        resolvedAt: new Date(),
+        splitClientKobo: split?.clientKobo ?? null,
+        splitArtistKobo: split?.artistKobo ?? null,
+        // Informational only. Nothing above or below reads this.
+        externalMediatorOpinion: mediatorOpinion
+          ? String(mediatorOpinion).slice(0, 4000)
+          : dispute.externalMediatorOpinion,
+      },
+    });
+
+    // The conduct consequence — docs/06 §3. A ruling against the client on a
+    // no-show claim contradicted by a check-in is the heavier weight: that is
+    // an attempt to obtain a performance for free, not poor planning.
+    const losingUserId =
+      outcome === 'RELEASE' ? booking.client.userId : outcome === 'REFUND' ? booking.artist.userId : null;
+
+    if (losingUserId) {
+      await strikeService.accrueForDispute(tx, {
+        userId: losingUserId,
+        falseNoShowClaim:
+          outcome === 'RELEASE' &&
+          Boolean(booking.checkIn) &&
+          Boolean(booking.clientNoShowClaimedAt),
+        bookingId: booking.id,
+      });
+    }
+
+    await recordAudit(tx, {
+      actorUserId,
+      action: 'DISPUTE_RESOLVED',
+      entityType: 'Dispute',
+      entityId: dispute.id,
+      reason: String(reason).slice(0, 4000),
+      before: { state: dispute.state },
+      after: {
+        state: nextDisputeState,
+        outcome,
+        splitClientKobo: split?.clientKobo ?? null,
+        splitArtistKobo: split?.artistKobo ?? null,
+      },
+    });
+
+    return updated;
+  });
+
+  // The money-out leg, where an artist got anything.
+  let payout: PayoutResult | null = null;
+  if (outcome === 'RELEASE' || (outcome === 'SPLIT' && (split?.artistNetKobo ?? 0) > 0)) {
+    const amountKobo =
+      outcome === 'RELEASE'
+        ? computeCompletion({
+            amountKobo: booking.amountKobo,
+            commissionBps: booking.commissionRateBpsSnapshot,
+          }).artistNetKobo
+        : split!.artistNetKobo;
+
+    payout = await require('./payoutService.ts').payOut({
+      bookingId: booking.id,
+      amountKobo,
+      reason: `Dispute resolution for booking ${booking.id}`,
+    });
+  }
+
+  await require('../jobs/autoReleaseJob.ts').cancel(booking.id);
+
+  console.log(
+    `[dispute] ${dispute.id} resolved ${outcome} by ${actorUserId}` +
+      (split ? ` — client ${split.clientKobo}, artist ${split.artistKobo}` : '')
+  );
+
+  return {
+    disputeId: dispute.id,
+    bookingId: booking.id,
+    outcome,
+    state: resolved.state,
+    resolvedByUserId: actorUserId,
+    clientKobo: split?.clientKobo ?? movements.clientKobo,
+    artistKobo: split?.artistNetKobo ?? movements.artistKobo,
+    paidOut: payout?.paid ?? false,
+  };
+}
+
+const DISPUTE_STATE_FOR: Record<string, DisputeState> = {
+  RELEASE: 'RESOLVED_RELEASE',
+  REFUND: 'RESOLVED_REFUND',
+  SPLIT: 'RESOLVED_SPLIT',
+};
+
+/**
+ * The two halves of a split, from the client's share alone.
+ *
+ * THE ARTIST'S SHARE IS THE RESIDUAL. R2, docs/05 §4: taking two figures from
+ * an admin and trusting them to sum is how a booking ends up a kobo out, and a
+ * ledger that fails to reconcile because of a typo in a text box is the ledger
+ * reporting a fault that is not there.
+ */
+function planSplit(booking: BookingRow, splitClientKobo?: Kobo): DisputeSplitPlan {
+  if (!Number.isInteger(splitClientKobo)) {
+    throw new AppError(400, 'Say how much of the booking the client should receive, in kobo.');
+  }
+
+  const clientKobo = splitClientKobo as number;
+  if (clientKobo < 0 || clientKobo > booking.amountKobo) {
+    throw new AppError(
+      400,
+      `The client's share must be between 0 and ${booking.amountKobo} kobo — the booking total.`
+    );
+  }
+
+  const artistKobo = booking.amountKobo - clientKobo;
+  const commissionKobo = applyBpsShare(artistKobo, booking.commissionRateBpsSnapshot);
+
+  return {
+    clientKobo,
+    artistKobo,
+    commissionKobo,
+    artistNetKobo: artistKobo - commissionKobo,
+  };
+}
+
+/** feeService owns the rounding rule; this is the one call site that needs it. */
+function applyBpsShare(amountKobo: Kobo, bps: Bps): Kobo {
+  const { applyBps } = require('./feeService.ts');
+  return applyBps(amountKobo, bps);
+}
+
+/**
+ * Instructs the provider, in the order that leaves the right party waiting.
+ *
+ * As everywhere else, before anything is recorded: a database failure after a
+ * successful movement is self-healing through a stable reference, while the
+ * reverse leaves someone owed money the system believes was sent.
+ */
+async function instructProvider(
+  booking: any,
+  outcome: DisputeOutcome,
+  split: DisputeSplitPlan | null,
+  reason: string
+): Promise<{ clientKobo: Kobo; artistKobo: Kobo }> {
+  const note = `Dispute resolved by support: ${reason}`.slice(0, 500);
+
+  if (outcome === 'RELEASE') {
+    const completion = computeCompletion({
+      amountKobo: booking.amountKobo,
+      commissionBps: booking.commissionRateBpsSnapshot,
+    });
+    await escrowpay.release({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_dispute_release`,
+      amountKobo: completion.artistNetKobo,
+      reason: note,
+    });
+    return { clientKobo: 0, artistKobo: completion.artistNetKobo };
+  }
+
+  if (outcome === 'REFUND') {
+    const breakdown = computeArtistCancellation({ amountKobo: booking.amountKobo });
+    await escrowpay.refund({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_dispute_refund`,
+      amountKobo: breakdown.clientRefundKobo,
+      reason: note,
+    });
+    return { clientKobo: breakdown.clientRefundKobo, artistKobo: 0 };
+  }
+
+  // A split. The artist first, for the same reason a client cancellation pays
+  // them first: the party who did not ask for this should not be the one
+  // waiting on a retry.
+  if (split!.artistNetKobo > 0) {
+    await escrowpay.release({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_dispute_split_artist`,
+      amountKobo: split!.artistNetKobo,
+      reason: note,
+    });
+  }
+
+  if (split!.clientKobo > 0) {
+    await escrowpay.refund({
+      transactionId: booking.escrowId,
+      reference: `${booking.escrowReference}_dispute_split_client`,
+      amountKobo: split!.clientKobo,
+      reason: note,
+    });
+  }
+
+  return { clientKobo: split!.clientKobo, artistKobo: split!.artistNetKobo };
+}
+
+/**
  * Writes off an artist's outstanding liabilities.
  *
  * Pursuing a ₦2,000 debt through collections costs more than the debt, so a
@@ -1207,5 +1494,7 @@ module.exports = {
   cancelByClient,
   cancelByArtist,
   reclassifyAsArtistFault,
+  resolveDispute,
+  planSplit,
   writeOffLiabilities,
 };

@@ -27,8 +27,11 @@ const {
 const {
   writeOffLiabilities,
   reclassifyAsArtistFault,
+  resolveDispute,
 } = require('../services/escrowService.ts');
 const payoutService = require('../services/payoutService.ts');
+const disputeService = require('../services/disputeService.ts');
+const prisma = require('../lib/prisma.ts');
 
 const router = express.Router();
 
@@ -335,6 +338,178 @@ router.get(
         })),
         total: bookings.length,
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/disputes
+ *
+ * The queue — issue #32. Open and under-review disputes, oldest first.
+ *
+ * AGE AND VALUE ARE ON THE LIST. A dispute is money held from two people who
+ * both believe it is theirs, and how long that has been true is the thing an
+ * admin needs to triage on. `hasCheckIn` is there because a dispute with one
+ * should be cheap to decide.
+ */
+router.get(
+  '/admin/disputes',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const includeResolved = req.query.resolved === 'true';
+
+      const disputes = await prisma.dispute.findMany({
+        where: includeResolved
+          ? {}
+          : { state: { in: ['OPEN', 'UNDER_REVIEW'] as DisputeState[] } },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          booking: { include: { client: true, artist: true } },
+          checkIn: true,
+          _count: { select: { evidence: true } },
+        },
+      });
+
+      res.json({
+        disputes: disputes.map((d: any) => ({
+          id: d.id,
+          bookingId: d.bookingId,
+          state: d.state,
+          openedAt: d.createdAt,
+          ageDays: Math.floor((Date.now() - new Date(d.createdAt).getTime()) / 86400000),
+          amountKobo: d.booking.amountKobo,
+          eventDate: d.booking.eventDate,
+          artist: d.booking.artist.stageName,
+          client: d.booking.client.displayName,
+          // The single fact that reduces the common case to a binary one.
+          hasCheckIn: Boolean(d.checkInId),
+          evidenceCount: d._count.evidence,
+          openedReason: d.openedReason,
+        })),
+        total: disputes.length,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/disputes/:id
+ *
+ * One dispute in full, for deciding it.
+ *
+ * THE CHECK-IN IS FIRST IN THE PAYLOAD, not buried among the attachments
+ * (docs/04 §6). Most disputes should be cheap to resolve because that single
+ * record reduces "did the event happen?" to a timestamped fact; burying it
+ * makes every dispute expensive.
+ */
+router.get(
+  '/admin/disputes/:id',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const dispute = await prisma.dispute.findUnique({
+        where: { id: req.params.id },
+        include: {
+          booking: { include: { client: true, artist: true } },
+          checkIn: true,
+          evidence: { orderBy: { createdAt: 'asc' } },
+        },
+      });
+
+      if (!dispute) throw new AppError(404, 'Dispute not found.');
+
+      res.json({
+        dispute: {
+          id: dispute.id,
+          state: dispute.state,
+          openedAt: dispute.createdAt,
+          openedReason: dispute.openedReason,
+          openedBy: disputeService.partyOf(dispute.booking, dispute.openedByUserId),
+
+          // Above the fold, deliberately.
+          checkIn: dispute.checkIn
+            ? {
+                redeemedAt: dispute.checkIn.redeemedAt,
+                hasLocation: dispute.checkIn.latitude !== null,
+                latitude: dispute.checkIn.latitude,
+                longitude: dispute.checkIn.longitude,
+                accuracyMeters: dispute.checkIn.accuracyMeters,
+              }
+            : null,
+
+          booking: {
+            id: dispute.booking.id,
+            amountKobo: dispute.booking.amountKobo,
+            commissionRateBpsSnapshot: dispute.booking.commissionRateBpsSnapshot,
+            eventDate: dispute.booking.eventDate,
+            eventEndAt: dispute.booking.eventEndAt,
+            state: dispute.booking.state,
+            artist: dispute.booking.artist.stageName,
+            client: dispute.booking.client.displayName,
+            clientConfirmedAt: dispute.booking.clientConfirmedAt,
+            artistConfirmedAt: dispute.booking.artistConfirmedAt,
+            clientNoShowClaimedAt: dispute.booking.clientNoShowClaimedAt,
+            clientNoShowReason: dispute.booking.clientNoShowReason,
+          },
+
+          evidence: dispute.evidence.map((e: DisputeEvidenceRow) => ({
+            id: e.id,
+            party: disputeService.partyOf(dispute.booking, e.submittedByUserId),
+            statement: e.statement,
+            fileUrl: e.fileUrl,
+            createdAt: e.createdAt,
+          })),
+
+          resolvedAt: dispute.resolvedAt,
+          resolutionReason: dispute.resolutionReason,
+          splitClientKobo: dispute.splitClientKobo,
+          splitArtistKobo: dispute.splitArtistKobo,
+          externalMediatorOpinion: dispute.externalMediatorOpinion,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /admin/disputes/:id/resolve
+ *
+ * Release, refund, or split — with a mandatory written reason.
+ *
+ * Dispute authority sits with us, not the provider: EscrowPay does not
+ * arbitrate, and funds stay held until we instruct otherwise (docs/04 §6).
+ *
+ * `mediatorOpinion` is recorded and executes nothing. Where a dispute turns on
+ * quality rather than attendance an outside view may be worth having, but the
+ * verdict returns to us and we issue the instruction.
+ */
+router.post(
+  '/admin/disputes/:id/resolve',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { outcome, reason, splitClientKobo, mediatorOpinion } = req.body ?? {};
+
+      const resolution = await resolveDispute({
+        disputeId: req.params.id,
+        outcome,
+        reason,
+        actorUserId: req.user.id,
+        splitClientKobo,
+        mediatorOpinion,
+      });
+
+      res.json({ resolution });
     } catch (err) {
       next(err);
     }
