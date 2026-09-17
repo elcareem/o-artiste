@@ -185,6 +185,7 @@ model User {
   auditLogs      AuditLog[]     @relation("AuditActor")
   strikeRules    StrikeRule[]   @relation("StrikeRuleAuthor")
   enforcementRules EnforcementRule[] @relation("EnforcementRuleAuthor")
+  reputationConfigs ReputationConfig[] @relation("ReputationConfigAuthor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -732,6 +733,34 @@ model EnforcementRule {
   createdAt DateTime @default(now())
 
   @@index([versionId])
+  @@index([effectiveFrom])
+}
+
+/// The cancellation-rate statistic's own configuration — docs/06 §6, issue #35.
+///
+/// Versioned and append-only like every other tunable decision. Both numbers
+/// are open items (`00` §11.7) and changing either must change behaviour
+/// without a deploy.
+model ReputationConfig {
+  id String @id @default(cuid())
+
+  /// Rolling window. An artist who had a bad year and then improved should not
+  /// carry it indefinitely: a lifetime statistic gives no path back and stops
+  /// measuring current reliability, which is the only thing a client looking at
+  /// it actually wants to know.
+  windowMonths Int
+
+  /// Bookings a party must have concluded before the statistic is shown at all.
+  /// "100% cancellation rate" on someone with one cancelled booking is not
+  /// information, it is noise presented as a verdict.
+  minBookings Int
+
+  effectiveFrom DateTime
+  setByUserId   String
+  setBy         User     @relation("ReputationConfigAuthor", fields: [setByUserId], references: [id])
+
+  createdAt DateTime @default(now())
+
   @@index([effectiveFrom])
 }
 

@@ -11,6 +11,7 @@ const prisma = require('../lib/prisma.ts');
 const { AppError } = require('../lib/errors.ts');
 const { requireAuth, requireRole } = require('../middleware/auth.ts');
 const payoutService = require('../services/payoutService.ts');
+const reputationService = require('../services/reputationService.ts');
 const {
   updateProfileAsOwner,
   isListable,
@@ -53,7 +54,10 @@ const MAX_PAGE_SIZE = 100;
  * and not "N/A", which draws attention to an absence and reads as a warning
  * (docs/06 §4).
  */
-function publicListing(artist: ArtistRow & Record<string, any>) {
+function publicListing(
+  artist: ArtistRow & Record<string, any>,
+  cancellationRate: number | null = null
+) {
   return {
     id: artist.id,
     stageName: artist.stageName,
@@ -62,8 +66,10 @@ function publicListing(artist: ArtistRow & Record<string, any>) {
     location: artist.location,
     baseRateKobo: artist.baseRateKobo,
     media: artist.media,
-    // Populated in #35. Present and null, never omitted.
-    cancellationRate: null,
+    // Present and null, never omitted — the contract #12 established so the
+    // frontend had to handle the below-threshold case properly rather than
+    // bolting it on. #35 fills it in; the caller passes what it resolved.
+    cancellationRate,
   };
 }
 
@@ -95,8 +101,14 @@ router.get('/artists', async (req: Req, res: Res, next: Next) => {
       prisma.artist.count({ where }),
     ]);
 
+    // One pass for the whole page. A rate per row would make twenty artists
+    // twenty round trips.
+    const rates = await reputationService.ratesForArtists(
+      artists.map((a: ArtistRow) => a.userId)
+    );
+
     res.json({
-      artists: artists.map(publicListing),
+      artists: artists.map((a: ArtistRow) => publicListing(a, rates.get(a.userId) ?? null)),
       pagination: {
         page,
         limit,
@@ -123,7 +135,15 @@ router.get('/artists/:id', async (req: Req, res: Res, next: Next) => {
     });
     if (!artist) throw new AppError(404, 'Artist not found.');
 
-    res.json({ artist: publicListing(artist) });
+    // On the profile, above the booking action — it exists so a client can
+    // factor reliability into the decision, which requires seeing it BEFORE
+    // committing (docs/06 §7).
+    const { rate } = await reputationService.rateFor({
+      userId: artist.userId,
+      party: 'ARTIST',
+    });
+
+    res.json({ artist: publicListing(artist, rate) });
   } catch (err) {
     next(err);
   }

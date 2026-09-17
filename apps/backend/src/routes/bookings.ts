@@ -28,6 +28,7 @@ const strikeService = require('../services/strikeService.ts');
 const { codeForClient, redeem } = require('../services/checkInService.ts');
 const { confirm, claimNoShow } = require('../services/confirmationService.ts');
 const disputeService = require('../services/disputeService.ts');
+const reputationService = require('../services/reputationService.ts');
 
 const router = express.Router();
 
@@ -126,7 +127,24 @@ router.get('/bookings/:id', requireAuth, async (req: AuthedReq, res: Res, next: 
 
     if (!isParticipant) throw new AppError(404, 'Booking not found.');
 
-    res.json({ booking: publicBooking(booking) });
+    // MIRRORED — docs/06 §7. Reliability runs both ways, and an artist deciding
+    // whether to hold a date deserves the same signal a client gets before
+    // booking one. Only the artist sees it: a client reading their own rate on
+    // their own booking is a nudge, not information they can act on.
+    const clientCancellationRate =
+      req.user.id === booking.artist.userId
+        ? (
+            await reputationService.rateFor({
+              userId: booking.client.userId,
+              party: 'CLIENT',
+            })
+          ).rate
+        : undefined;
+
+    res.json({
+      booking: publicBooking(booking),
+      ...(clientCancellationRate !== undefined ? { clientCancellationRate } : {}),
+    });
   } catch (err) {
     next(err);
   }

@@ -32,6 +32,7 @@ const {
 const payoutService = require('../services/payoutService.ts');
 const disputeService = require('../services/disputeService.ts');
 const enforcementService = require('../services/enforcementService.ts');
+const reputationService = require('../services/reputationService.ts');
 const prisma = require('../lib/prisma.ts');
 
 const router = express.Router();
@@ -591,6 +592,52 @@ router.put(
 
       const published = await enforcementService.setEnforcementLadders({
         rules,
+        actorUserId: req.user.id,
+        ...(effectiveFrom ? { effectiveFrom: new Date(effectiveFrom) } : {}),
+      });
+
+      res.status(201).json({ published });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/config/reputation
+ *
+ * The cancellation-rate window and display threshold — issue #35.
+ */
+router.get(
+  '/admin/config/reputation',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      res.json({ current: await reputationService.resolveConfig() });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /admin/config/reputation
+ *
+ * SUPER_ADMIN only. Changing the threshold changes who has a published
+ * reputation at all, which is a decision about every artist at once.
+ */
+router.put(
+  '/admin/config/reputation',
+  requireAuth,
+  requireRole('SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { windowMonths, minBookings, effectiveFrom } = req.body ?? {};
+
+      const published = await reputationService.setReputationConfig({
+        windowMonths,
+        minBookings,
         actorUserId: req.user.id,
         ...(effectiveFrom ? { effectiveFrom: new Date(effectiveFrom) } : {}),
       });
