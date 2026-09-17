@@ -808,3 +808,40 @@ interface DisputeResolution {
   /** Whether the artist's share actually reached them, not just our wallet. */
   paidOut: boolean;
 }
+
+// ── Enforcement (`services/enforcementService.ts`, issue #34) ────────────────
+
+type EnforcementParty = import('@prisma/client').EnforcementParty;
+type EnforcementRuleRow = import('@prisma/client').EnforcementRule;
+
+interface EnforcementRuleInput {
+  party: EnforcementParty;
+  /** Active strike weight at which this rung applies, and above. */
+  minWeight: number;
+  standing: AccountStanding;
+  /** Required on a RESTRICTED rung; null everywhere else. */
+  minLeadDays?: number | null;
+}
+
+interface StandingChange {
+  userId: string;
+  from: AccountStanding;
+  to: AccountStanding;
+  weight: number;
+  minLeadDays: number | null;
+}
+
+interface ReviewStrikeInput {
+  strikeId: string;
+  actorUserId: string;
+  /** Mandatory. Every strike is appealable, so every override is explained. */
+  reason: string;
+  expiresAt?: Date | string | null;
+}
+
+interface StrikeReviewResult {
+  strikeId: string;
+  userId: string;
+  standing: AccountStanding;
+  remainingWeight: number;
+}

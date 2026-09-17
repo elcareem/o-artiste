@@ -225,6 +225,9 @@ Evidence is refused once a dispute is decided: after a ruling there is nothing f
 | `GET` | `/admin/config/strikes` | `ADMIN` — the rule set in force, and whether it is published or the shipped default |
 | `PUT` | `/admin/config/strikes` | `SUPER_ADMIN` — append-only; the whole set is submitted |
 | `GET` | `/admin/users/:id/strikes` | `ADMIN` — one user's conduct record in full |
+| `POST` | `/admin/strikes/:id/review` | `ADMIN` — overrides a strike; written reason mandatory |
+| `GET` | `/admin/config/enforcement` | `ADMIN` — the ladders in force |
+| `PUT` | `/admin/config/enforcement` | `SUPER_ADMIN` — append-only |
 | `POST` | `/admin/queue/echo` | `ADMIN` | Schedules the do-nothing job; `delayMs` defaults to 10,000 |
 | `GET` | `/admin/queue/echo/:id` | `ADMIN` | Whether it ran, and when |
 | `GET` | `/admin/queue/dead-letter` | `ADMIN` | Jobs that exhausted every retry |

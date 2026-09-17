@@ -118,6 +118,12 @@ enum LedgerEntryType {
   CORRECTION
 }
 
+/// Which ladder a rung belongs to — docs/06 §5.
+enum EnforcementParty {
+  ARTIST
+  CLIENT
+}
+
 enum StrikeTrigger {
   ARTIST_CANCEL_3_6_DAYS
   ARTIST_CANCEL_1_2_DAYS
@@ -178,6 +184,7 @@ model User {
   feeLiabilities FeeLiability[]
   auditLogs      AuditLog[]     @relation("AuditActor")
   strikeRules    StrikeRule[]   @relation("StrikeRuleAuthor")
+  enforcementRules EnforcementRule[] @relation("EnforcementRuleAuthor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -682,6 +689,45 @@ model StrikeRule {
   effectiveFrom DateTime
   setByUserId   String
   setBy         User     @relation("StrikeRuleAuthor", fields: [setByUserId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([versionId])
+  @@index([effectiveFrom])
+}
+
+/// The enforcement ladders — docs/06 §5, issue #34.
+///
+/// Versioned and append-only like `StrikeRule`, for the same reason: the right
+/// thresholds are not knowable until there is data on how often each trigger
+/// fires (`00` §11.6), and changing one must change behaviour without a deploy.
+///
+/// A rung applies at `minWeight` of ACTIVE strike weight and above. The
+/// harshest matching rung wins, so the ladder is expressed as its rungs rather
+/// than as a chain of conditions — adding one is a row, not a code change.
+///
+/// THE ACCOUNT CONSEQUENCE IS THE DETERRENT, not the fee. A ₦2,070 liability is
+/// a rounding error to a working artist; losing listing visibility is not.
+model EnforcementRule {
+  id String @id @default(cuid())
+
+  /// Shared by every rung of one published set.
+  versionId String
+
+  party     EnforcementParty
+  /// Accumulated active strike weight at which this rung applies.
+  minWeight Int
+  standing  AccountStanding
+
+  /// For a RESTRICTED client: the minimum lead time they must book outside, in
+  /// days. Null on every other rung. This rung exists so a client who cancels
+  /// late twice is not removed outright — they can still book a month out,
+  /// which is the behaviour we actually want from them (docs/06 §5).
+  minLeadDays Int?
+
+  effectiveFrom DateTime
+  setByUserId   String
+  setBy         User     @relation("EnforcementRuleAuthor", fields: [setByUserId], references: [id])
 
   createdAt DateTime @default(now())
 

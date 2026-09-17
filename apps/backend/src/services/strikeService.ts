@@ -214,10 +214,31 @@ async function accrue(
     after: { userId, trigger: rule.trigger, weight: rule.weight, bookingId: bookingId ?? null },
   });
 
+  // THE CONSEQUENCE IS APPLIED IN THE SAME TRANSACTION AS THE STRIKE. An
+  // account whose conduct changed and an account whose standing changed must
+  // never be two different facts — a strike recorded without its consequence is
+  // a deterrent that did not deter.
+  //
+  // #34 owns the ladders. This only says when to re-derive.
+  const enforcement = require('./enforcementService.ts');
+  const user = await tx.user.findUnique({ where: { id: userId } });
+  const change = user
+    ? await enforcement.applyStanding(tx, {
+        userId,
+        party: user.role === 'ARTIST' ? 'ARTIST' : 'CLIENT',
+      })
+    : null;
+
   console.log(
     `[strike] ${rule.trigger} weight ${rule.weight} against ${userId}` +
-      (bookingId ? ` for booking ${bookingId}` : '')
+      (bookingId ? ` for booking ${bookingId}` : '') +
+      (change ? ` — standing ${change.from} → ${change.to}` : '')
   );
+
+  // Handed back so the caller can tell the person after the transaction
+  // commits. A message sent for a change that then rolled back is worse than a
+  // late one.
+  (strike as StrikeRow & { standingChange?: StandingChange | null }).standingChange = change;
 
   return strike;
 }

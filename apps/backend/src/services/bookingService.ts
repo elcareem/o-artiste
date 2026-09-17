@@ -221,6 +221,11 @@ async function createBooking({
 
   assertCanTransact(clientUser, 'client');
 
+  // A RESTRICTED client may still book — just not close to the date. The
+  // restriction addresses the specific failure mode, last-minute cancellation,
+  // without removing an otherwise usable customer (#34, docs/06 §5).
+  require('./enforcementService.ts').assertWithinLeadTime(clientUser, eventDate);
+
   const artist = await prisma.artist.findUnique({
     where: { id: artistId },
     include: { user: true },

@@ -31,6 +31,7 @@ const {
 } = require('../services/escrowService.ts');
 const payoutService = require('../services/payoutService.ts');
 const disputeService = require('../services/disputeService.ts');
+const enforcementService = require('../services/enforcementService.ts');
 const prisma = require('../lib/prisma.ts');
 
 const router = express.Router();
@@ -510,6 +511,91 @@ router.post(
       });
 
       res.json({ resolution });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /admin/strikes/:id/review
+ *
+ * Overrides a strike — issue #34, docs/06 §5.
+ *
+ * Every strike is appealable, so every override carries a written reason and
+ * names the admin who made it.
+ *
+ * THE STRIKE IS DEACTIVATED, NEVER DELETED. It happened, and the record of it
+ * happening and then being overturned is more useful than its absence —
+ * particularly to the next person reviewing the same account.
+ *
+ * Standing is recomputed from what remains, and this is the one path that may
+ * LOWER it: removing a strike that should not have been issued has to undo what
+ * it caused.
+ */
+router.post(
+  '/admin/strikes/:id/review',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { reason, expiresAt } = req.body ?? {};
+
+      const result = await enforcementService.reviewStrike({
+        strikeId: req.params.id,
+        actorUserId: req.user.id,
+        reason,
+        expiresAt,
+      });
+
+      res.json({ review: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/config/enforcement
+ *
+ * The ladders in force, and whether they are published or the shipped default.
+ */
+router.get(
+  '/admin/config/enforcement',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const { rules, versionId, isDefault } = await enforcementService.resolveLadders();
+      res.json({ current: { versionId, isDefault, rules } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /admin/config/enforcement
+ *
+ * SUPER_ADMIN only — the same line drawn for the commission rate and the strike
+ * weights. An admin reviewing one strike affects one person; this changes what
+ * every future accumulation does to an account.
+ */
+router.put(
+  '/admin/config/enforcement',
+  requireAuth,
+  requireRole('SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { rules, effectiveFrom } = req.body ?? {};
+
+      const published = await enforcementService.setEnforcementLadders({
+        rules,
+        actorUserId: req.user.id,
+        ...(effectiveFrom ? { effectiveFrom: new Date(effectiveFrom) } : {}),
+      });
+
+      res.status(201).json({ published });
     } catch (err) {
       next(err);
     }
