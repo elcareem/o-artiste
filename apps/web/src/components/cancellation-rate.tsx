@@ -9,8 +9,12 @@
  * Returning `null` emits no element at all, so there is nothing in the DOM to
  * style, space, or accidentally reveal.
  */
+import { shouldShowRate } from '@/lib/reputation';
+
 export function CancellationRate({ rate }: { rate: number | null }) {
-  if (rate === null || rate === undefined) return null;
+  // The rule lives in `lib/reputation.ts` so it can be tested: node:test cannot
+  // transform JSX, so a branch in this file is only checkable by reading it.
+  if (!shouldShowRate(rate)) return null;
 
   return (
     <div

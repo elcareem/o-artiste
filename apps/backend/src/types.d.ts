@@ -845,3 +845,25 @@ interface StrikeReviewResult {
   standing: AccountStanding;
   remainingWeight: number;
 }
+
+// ── Reputation (`services/reputationService.ts`, issue #35) ──────────────────
+
+type ReputationConfigRow = import('@prisma/client').ReputationConfig;
+type CancellationRow = import('@prisma/client').Cancellation;
+
+interface ReputationSettings {
+  windowMonths: number;
+  minBookings: number;
+  /** True when nothing has been published and the shipped values are in use. */
+  isDefault: boolean;
+}
+
+interface CancellationRateResult {
+  /** Whole percent, or null below the threshold. Never 0 to mean "unknown". */
+  rate: number | null;
+  concluded: number;
+  cancelled: number;
+  minBookings: number;
+  windowMonths: number;
+  belowThreshold: boolean;
+}

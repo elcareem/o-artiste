@@ -5955,3 +5955,95 @@ npm run check:rules           → passed 11  failed 0  skipped 0
 npm run lint                  → clean
 npm run seed (twice)          → 5 enforcement rungs, idempotent
 ```
+
+---
+
+## #35 — Cancellation rate calculation and display
+
+Branch `feat/35-cancellation-rate`, from `main` at `aedf980`.
+
+The `cancellationRate: null` contract has been in the API since #12 and the
+component has rendered nothing for it since #13 — established early precisely so
+the below-threshold case could not be bolted on later. This fills it in.
+
+### Acceptance criteria
+
+**- [x] An artist with one cancelled booking out of one shows no stat, not "100%"**
+
+`null`, `belowThreshold: true`, and a separate assertion that it is **not zero**
+— the distinction is the whole point. Checked through the API too, where the
+field is asserted present rather than omitted.
+
+**- [x] A cancellation older than the window is excluded**
+
+Five clean recent bookings plus a cancellation from fourteen months ago gives
+`0%` over a denominator of five: the old booking is out of **both** halves. An
+artist who had a bad year and then improved should not carry it indefinitely.
+
+**- [x] The stat appears above the booking CTA, not below the fold**
+
+Asserted against the page source, comparing the position of `<CancellationRate`
+against `data-testid="booking-cta"`. Source rather than rendered output because
+the ordering is the requirement and it must survive any styling change.
+
+**- [x] Artists see the client stat on incoming requests**
+
+`GET /bookings/:id` carries `clientCancellationRate` **only for the artist**.
+Reliability runs both ways, and an artist deciding whether to hold a date
+deserves the signal a client gets before booking one. The client does not see
+their own — it is a nudge, not something they can act on in that moment.
+
+**- [x] Changing the threshold in config changes display eligibility without a deploy**
+
+Three concluded bookings sit below the default threshold of five and publish
+nothing. The threshold is lowered through `PUT /admin/config/reputation`, and
+the **same running process** then publishes 33%. Narrowing the window changes it
+again.
+
+### Four decisions about what the figure means
+
+**The window is measured on the booking's conclusion**, with numerator and
+denominator sharing that basis. Mixing conclusion and creation dates produces a
+figure that can exceed 100% or silently drop a recent cancellation of an older
+booking.
+
+**In-flight bookings are excluded.** Tested with ten of them: a booking whose
+outcome is unknown is not evidence either way, and counting it would let someone
+dilute their rate simply by making bookings.
+
+**A booking that ended without a cancellation counts against nobody** — a
+dispute, an uncontradicted no-show refund. It belongs in the denominator because
+it happened, and in no numerator because neither party walked away.
+
+**A reclassified cancellation counts against the artist, not the client.** The
+entire point of #29, and the test asserts both sides: the artist's rate goes to
+20% and the client's stays at 0%. Leaving it on the client's record would
+publish a statistic the platform has already ruled is wrong.
+
+### A test that could not be written where the code was
+
+`node:test` strips types but cannot transform JSX, so a `.tsx` component cannot
+be imported into a test at all — the first attempt failed with
+`ERR_UNKNOWN_FILE_EXTENSION`.
+
+Rather than fall back to reading the source for a rule this important, the
+decision moved to `lib/reputation.ts` as a type guard. Null-versus-zero is now
+genuinely tested, the compiler enforces that a caller establishes it before
+showing the figure, and a separate test asserts the component defers to the rule
+rather than keeping a second copy of the condition.
+
+The web test glob widened from `src/lib/**` to `src/**` in the process, which is
+why four tests appeared rather than three.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 404  # pass 404  # fail 0   (392 + 12 new)
+npm test --workspace apps/web → # tests 40   # pass 40   # fail 0   (36 + 4 new)
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint / build          → clean
+```
+
+Verified by breaking it: removing the threshold check turned the two tests that
+exist for it red.

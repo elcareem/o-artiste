@@ -122,6 +122,20 @@ And the below-threshold case must render **nothing** — not `0%`, not `N/A`, no
 
 The threshold is configurable — `00` §11.7. Changing it changes display eligibility without a deploy.
 
+### How it is computed (#35)
+
+**The window is measured on the booking's conclusion**, and numerator and denominator share that basis. "Of the bookings that concluded in the last twelve months, what fraction did you cancel?" is a question with one answer; mixing the conclusion date with the creation date produces a figure that can exceed 100% or silently drop a recent cancellation of an older booking.
+
+**In-flight bookings are excluded entirely.** A booking whose outcome is unknown is not evidence either way, and counting it in the denominator would let someone dilute their rate simply by making bookings.
+
+**A booking that ended without a cancellation counts against nobody** — a dispute, an uncontradicted no-show refund. It belongs in the denominator because it happened, and in no numerator because neither party walked away.
+
+**A reclassified cancellation counts against the artist, not the client.** That is the entire point of #29: the client cancelled because of the artist's conduct, and leaving it on the client's record would publish a statistic the platform has already ruled is wrong.
+
+The rate is a **whole percent**. One decimal place invites a precision the sample size does not support.
+
+Window and threshold live in a versioned `ReputationConfig` table like every other tunable decision. A threshold of zero is refused outright: it would publish a verdict on a single booking, which is the failure this section exists to prevent.
+
 ## 7. Where it is displayed
 
 - On the artist profile, **above the booking action**, before commitment. It exists so a client can factor reliability into the decision, which requires seeing it *before* committing — not in a footer, not on a review page afterwards.
