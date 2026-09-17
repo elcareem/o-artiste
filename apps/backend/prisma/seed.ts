@@ -33,6 +33,7 @@ const SEED_PASSWORD = 'seed password not for production';
 /** Deterministic ids, so a second run recognises what the first created. */
 const COMMISSION_RATE_ID = 'seed_commission_rate_v1';
 const STRIKE_VERSION_ID = 'seed_strike_rules_v1';
+const ENFORCEMENT_VERSION_ID = 'seed_enforcement_v1';
 const TIER_VERSION_ID = 'seed_cancellation_tiers_v1';
 
 const DEFAULT_COMMISSION_BPS = 500; // 5%
@@ -232,6 +233,39 @@ async function seedStrikeRules(setByUserId: string) {
 }
 
 /**
+ * The enforcement ladders, as configuration records — issue #34.
+ *
+ * Seeded alongside the strike weights because the two are chosen together: the
+ * artist day-of weight and the artist suspension threshold are the same number
+ * on purpose, so one day-of cancellation lands exactly on suspension.
+ */
+async function seedEnforcementLadders(setByUserId: string) {
+  const existing = await prisma.enforcementRule.findMany({
+    where: { versionId: ENFORCEMENT_VERSION_ID },
+  });
+  if (existing.length > 0) return existing;
+
+  const { DEFAULT_LADDERS } = require('../src/services/enforcementService.ts');
+
+  return prisma.$transaction(
+    DEFAULT_LADDERS.map((rule: EnforcementRuleInput, index: number) =>
+      prisma.enforcementRule.create({
+        data: {
+          id: `${ENFORCEMENT_VERSION_ID}_${index}`,
+          versionId: ENFORCEMENT_VERSION_ID,
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+          setByUserId,
+          party: rule.party,
+          minWeight: rule.minWeight,
+          standing: rule.standing,
+          minLeadDays: rule.minLeadDays ?? null,
+        },
+      })
+    )
+  );
+}
+
+/**
  * Refuses to seed a rate the escrow provider could never process. Catching it
  * here rather than at checkout means the failure surfaces where the number was
  * chosen, not where a client tries to pay it.
@@ -260,11 +294,13 @@ async function main() {
   const rate = await seedCommissionRate(superAdmin.id);
   const tiers = await seedCancellationTiers(superAdmin.id);
   const strikeRules = await seedStrikeRules(superAdmin.id);
+  const ladders = await seedEnforcementLadders(superAdmin.id);
 
   console.log(`[seed] users            ${users.length}`);
   console.log(`[seed] commission rate  ${rate.rateBasisPoints} bps`);
   console.log(`[seed] cancellation tiers ${tiers.length} rows, version ${TIER_VERSION_ID}`);
   console.log(`[seed] strike rules     ${strikeRules.length} rows, version ${STRIKE_VERSION_ID}`);
+  console.log(`[seed] enforcement      ${ladders.length} rungs, version ${ENFORCEMENT_VERSION_ID}`);
   console.log('[seed] done');
 }
 
@@ -291,6 +327,7 @@ module.exports = {
   COMMISSION_RATE_ID,
   TIER_VERSION_ID,
   STRIKE_VERSION_ID,
+  ENFORCEMENT_VERSION_ID,
   MIN_RATE_KOBO,
   MAX_RATE_KOBO,
 };

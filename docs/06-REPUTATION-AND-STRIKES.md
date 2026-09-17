@@ -82,6 +82,18 @@ Restricted clients are blocked from booking **inside their enforced minimum lead
 
 An admin may review, override, or expire any strike, with a **written reason recorded** and the actor named in `AuditLog`.
 
+### How the ladders are stored (#34)
+
+A versioned, append-only `EnforcementRule` table, like the strike weights. A rung applies at `minWeight` of **active** strike weight and above, and **the harshest matching rung wins** — a client at weight 5 matches warning, restricted and suspended, and picking the lowest would mean accruing strikes made an account safer.
+
+The thresholds and the weights were chosen **together**, not separately. `ARTIST_CANCEL_DAY_OF` is weight 3 and artist suspension begins at 3, so a single day-of cancellation lands exactly on "strike + suspension pending review" as §2 requires. `DISPUTE_FALSE_NO_SHOW_CLAIM` is weight 3 and client restriction begins at 3, so one attempt to obtain a performance for free restricts immediately. A test asserts both, so retuning one without the other fails loudly.
+
+**Accrual only ever escalates.** An admin who lifted a suspension has made a decision, and a later unrelated strike recomputing from weight alone would silently overturn it. Relief is an explicit act — overriding a strike — and that is the one path allowed to lower standing.
+
+**An override deactivates, never deletes.** The strike happened, and the record of it happening and then being overturned is more useful than its absence, particularly to the next person reviewing the account. Standing is recomputed from what remains, so overturning one of two strikes leaves the other's consequence in force.
+
+A rung may not set standing back to `GOOD`: a published ladder must not be able to silently clear an existing suspension.
+
 Affected users are **notified of a change in standing and the reason**. A consequence someone discovers by failing to book is a support ticket; a consequence they were told about is a deterrent.
 
 ## 6. The cancellation rate

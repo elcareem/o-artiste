@@ -5856,3 +5856,102 @@ npm run build --workspace apps/web
 
 **Phase 3 is complete.** #22 through #32, plus #33 pulled forward and the payout
 leg found along the way.
+
+---
+
+## #34 — Strike consequences and enforcement
+
+Branch `feat/34-strike-enforcement`, from `main` at `0d271a9`. First issue of
+Phase 4.
+
+**The account consequence is the deterrent, not the fee.** A ₦2,070 liability is
+a rounding error to a working artist; losing listing visibility is not.
+
+### Acceptance criteria
+
+**- [x] A restricted client cannot create a booking inside their enforced minimum lead time**
+
+Refused at 3 and 13 days with a message naming the number, the actual gap and
+what to do about it — and **accepted at 14 and 30**. That second half is the
+point: the restriction addresses the specific failure mode, last-minute
+cancellation, without removing an otherwise usable customer. A client who
+cancels late twice can still book a month out, which is the behaviour we
+actually want from them.
+
+**- [x] A suspended artist disappears from `GET /artists` and returns 404 on detail**
+
+Tested through the whole path rather than by setting a column: the artist is
+listed, a day-of cancellation strike is accrued, standing becomes `SUSPENDED` on
+its own, and they are then **absent** — not greyed out, not marked unavailable.
+The 404 is asserted not to mention suspension, because a detail page that
+explains why is a detail page that confirms the account exists.
+
+**- [x] A suspended client receives a clear, non-technical message explaining their standing**
+
+`403` with wording that says what happened and what to do, asserted to contain
+no enum name, no status code and no `null`.
+
+Separately, every standing-change SMS is asserted to be **one segment**, to name
+the actual lead-time number on the restricted rung, and to offer a reply. A
+consequence discovered by failing to book is a support ticket; one someone was
+told about is a deterrent.
+
+**- [x] An admin override records the actor and reason**
+
+Mandatory reason in three shapes, the actor and verbatim reason on the strike
+row and in `AuditLog`, and the original weight asserted unchanged.
+
+### The thresholds and the weights were chosen together
+
+Not separately, and a test asserts the coupling so that retuning one without the
+other fails loudly:
+
+```
+ARTIST_CANCEL_DAY_OF          weight 3   artist suspension begins at 3
+DISPUTE_FALSE_NO_SHOW_CLAIM   weight 3   client restriction begins at 3
+```
+
+So a single day-of cancellation lands exactly on "strike + suspension pending
+review" as docs/06 §2 requires, and one attempt to obtain a performance for free
+restricts a client immediately.
+
+### Three decisions
+
+**The harshest matching rung wins.** Rungs are cumulative — a client at weight 5
+matches warning, restricted and suspended — and picking the lowest would mean
+accruing strikes made an account *safer*.
+
+**Accrual only ever escalates.** An admin who lifted a suspension made a
+decision; a later unrelated strike recomputing from weight alone would silently
+overturn it. Tested directly: standing lifted by hand, then a fresh strike, and
+the accumulated weight still applies without the override being quietly
+reinstated as the reason.
+
+**An override deactivates, never deletes**, and is the one path allowed to lower
+standing — removing a strike that should not have been issued has to undo what
+it caused. Overturning one of two strikes is tested to leave the other's
+consequence, and its lead time, in force.
+
+A published ladder may not contain a rung to `GOOD`. That would let a
+configuration change silently clear an existing suspension.
+
+### The consequence commits with the strike
+
+`applyStanding` runs inside the transaction that wrote the strike. An account
+whose conduct changed and an account whose standing changed must never be two
+different facts — a strike recorded without its consequence is a deterrent that
+did not deter.
+
+The notification is sent **after** the commit, because a message about a change
+that then rolled back is worse than a late one.
+
+### Verification
+
+```
+npm run typecheck             → 0 errors
+npm run test:backend          → # tests 392  # pass 392  # fail 0   (375 + 17 new)
+npm test --workspace apps/web → # tests 36   # pass 36   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run lint                  → clean
+npm run seed (twice)          → 5 enforcement rungs, idempotent
+```
