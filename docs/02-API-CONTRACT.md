@@ -219,6 +219,9 @@ Evidence is refused once a dispute is decided: after a ruling there is nothing f
 | `GET` | `/admin/disputes` | `ADMIN` |
 | `POST` | `/admin/disputes/:id/resolve` | `ADMIN` — written reason mandatory |
 | `POST` | `/admin/cancellations/:id/reclassify` | `ADMIN` — written reason mandatory |
+| `GET` | `/admin/disputes` | `ADMIN` — the queue, oldest first, with age, value and whether a check-in exists |
+| `GET` | `/admin/disputes/:id` | `ADMIN` — the check-in first in the payload, then both parties' statements |
+| `POST` | `/admin/disputes/:id/resolve` | `ADMIN` — release, refund or split; written reason mandatory |
 | `GET` | `/admin/config/strikes` | `ADMIN` — the rule set in force, and whether it is published or the shipped default |
 | `PUT` | `/admin/config/strikes` | `SUPER_ADMIN` — append-only; the whole set is submitted |
 | `GET` | `/admin/users/:id/strikes` | `ADMIN` — one user's conduct record in full |

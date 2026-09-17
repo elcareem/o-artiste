@@ -772,3 +772,39 @@ interface DisputeView {
   evidence: DisputeEvidenceView[];
   viewerParty: 'CLIENT' | 'ARTIST' | null;
 }
+
+// ── Dispute resolution (issue #32) ──────────────────────────────────────────
+
+type DisputeOutcome = 'RELEASE' | 'REFUND' | 'SPLIT';
+
+interface ResolveDisputeInput {
+  disputeId: string;
+  outcome: DisputeOutcome;
+  /** Mandatory. A ruling without recorded reasoning cannot be defended. */
+  reason: string;
+  actorUserId: string;
+  /** SPLIT only. The artist's share is the residual, never a second figure. */
+  splitClientKobo?: Kobo;
+  /** Informational only. Nothing executes from it (docs/04 §6). */
+  mediatorOpinion?: string | null;
+}
+
+interface DisputeSplitPlan {
+  clientKobo: Kobo;
+  /** The residual of the client's share — R2, so the two sum exactly. */
+  artistKobo: Kobo;
+  commissionKobo: Kobo;
+  artistNetKobo: Kobo;
+}
+
+interface DisputeResolution {
+  disputeId: string;
+  bookingId: string;
+  outcome: DisputeOutcome;
+  state: DisputeState;
+  resolvedByUserId: string;
+  clientKobo: Kobo;
+  artistKobo: Kobo;
+  /** Whether the artist's share actually reached them, not just our wallet. */
+  paidOut: boolean;
+}

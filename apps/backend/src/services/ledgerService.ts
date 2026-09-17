@@ -33,6 +33,8 @@ const {
   computeCompletion,
   computeClientCancellation,
   computeArtistCancellation,
+  applyBps,
+  moneyOutFee,
 } = require('./feeService.ts');
 
 /**
@@ -287,6 +289,85 @@ async function recordArtistCancellation(tx: PrismaTx, booking: BookingRow) {
 }
 
 /**
+ * A dispute resolved by splitting the escrow — #32.
+ *
+ * The two shares are the admin's decision, and the artist's is the RESIDUAL of
+ * the client's rather than a second percentage. R2 (docs/05 §4): computing both
+ * sides independently is precisely what loses a kobo, and a booking that fails
+ * to reconcile because an admin's ruling was a kobo out would be the ledger
+ * reporting a fault that is not there.
+ *
+ * Commission applies to the artist's share afterwards, the same way it does in
+ * a cancellation — it is not carved out of the split, because the split is a
+ * division of the booking total between two people and the platform's take is a
+ * separate operation on one of those halves.
+ */
+async function recordDisputeSplit(
+  tx: PrismaTx,
+  booking: BookingRow,
+  { clientKobo, artistKobo }: { clientKobo: Kobo; artistKobo: Kobo }
+) {
+  if (clientKobo + artistKobo !== booking.amountKobo) {
+    throw new AppError(
+      500,
+      `A dispute split must divide the booking exactly: ${clientKobo} + ${artistKobo} ≠ ${booking.amountKobo}.`
+    );
+  }
+
+  const commission = applyBps(artistKobo, booking.commissionRateBpsSnapshot);
+  const artistNet = artistKobo - commission;
+  const moneyOut = artistNet > 0 ? moneyOutFee(artistNet) : 0;
+
+  const entries: LedgerLeg[] = [];
+
+  if (clientKobo > 0) {
+    entries.push({
+      entryType: 'REFUNDED',
+      party: 'CLIENT',
+      amountKobo: clientKobo,
+      description: 'Client share of a disputed booking, as decided by support',
+    });
+  }
+
+  if (artistNet > 0) {
+    entries.push({
+      entryType: 'RELEASED',
+      party: 'ARTIST',
+      amountKobo: artistNet,
+      description: 'Artist share of a disputed booking, net of commission, as decided by support',
+    });
+  }
+
+  if (commission > 0) {
+    entries.push({
+      entryType: 'COMMISSION',
+      party: 'PLATFORM',
+      amountKobo: commission,
+      description: `Platform commission on the artist's share at ${booking.commissionRateBpsSnapshot} bps`,
+    });
+  }
+
+  if (moneyOut > 0) {
+    // The payout fee, as a pair: it moves value between two parties who are
+    // both already on the ledger.
+    entries.push({
+      entryType: 'ESCROW_FEE_OUT',
+      party: 'PLATFORM',
+      amountKobo: -moneyOut,
+      description: 'Provider payout fee on the artist share, borne by the platform',
+    });
+    entries.push({
+      entryType: 'ESCROW_FEE_OUT',
+      party: 'PROVIDER',
+      amountKobo: moneyOut,
+      description: 'Provider payout fee on the artist share',
+    });
+  }
+
+  return appendAll(tx, booking.id, entries);
+}
+
+/**
  * Settlement of an outstanding fee liability against a payout (#26).
  *
  * Recorded on the booking whose payout settles it, not on the booking that
@@ -443,6 +524,7 @@ module.exports = {
   recordRelease,
   recordClientCancellation,
   recordArtistCancellation,
+  recordDisputeSplit,
   recordFeeLiabilitySettlement,
   recordCorrection,
   reverseEntries,
