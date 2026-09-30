@@ -94,6 +94,20 @@ All of these were deliberately built as configuration rather than constants **pr
 
 Requirements: change history showing actor and timestamp for each prior version; non-super-admins cannot see or submit restricted fields; and a **preview showing how a sample booking would be affected before saving** — because a basis-point change is hard to reason about in the abstract and easy to reason about as "this ₦200,000 booking would pay ₦188,000 instead of ₦190,000".
 
+### As built
+
+`GET /admin/settings` returns all six sections in one response. One request rather than six, because the screen shows them together and six round trips is six chances to render a half-loaded page of numbers that govern money.
+
+**Restricted fields are marked, not omitted.** An `ADMIN` receives `commission: { rateBasisPoints, editable: false }` — seeing that a commission rate exists and that it is not theirs to change is more useful than a screen that silently lacks a section. The server refuses the write regardless of what the screen offers, which is the half the UI cannot guarantee.
+
+**The grace period moved out of an environment variable** into the versioned `AutoReleaseConfig` table. It was the only tunable on the list above that could not be changed from this screen — an environment variable needs a redeploy to apply and leaves no record of who changed it or why. The environment variable still wins where it is set, because tests depend on it, and `GET` reports `source` so an operator can tell which of the three values they are looking at; publishing a row while it is set returns a warning rather than saving something silently inert.
+
+**`CommissionRate` and `CancellationTier` gained `setBy` relations.** They were the two oldest config tables and carried a bare `setByUserId` where every later table had a relation, so the history could not name its actor without a second query the reader would not run. Migration `_config_authors`.
+
+**The tier table reads as absent rather than erroring when none has been published.** `resolveTierSet` throws on that and must — a booking cannot be created against a table that does not exist. But this screen is *how the first table gets published*, so on a fresh deployment it would have been a settings page returning 500 for the one thing it exists to fix. The read paths take `tierSetOrNull`; the booking path keeps the throwing one.
+
+Client-side validation in `lib/settings.ts` mirrors `validateTierSet` for immediate feedback. It is a convenience: a set with a gap is unsaveable whichever path the request arrives by, and a test submits four invalid sets directly to the API to prove it.
+
 ## 7. Operational visibility (#37)
 
 `app/admin/bookings/` is the screen someone opens when a client emails asking why they received ₦137,860 instead of ₦140,000.

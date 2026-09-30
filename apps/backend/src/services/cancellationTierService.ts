@@ -238,10 +238,28 @@ async function resolveTierSet(at: Date = new Date(), client: PrismaLike = prisma
   return { versionId, tiers };
 }
 
+/**
+ * The set in force, or `null` when none has ever been published.
+ *
+ * `resolveTierSet` throws instead, and must: a booking cannot be created
+ * against a table that does not exist. But the ADMIN SCREENS are the path by
+ * which the first table gets published, and a settings page that 500s on a
+ * fresh deployment is a page that can never be used to fix the thing it is
+ * reporting. Read paths take this; the booking path takes the throwing one.
+ */
+async function tierSetOrNull(at: Date = new Date(), client: PrismaLike = prisma) {
+  const versionId = await currentVersionId(at, client);
+  if (!versionId) return null;
+  return resolveTierSet(at, client);
+}
+
 /** Every version, newest first, each as a grouped set. */
 async function listTierVersions(client: PrismaLike = prisma) {
   const rows = await client.cancellationTier.findMany({
     orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { minDaysBefore: 'asc' }],
+    // Named, not referenced. A change history answering "who" with an id sends
+    // the reader to another query they will not run (docs/07 §5).
+    include: { setBy: { select: { id: true, email: true, role: true } } },
   });
 
   const byVersion = new Map();
@@ -251,6 +269,7 @@ async function listTierVersions(client: PrismaLike = prisma) {
         versionId: row.versionId,
         effectiveFrom: row.effectiveFrom,
         setByUserId: row.setByUserId,
+        setBy: row.setBy ? { email: row.setBy.email, role: row.setBy.role } : null,
         tiers: [],
       });
     }
@@ -291,6 +310,7 @@ module.exports = {
   validateTierSet,
   setCancellationTiers,
   resolveTierSet,
+  tierSetOrNull,
   listTierVersions,
   currentVersionId,
   TOTAL_BPS,
