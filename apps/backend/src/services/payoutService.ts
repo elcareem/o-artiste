@@ -109,9 +109,22 @@ function publicPayoutAccount(artist: ArtistRow): PayoutAccountView {
   };
 }
 
-/** The banks a payout account can be registered against. */
-async function banks(): Promise<any> {
-  return escrowpay.listBanks();
+/**
+ * The banks a payout account can be registered against, as `{ code, name }`.
+ *
+ * Normalised here rather than passed through: the provider wraps the list in
+ * `{ environment, source, banks: [...] }` and names fields `bank_code`, and
+ * that envelope is theirs to change. Nothing consumed this until #44 — it was
+ * unreachable behind `/artists/:id` until #41 — so the shape could be fixed
+ * before anything depended on the raw one.
+ */
+async function banks(): Promise<{ code: string; name: string }[]> {
+  const response = await escrowpay.listBanks();
+  const list: any[] = Array.isArray(response) ? response : response?.banks ?? response?.items ?? [];
+  return list
+    .map((b) => ({ code: String(b.bank_code ?? b.code ?? ''), name: String(b.bank_name ?? b.name ?? '') }))
+    .filter((b) => b.code && b.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
