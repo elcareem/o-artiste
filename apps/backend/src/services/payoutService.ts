@@ -162,10 +162,22 @@ async function payOut({
   bookingId,
   amountKobo,
   reason,
+  commissionKobo,
 }: {
   bookingId: string;
   amountKobo: Kobo;
   reason?: string;
+  /**
+   * What we took, for the artist's confirmation email (#38).
+   *
+   * Passed in rather than derived, because `booking.amountKobo - amountKobo` is
+   * only the commission on a FULL release. On a dispute split the artist
+   * receives part of the booking and the rest goes back to the client, so that
+   * subtraction would present the client's refund as our commission. Omitted
+   * where the caller cannot say, and the email then leaves the line out rather
+   * than inventing it.
+   */
+  commissionKobo?: Kobo | null;
 }): Promise<PayoutResult> {
   const booking = await prisma.booking.findUnique({
     where: { id: bookingId },
@@ -210,6 +222,16 @@ async function payOut({
     });
 
     console.log(`[payout] booking ${bookingId} paid ${amountKobo} kobo to the artist (${payoutId})`);
+
+    // The artist's confirmation, with the commission as its own line — they
+    // agreed to a percentage, and a single net figure asks them to take our word
+    // for it (#38). `amountKobo` is what actually left our wallet.
+    await require('./notificationService.ts').payoutSent({
+      bookingId,
+      commissionKobo: commissionKobo ?? null,
+      netKobo: amountKobo,
+      accountHint: booking.artist?.payoutAccountLast4 ?? null,
+    });
 
     return { bookingId, paid: true, payoutId };
   } catch (err) {
