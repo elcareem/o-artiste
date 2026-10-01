@@ -95,6 +95,39 @@ function getQueue(name: string): import('bullmq').Queue {
  * indistinguishable from one that never existed — and on this system the job
  * that vanished might have been the one releasing an artist's payment.
  */
+/**
+ * Registers ONE worker handling several job names on a single queue — #38.
+ *
+ * `registerWorker` gives a queue one processor for every job name on it, which
+ * is correct while a queue carries one kind of job. The `notifications` queue
+ * now carries two — the check-in code and the general dispatcher — and
+ * registering a second worker on it would mean BOTH workers receiving BOTH job
+ * names, each failing on the other's payload.
+ *
+ * An unknown job name THROWS rather than being ignored, so it retries and then
+ * dead-letters where someone can see it. A job queued with a name nothing
+ * handles is a bug, and silently acknowledging it loses the evidence.
+ */
+function registerRouter(
+  name: string,
+  handlers: Record<string, (job: import('bullmq').Job) => Promise<unknown>>,
+  options: Partial<import('bullmq').WorkerOptions> = {}
+): import('bullmq').Worker {
+  return registerWorker(
+    name,
+    async (job: import('bullmq').Job) => {
+      const handler = handlers[job.name];
+      if (!handler) {
+        throw new Error(
+          `No handler registered for ${name}/${job.name}. Known: ${Object.keys(handlers).join(', ') || 'none'}.`
+        );
+      }
+      return handler(job);
+    },
+    options
+  );
+}
+
 function registerWorker(
   name: string,
   processor: (job: import('bullmq').Job) => Promise<unknown>,
@@ -169,6 +202,7 @@ async function closeAll() {
 module.exports = {
   getQueue,
   registerWorker,
+  registerRouter,
   deadLetterJobs,
   closeAll,
   connectionOptions,

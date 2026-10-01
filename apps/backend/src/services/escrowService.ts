@@ -30,6 +30,7 @@ const { applicableTier, daysBeforeEvent } = require('./cancellationService.ts');
 const strikeService = require('./strikeService.ts');
 const ledger = require('./ledgerService.ts');
 const { recordAudit } = require('../lib/audit.ts');
+const notificationService = require('./notificationService.ts');
 
 /**
  * Creates the escrow for a booking and returns the bank transfer instruction.
@@ -327,6 +328,7 @@ async function releaseBooking({
     bookingId: booking.id,
     amountKobo: settlement.payoutKobo,
     reason: `Payment for booking ${booking.id}`,
+    commissionKobo: completion.commissionKobo,
   });
 
   console.log(
@@ -469,6 +471,15 @@ async function cancelByClient({
       `${breakdown.clientRefundKobo} kobo refunded, ${breakdown.artistCompensationKobo} kobo to artist`
   );
 
+  // The figures are the ones just written to the ledger, not a recalculation.
+  // These emails are read next to a bank statement (#38).
+  await notificationService.cancellationSettled({
+    bookingId: booking.id,
+    clientRefundKobo: breakdown.clientRefundKobo,
+    artistCompensationKobo: breakdown.artistCompensationKobo,
+    cancelledBy: 'CLIENT',
+  });
+
   return cancellationSummaryFor(updated, { tier, daysBefore, breakdown });
 }
 
@@ -587,6 +598,16 @@ async function cancelByArtist({
     `[escrow] booking ${booking.id} cancelled by artist ${daysBefore} day(s) out — ` +
       `${summary.clientTotalReturnedKobo} kobo returned, ${summary.feeLiabilityKobo} kobo accrued`
   );
+
+  // The TOTAL returned, including the funding fee reimbursement — the client
+  // receives 100% plus the fee they paid, and an email quoting only the booking
+  // value would understate what lands in their account (docs/05 §7).
+  await notificationService.cancellationSettled({
+    bookingId: booking.id,
+    clientRefundKobo: summary.clientTotalReturnedKobo,
+    artistCompensationKobo: 0,
+    cancelledBy: 'ARTIST',
+  });
 
   return {
     bookingId: booking.id,
@@ -829,6 +850,17 @@ async function reclassifyAsArtistFault({
       `${additionalToClient} kobo more to the client, ${liabilityKobo} kobo owed by the artist`
   );
 
+  // Both parties again, and marked as a reclassification — the client is being
+  // refunded money they were already told they would not get back, and an
+  // unexplained credit is as confusing as an unexplained charge.
+  await notificationService.cancellationSettled({
+    bookingId: booking.id,
+    clientRefundKobo: corrected.clientTotalReturnedKobo,
+    artistCompensationKobo: 0,
+    cancelledBy: 'ARTIST',
+    reclassified: true,
+  });
+
   return {
     cancellationId: cancellation.id,
     bookingId: booking.id,
@@ -999,6 +1031,16 @@ async function resolveDispute({
       bookingId: booking.id,
       amountKobo,
       reason: `Dispute resolution for booking ${booking.id}`,
+      // Only knowable on a full release. On a split the artist's share is
+      // decided by the ruling, and naming a commission against it would be
+      // presenting the client's refund as our fee.
+      commissionKobo:
+        outcome === 'RELEASE'
+          ? computeCompletion({
+              amountKobo: booking.amountKobo,
+              commissionBps: booking.commissionRateBpsSnapshot,
+            }).commissionKobo
+          : null,
     });
   }
 
@@ -1008,6 +1050,18 @@ async function resolveDispute({
     `[dispute] ${dispute.id} resolved ${outcome} by ${actorUserId}` +
       (split ? ` — client ${split.clientKobo}, artist ${split.artistKobo}` : '')
   );
+
+  // Both parties, with the figures. One of them has just lost an argument about
+  // their own money, so the email says what was decided rather than leaving them
+  // to infer it from a bank balance (#38).
+  await notificationService.disputeUpdate({
+    bookingId: booking.id,
+    stage: 'RESOLVED',
+    outcomeDescription: disputeOutcomeSentence(outcome, {
+      clientKobo: split?.clientKobo ?? movements.clientKobo,
+      artistKobo: split?.artistNetKobo ?? movements.artistKobo,
+    }),
+  });
 
   return {
     disputeId: dispute.id,
@@ -1019,6 +1073,32 @@ async function resolveDispute({
     artistKobo: split?.artistNetKobo ?? movements.artistKobo,
     paidOut: payout?.paid ?? false,
   };
+}
+
+/**
+ * The decision, in a sentence, with the amounts.
+ *
+ * Written here rather than in `messages.ts` because it needs the outcome
+ * vocabulary of this module, and it takes the amounts that MOVED rather than
+ * recomputing them.
+ */
+function disputeOutcomeSentence(
+  outcome: string,
+  { clientKobo, artistKobo }: { clientKobo: number; artistKobo: number }
+): string {
+  const { formatNairaForMessage } = require('../lib/money.ts');
+
+  if (outcome === 'RELEASE') {
+    return `We decided in the artist\u2019s favour. ${formatNairaForMessage(artistKobo)} has been released to them.`;
+  }
+  if (outcome === 'REFUND') {
+    return `We decided in the client\u2019s favour. ${formatNairaForMessage(clientKobo)} has been refunded to them.`;
+  }
+  return (
+    'We split the funds: ' +
+    `${formatNairaForMessage(clientKobo)} refunded to the client and ` +
+    `${formatNairaForMessage(artistKobo)} released to the artist.`
+  );
 }
 
 const DISPUTE_STATE_FOR: Record<string, DisputeState> = {

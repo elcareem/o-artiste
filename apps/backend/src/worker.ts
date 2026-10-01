@@ -13,16 +13,22 @@
 
 require('dotenv').config();
 
-const { registerWorker, closeAll } = require('./lib/queue.ts');
+const { registerWorker, registerRouter, closeAll } = require('./lib/queue.ts');
 const echoJob = require('./jobs/echoJob.ts');
 const webhookRetryJob = require('./jobs/webhookRetryJob.ts');
 const checkInCodeJob = require('./jobs/checkInCodeJob.ts');
 const autoReleaseJob = require('./jobs/autoReleaseJob.ts');
+const notificationJob = require('./jobs/notificationJob.ts');
 
 function startWorkers() {
   registerWorker(echoJob.QUEUE_NAME, echoJob.process);
   registerWorker(webhookRetryJob.QUEUE_NAME, webhookRetryJob.process);
-  registerWorker(checkInCodeJob.QUEUE_NAME, checkInCodeJob.process);
+  // One worker for the notifications queue, dispatching by job name. Two
+  // workers on one queue would each receive the other's jobs.
+  registerRouter(checkInCodeJob.QUEUE_NAME, {
+    [checkInCodeJob.JOB_NAME]: checkInCodeJob.process,
+    [notificationJob.JOB_NAME]: notificationJob.process,
+  });
   registerWorker(autoReleaseJob.QUEUE_NAME, autoReleaseJob.process);
   console.log('[worker] listening on queues: maintenance, webhooks, notifications, releases');
   return { stop: closeAll };
