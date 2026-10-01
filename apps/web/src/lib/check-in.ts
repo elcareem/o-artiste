@@ -3,7 +3,7 @@
  *
  * The backend decides this: `redeem()` refuses unless the booking can transition
  * to `CHECKED_IN`, which only `FUNDED_HELD` can. This module exists so the artist
- * is told BEFORE typing a six-character code at a venue door, which is the whole
+ * is told BEFORE typing an eight-character code at a venue door, which is the whole
  * point of #39 — being refused after the effort is the thing that feels broken.
  *
  * It is a mirror, not an authority. If the backend's transition map changes, the
@@ -49,17 +49,38 @@ export function whyNotYet(state: string): string {
 }
 
 /**
- * Whether a six-character code is worth submitting.
+ * The code's length, matching the backend's `CODE_LENGTH`.
  *
- * Length only. The ALPHABET is the backend's and excludes the characters people
- * confuse — a client check that guessed at it would reject a valid code typed
- * correctly, which is worse than a round trip.
+ * Eight characters, shown to the client as two groups of four — `ABCD-EFGH`.
+ * This was 6 when #39 shipped, and the form told artists "the code is 6
+ * characters" while rejecting every correct code before it reached the server:
+ * the web check-in could not succeed at all. The e2e run redeemed codes through
+ * the API, which is why it did not notice. A test now reads `CODE_LENGTH` from
+ * the backend's source so the two cannot drift apart again.
  */
-export function codeProblem(raw: string, length = 6): string | null {
-  const text = String(raw ?? '').trim();
-  if (text.length === 0) return 'The check-in code is needed.';
-  if (text.length !== length) {
-    return `The code is ${length} characters. Check it with the client.`;
+export const CODE_LENGTH = 8;
+
+/**
+ * The code as the backend will read it: upper-cased, with every separator gone.
+ * Mirrors `normaliseCode` — the client is shown `ABCD-EFGH`, and an artist may
+ * type it with the hyphen, with a space, or without either.
+ */
+export function normaliseCode(raw: string): string {
+  return String(raw ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+}
+
+/**
+ * Whether a code is worth submitting.
+ *
+ * Length only, AFTER normalising. The backend's alphabet leaves out the
+ * characters people confuse; a client-side character check that guessed at it
+ * would reject a valid code typed correctly, which is worse than a round trip.
+ */
+export function codeProblem(raw: string): string | null {
+  const code = normaliseCode(raw);
+  if (code.length === 0) return 'The check-in code is needed.';
+  if (code.length !== CODE_LENGTH) {
+    return `The code is ${CODE_LENGTH} characters — two groups of four, like ABCD-EFGH. Check it with the client.`;
   }
   return null;
 }
