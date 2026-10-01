@@ -168,6 +168,10 @@ async function raise({
 
   console.log(`[dispute] ${dispute.id} opened on booking ${bookingId} by the ${party.toLowerCase()}`);
 
+  // Both parties. The one who did not raise it needs to know the money is held
+  // and that their account of what happened is wanted (#38).
+  await require('./notificationService.ts').disputeUpdate({ bookingId, stage: 'OPENED' });
+
   return view(await load(dispute.id), userId);
 }
 
@@ -229,7 +233,13 @@ async function submitEvidence({
     }
   });
 
-  return view(await load(disputeId), userId);
+  const withBooking = await load(disputeId);
+  await require('./notificationService.ts').disputeUpdate({
+    bookingId: withBooking.bookingId,
+    stage: 'EVIDENCE',
+  });
+
+  return view(withBooking, userId);
 }
 
 /**

@@ -6127,3 +6127,84 @@ npm run build --workspace apps/web → /admin/bookings, /admin/bookings/[id],
 The web proxy at `api/admin/bookings/[id]/[action]` allowlists `release` and
 `refund`. Forwarding the segment verbatim would have made it a tunnel to
 anything added under `/admin/bookings/:id/*` later.
+
+---
+
+## #38 — Notifications: SMS and email
+
+Branch `feat/38-notifications`.
+
+### Acceptance criteria
+
+**"The confirmation prompt names the exact auto-release deadline."** The copy is
+asserted to contain `Saturday 3 October` and `2:00 pm` for an instant of
+`2026-10-03T13:00:00Z`, plus the consequence (`released automatically`) — a
+deadline with no stated consequence is a date, not a warning. A separate test
+renders the same instant under `TZ=UTC`, `America/New_York` and `Asia/Tokyo` and
+asserts all three come out identical: the deadline is Lagos time regardless of
+where the process runs.
+
+**"A notification provider outage does not prevent a booking from funding or
+releasing."** Three tests: the queue itself throwing on every enqueue (funding
+still completes, ledger entries still written), both transports throwing (the
+release still reaches `RELEASED`), and the email transport throwing (a client
+cancellation still settles).
+
+**"Failed sends are retried and visible in the queue."** A 503 makes the job
+throw, so BullMQ retries. A real worker is registered and a failing job is
+followed into the dead-letter queue, where its `failedReason` and originating
+queue are asserted. A 403 is abandoned instead, with a test asserting that —
+three more attempts produce the same rejection and bury the signal.
+
+**"The check-in code SMS arrives ahead of the event, verified end to end."** The
+lead time is asserted from `delayFor`, the same function production uses: the send
+time is before the event and exactly `SMS_LEAD_HOURS` ahead of it. Then a real
+worker on the shared queue runs the job and the SMS is asserted to contain the
+formatted code. A second test cancels the booking first and asserts nothing is
+sent.
+
+### Three bugs found while writing the copy tests
+
+**`new Date(null)` is the epoch, not an error.** `formatDeadline(null)` would have
+rendered "Thursday 1 January, 1:00 am" with complete confidence. Absence and
+unparseable are now rejected separately so the error says which.
+
+**Every email was a wall of text.** The line filter dropped empty strings to
+remove a conditional paragraph, and empty strings were also the paragraph breaks.
+Conditionals are `null` now and the filter drops only those.
+
+**`formatDay` and `formatDeadline` spelled the same date differently** —
+"Saturday, 3 October" against "Saturday 3 October", because one used
+`Intl.format()` and the other assembled from parts. Two spellings across two
+emails about one booking reads as carelessness.
+
+### One design bug found while wiring
+
+**The commission line on a dispute split would have been wrong.** `payOut`
+derived it as `booking.amountKobo - amountKobo`, which is correct on a full
+release but presents the *client's refund* as our commission on a split. It is
+passed in explicitly now, and omitted — not guessed — where the caller cannot
+say.
+
+### Infrastructure change
+
+`registerWorker` gives a queue one processor for every job name on it. The
+`notifications` queue now carries two job kinds, and registering a second worker
+would have meant **both workers receiving both job names**, each failing on the
+other's payload. `registerRouter` dispatches by job name; an unknown name throws
+so it dead-letters rather than being silently acknowledged.
+
+### Verification
+
+```
+npm run test:backend          → # tests 456  # pass 456  # fail 0   (420 + 36 new)
+npm test --workspace apps/web → # tests 54   # pass 54   # fail 0
+npm run check:rules           → passed 12  failed 0  skipped 0
+npm run typecheck             → 0 errors
+npm run lint                  → clean
+```
+
+**Not verified against a real provider.** No Termii or email credentials exist
+yet, so every send in the suite goes through a replaced transport. The request
+shapes are written from the providers' documented APIs and remain unconfirmed —
+recorded as an open item, not ticked.

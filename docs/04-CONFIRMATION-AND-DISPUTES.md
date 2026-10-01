@@ -183,3 +183,39 @@ There is deliberately **no auto-resolve timer.** Any default outcome is gameable
 Optional, and **informational only. Nothing executes from it.**
 
 Where a dispute turns on quality or duration rather than attendance — *"he arrived but left after twenty minutes"* — an outside opinion may be worth having. But the verdict returns to us and **we** issue the instruction. The field records that an opinion was sought and what it said; it is not an input to any automated path.
+
+---
+
+## 8. Notifications (#38)
+
+SMS matters disproportionately here. The check-in code has to reach a client who is at a venue, possibly not in the app, and the arrival prompt needs to land on a device someone is holding. Email alone would break the core mechanic.
+
+### Every notification goes through the queue
+
+Not for throughput — these are low-volume — but because the requirement is that **a notification failure never blocks a state change**, and the only reliable way to guarantee that is for the money path to hand off a job and stop caring. `notificationService` builds text and enqueues; its whole body sits inside a catch that logs. The provider is never called from a money path, and never from inside a transaction.
+
+### Two failure modes, treated differently
+
+| Situation | Behaviour | Why |
+|---|---|---|
+| No provider configured | Log, return `stubbed: true`, **succeed** | A deployment without a key is degraded, not broken. Throwing would fail and dead-letter every scheduled job until someone added one, burying real failures under noise |
+| Configured, provider returns 5xx / unreachable / 429 | **Throw** | BullMQ retries; a permanently failed send lands in the dead-letter queue where `GET /admin/queue/dead-letter` can see it |
+| Configured, provider returns 4xx | Log and abandon | Our mistake — a malformed number, an unregistered sender. Three more attempts produce the same rejection |
+
+A key set *without* its partner (`SMS_API_KEY` with no `SMS_SENDER_ID`) is reported at every attempt rather than silently treated as disabled: Termii rejects every message from an unregistered sender, so that combination fails on every send while looking configured.
+
+### The confirmation prompt names the deadline
+
+The client is being told that silence has a consequence, and that is only a fair warning if they know when. `autoReleaseAt` is read **from the booking**, not recomputed — it was written at funding and is the value the scheduled job fires on, and a prompt quoting a different time than the one that executes is worse than quoting none.
+
+It is **rendered in Lagos time**, with no configuration. A client told "15:00 UTC" has been told the wrong time, and a timezone that followed the server's locale would be a deadline that changes when we move hosts.
+
+### Scheduled prompts are checked against the booking before sending
+
+The event-day and post-event prompts are queued **at funding**, because their content is fully known then. A message queued weeks ahead carries `bookingId` and `requireState`, and the booking is re-read at send time: asking a refunded client whether their artist performed contradicts their bank statement.
+
+The post-event prompt cannot be sent when a booking *enters* `AWAITING_CONFIRMATION`, which is the obvious-looking hook — both paths that make that transition release the money in the next breath, so the prompt would arrive after the deadline it announces had already passed. It is scheduled for an hour after the event ends, capped at the midpoint of the grace period so a short configured grace cannot push it past the release it warns about.
+
+### Figures come from what moved
+
+Cancellation and payout emails are read next to a bank statement, so the amounts are passed in by the caller from what was **written to the ledger**, never recalculated. Where a figure is not knowable — the commission on a dispute split, where the artist's share was decided by a ruling rather than a percentage — the line is **omitted rather than guessed**.
