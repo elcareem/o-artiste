@@ -180,9 +180,13 @@ async function handleProviderFailure({
         verificationFailureReason: err.providerMessage ?? 'verification_failed',
       },
     });
+    // Said as it is. This used to end "check the number and try again" — but
+    // the status is now REJECTED, and every further attempt is refused with
+    // "contact support". Inviting a retry that cannot succeed sends someone
+    // round the loop once more before they find that out (#43).
     throw new AppError(
       403,
-      'We could not verify that identity. Check the number and try again, or contact support.'
+      'We could not verify that identity, so we cannot try it again automatically. Contact support and we will look into it with you.'
     );
   }
 
