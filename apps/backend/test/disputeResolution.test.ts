@@ -229,9 +229,15 @@ describe('a release verdict pays the artist and reconciles', async () => {
     commissionBps: booking.commissionRateBpsSnapshot,
   });
 
-  // Escrow → our wallet → the artist. Both legs.
+  // Escrow → our wallet → the artist. Both legs, and BOTH AMOUNTS.
+  //
+  // The whole escrow leaves into our wallet; the artist is paid their net. This
+  // used to assert the release was the artist's net and never checked the
+  // payout at all — so our commission was left in the escrow on every release
+  // verdict, unseen (#40).
   assert.deepEqual(provider.calls.map((c: any) => c.leg), ['release', 'payout']);
-  assert.equal(provider.calls[0].amountKobo, completion.artistNetKobo);
+  assert.equal(provider.calls[0].amountKobo, amountKobo, 'the whole escrow into our wallet');
+  assert.equal(provider.calls[1].amountKobo, completion.artistNetKobo, 'the artist paid their net');
 
   const after = await prisma.booking.findUnique({ where: { id: booking.id } });
   assert.equal(after.state, 'RESOLVED');
@@ -313,8 +319,15 @@ describe('a split divides the booking exactly and reconciles', async () => {
   // The artist is instructed first — the party who did not ask for this should
   // not be the one waiting on a retry.
   assert.deepEqual(provider.calls.map((c: any) => c.leg), ['release', 'refund', 'payout']);
-  assert.equal(provider.calls[0].amountKobo, artistNet);
+  // The artist's GROSS share leaves escrow — their net plus our commission on
+  // it — and the net is what reaches them.
+  assert.equal(provider.calls[0].amountKobo, artistShare, "the artist's gross share into our wallet");
   assert.equal(provider.calls[1].amountKobo, clientShare);
+  assert.equal(provider.calls[2].amountKobo, artistNet, 'the artist paid their net');
+
+  // Between them the two escrow legs empty it. Anything left would be money
+  // held forever on a decided dispute.
+  assert.equal(provider.calls[0].amountKobo + provider.calls[1].amountKobo, amountKobo);
 
   const entries = await prisma.ledgerEntry.findMany({ where: { bookingId: booking.id } });
   assert.equal(sum(entries), 0, 'a split must reconcile to zero like anything else');

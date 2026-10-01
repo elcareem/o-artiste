@@ -260,7 +260,19 @@ function recordFailure(bookingId: string, reason: string) {
  */
 async function awaitingPayout(): Promise<BookingRow[]> {
   return prisma.booking.findMany({
-    where: { state: 'RELEASED', paidOutAt: null },
+    where: {
+      paidOutAt: null,
+      OR: [
+        { state: 'RELEASED' },
+        // A client cancellation in a compensating band pays the artist too, and
+        // that payout can fail exactly as a completion's can. Listing only
+        // RELEASED made those invisible — money in our wallet owed to an artist,
+        // with no screen showing it (#40).
+        { state: 'CANCELLED', cancellation: { artistCompensationKobo: { gt: 0 } } },
+        // A dispute decided wholly or partly for the artist.
+        { state: 'RESOLVED', ledgerEntries: { some: { party: 'ARTIST', amountKobo: { gt: 0 } } } },
+      ],
+    },
     orderBy: { releasedAt: 'asc' },
     include: { artist: { select: { id: true, stageName: true, payoutAccountId: true } } },
   });

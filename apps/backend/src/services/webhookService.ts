@@ -367,7 +367,7 @@ async function handleTransactionCancelled(payload: WebhookPayload): Promise<Webh
  */
 function confirmationHandler(expectedState: BookingState): WebhookHandler {
   return async (payload: WebhookPayload) => {
-    const booking = await bookingForEscrow(payload);
+    const booking = await bookingForEvent(payload);
     if (!booking) return { note: 'no booking for this escrow' };
 
     if (booking.state === expectedState) {
@@ -392,9 +392,26 @@ function confirmationHandler(expectedState: BookingState): WebhookHandler {
  */
 function failureHandler(what: string): WebhookHandler {
   return async (payload: WebhookPayload) => {
-    const booking = await bookingForEscrow(payload);
-    const where = booking ? `booking ${booking.id} (${booking.state})` : `escrow ${objectId(payload)}`;
+    const booking = await bookingForEvent(payload);
+    const where = booking ? `booking ${booking.id} (${booking.state})` : `${payload?.object ?? 'object'} ${objectId(payload)}`;
     console.error(`[webhook] ${what} FAILED for ${where} — money did not move`);
+
+    // A FAILED PAYOUT IS RECORDED, not just logged. `paidOutAt` is set when the
+    // payout is instructed; left set, the booking keeps claiming the artist was
+    // paid. Clearing it puts the booking back on `awaitingPayout`, and the
+    // reason says why. `payoutId` is KEPT: the payout's idempotency key is
+    // stable, so the recovery is the provider's retry of THIS payout, which
+    // needs its id — a fresh payOut would be handed the original failure back.
+    if (what === 'payout' && booking) {
+      await prisma.booking.update({
+        where: { id: booking.id },
+        data: {
+          paidOutAt: null,
+          payoutFailureReason: `The provider reported payout ${payload?.object_id} as failed. The artist has not been paid.`,
+        },
+      });
+    }
+
     return { note: `${what} failed`, bookingId: booking?.id };
   };
 }
@@ -407,7 +424,7 @@ function failureHandler(what: string): WebhookHandler {
  * booking is not advanced here: `RELEASED` already describes our side.
  */
 async function handlePayoutCompleted(payload: WebhookPayload): Promise<WebhookHandlerResult> {
-  const booking = await bookingForEscrow(payload);
+  const booking = await bookingForEvent(payload);
   if (!booking) return { note: 'no booking for this escrow' };
 
   console.log(`[webhook] payout reached the artist for booking ${booking.id}`);
@@ -440,6 +457,55 @@ const HANDLERS: Record<string, WebhookHandler> = {
 
 function objectId(payload: WebhookPayload): string | null {
   return payload?.object_id ?? payload?.data?.transaction_id ?? null;
+}
+
+/**
+ * The booking an event is about, whatever kind of object it names.
+ *
+ * `object_id` is the id of the event's OWN object: a transaction for
+ * `transaction.*`, but a RELEASE for `release.*` and a PAYOUT for `payout.*`.
+ * Every handler used to treat it as a transaction id, so release, refund and
+ * payout events never matched a booking — including `payout.failed`, which then
+ * logged a line and changed nothing. The booking went on showing the artist as
+ * paid, `awaitingPayout` did not list it, and the artist was never paid with
+ * nothing anywhere saying so. Found by #40.
+ */
+async function bookingForEvent(payload: WebhookPayload): Promise<BookingRow | null> {
+  const object = payload?.object;
+  const id = payload?.object_id;
+
+  // We store the payout id on the booking when the payout is instructed.
+  if (object === 'payout' && id) {
+    const booking = await prisma.booking.findFirst({ where: { payoutId: id } });
+    if (!booking) console.warn(`[webhook] no booking found for payout ${id}`);
+    return booking;
+  }
+
+  if ((object === 'release' || object === 'refund') && id) {
+    // The transaction id where the payload carries it; otherwise ask the
+    // provider which transaction this release or refund belongs to. Payloads
+    // are documented as `data: {}`, so the second path is the normal one.
+    let transactionId = payload?.data?.transaction_id ?? null;
+    if (!transactionId) {
+      try {
+        const own = object === 'release' ? await escrowpay.getRelease(id) : await escrowpay.getRefund(id);
+        transactionId = own?.transaction_id ?? null;
+      } catch (err) {
+        // Thrown on purpose: the event is retried rather than acknowledged
+        // against no booking. A failure we cannot attribute is still a failure.
+        throw new Error(`could not resolve ${object} ${id} to a transaction: ${(err as Error).message}`);
+      }
+    }
+    if (!transactionId) {
+      console.warn(`[webhook] ${object} ${id} names no transaction`);
+      return null;
+    }
+    const booking = await prisma.booking.findFirst({ where: { escrowId: transactionId } });
+    if (!booking) console.warn(`[webhook] no booking found for escrow ${transactionId} (${object} ${id})`);
+    return booking;
+  }
+
+  return bookingForEscrow(payload);
 }
 
 async function bookingForEscrow(payload: WebhookPayload): Promise<BookingRow | null> {

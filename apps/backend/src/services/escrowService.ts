@@ -274,13 +274,28 @@ async function releaseBooking({
 
   // --- The irreversible step. ---------------------------------------------
   //
-  // Only the artist's share leaves escrow. What remains is the platform's
-  // commission, which is not the artist's money and must not be released to
-  // them and clawed back.
+  // A release moves money from escrow into OUR WALLET, not to the artist.
+  // `payout_preference` is sent as `manual` on every transaction (§7 of the API
+  // map) and automatic payout is disabled on this business (docs/00 §11.9), so
+  // the artist is paid by the separate `payOut` leg below.
+  //
+  // So the release must carry the WHOLE artist-side amount — including our
+  // commission. This originally released only the artist's net, on the premise
+  // that a release paid the artist directly and the commission had to stay
+  // behind. That premise stopped being true when #26 found automatic payout
+  // disabled and added the wallet leg, and the amount was never revisited: our
+  // commission was left inside every escrow, permanently, while the ledger
+  // recorded it as earned and balanced regardless. Found by #40, whose e2e run
+  // checks the PROVIDER's held balance as well as our ledger.
+  //
+  // On completion everything in the escrow is artist-side: their net, our
+  // commission, and any liability being recovered. All of it leaves; `payOut`
+  // then sends the artist exactly `settlement.payoutKobo`, and the rest stays in
+  // our wallet as ours.
   const release = await escrowpay.release({
     transactionId: booking.escrowId,
     reference: `${booking.escrowReference}_release`,
-    amountKobo: settlement.payoutKobo,
+    amountKobo: booking.amountKobo,
     reason: reason ?? 'Event completed and confirmed by both parties',
   });
 
@@ -421,14 +436,17 @@ async function cancelByClient({
   });
 
   // --- The irreversible steps, in order. -----------------------------------
-  if (breakdown.artistCompensationKobo > 0) {
+  if (breakdown.artistShareKobo > 0) {
     if (!booking.artist.user.escrowPartyId) {
       throw new AppError(409, 'This artist cannot receive payments yet.');
     }
+    // The artist's GROSS share — their compensation plus our commission on it.
+    // See releaseBooking for why a release must carry both; the artist's net is
+    // paid out of our wallet after the transaction below commits.
     await escrowpay.release({
       transactionId: booking.escrowId,
       reference: `${booking.escrowReference}_cxl_artist`,
-      amountKobo: breakdown.artistCompensationKobo,
+      amountKobo: breakdown.artistShareKobo,
       reason: reason
         ? `Client cancelled ${daysBefore} day(s) before the event: ${reason}`
         : `Client cancelled ${daysBefore} day(s) before the event`,
@@ -465,6 +483,23 @@ async function cancelByClient({
 
     return next;
   });
+
+  // THE ARTIST'S COMPENSATION, ACTUALLY PAID. This leg was missing: the release
+  // above lands in our wallet, and without a payout the artist's cancellation
+  // compensation stayed there indefinitely — the same gap #26 found on the
+  // completion path, here on the cancellation one. Found by #40.
+  //
+  // After the commit and not thrown on, exactly as releaseBooking does it: the
+  // cancellation has happened and is recorded, and a payout problem is retried
+  // from `awaitingPayout` rather than unwinding money that has already moved.
+  if (breakdown.artistCompensationKobo > 0) {
+    await require('./payoutService.ts').payOut({
+      bookingId: booking.id,
+      amountKobo: breakdown.artistCompensationKobo,
+      reason: `Cancellation compensation for booking ${booking.id}`,
+      commissionKobo: breakdown.commissionKobo,
+    });
+  }
 
   console.log(
     `[escrow] booking ${booking.id} cancelled by client ${daysBefore} day(s) out — ` +
@@ -1165,10 +1200,12 @@ async function instructProvider(
       amountKobo: booking.amountKobo,
       commissionBps: booking.commissionRateBpsSnapshot,
     });
+    // The whole escrow into our wallet; resolveDispute pays the artist their
+    // net from there. See releaseBooking for why the release carries both.
     await escrowpay.release({
       transactionId: booking.escrowId,
       reference: `${booking.escrowReference}_dispute_release`,
-      amountKobo: completion.artistNetKobo,
+      amountKobo: booking.amountKobo,
       reason: note,
     });
     return { clientKobo: 0, artistKobo: completion.artistNetKobo };
@@ -1188,11 +1225,13 @@ async function instructProvider(
   // A split. The artist first, for the same reason a client cancellation pays
   // them first: the party who did not ask for this should not be the one
   // waiting on a retry.
-  if (split!.artistNetKobo > 0) {
+  // The artist's GROSS share, commission included, into our wallet; the net is
+  // paid out by resolveDispute. See releaseBooking.
+  if (split!.artistKobo > 0) {
     await escrowpay.release({
       transactionId: booking.escrowId,
       reference: `${booking.escrowReference}_dispute_split_artist`,
-      amountKobo: split!.artistNetKobo,
+      amountKobo: split!.artistKobo,
       reason: note,
     });
   }

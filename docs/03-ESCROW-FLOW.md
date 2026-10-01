@@ -93,6 +93,29 @@ This is a structural guarantee, not a style preference. Release carries four obl
 
 Enforced by grep in `check:rules` and re-verified at #41.
 
+### What a release actually moves (#40)
+
+A release does **not** pay the artist. `payout_preference` is sent as `manual` on every transaction and automatic payout is disabled on this business (`00` §11.9), so a release moves money from the escrow into **our wallet**, and a separate `payOut` sends the artist their share from there.
+
+That makes the amounts of the two legs different, and the release must carry the **whole artist-side amount, commission included**:
+
+| Path | Released from escrow into our wallet | Paid out to the artist |
+|---|---|---|
+| Completion (`releaseBooking`) | the whole escrow | net of commission and any liability recovered |
+| Client cancellation | the artist's gross share of the band | their compensation, net of commission |
+| Dispute → release | the whole escrow | net of commission |
+| Dispute → split | the artist's gross share | net of commission |
+
+Whatever is released but not paid out — the commission, a recovered liability — stays in our wallet, which is where it belongs.
+
+**This was wrong until #40.** Each path released only the artist's *net*, on the premise that a release paid the artist directly and the commission had to stay behind. That premise stopped being true when #26 found automatic payout disabled and added the wallet leg, and the release amounts were never revisited. The result: our commission was left inside every escrow permanently, and on a client cancellation the artist's compensation reached our wallet and was never paid out at all. **Our ledger balanced throughout**, because it records entitlement rather than where money physically sits — which is why the e2e run now checks the provider's held balance as well as the ledger, and why the unit tests now assert both legs separately.
+
+### Every release, refund and payout event resolves to its booking
+
+`object_id` on a webhook is the id of the event's **own** object — a release id on `release.*`, a payout id on `payout.*` — and payloads are documented as `data: {}`. `bookingForEvent` resolves each kind properly: payouts by the `payoutId` stored on the booking, releases and refunds by asking the provider which transaction they belong to.
+
+Before #40 every handler treated `object_id` as a transaction id, so none of these events matched a booking. The serious case was `payout.failed`: it logged a line and changed nothing, so the booking went on claiming the artist was paid and `awaitingPayout` never listed it. A failed payout now clears `paidOutAt` and records the reason. `payoutId` is deliberately kept, because the payout's idempotency key is stable and the recovery is the provider's retry of *that* payout.
+
 ## 6. Webhooks — the highest-severity path
 
 A webhook delivered twice and processed twice is a double release. Providers retry on timeout, on non-2xx responses, and sometimes on slow 2xx responses, so **duplicate delivery is expected behaviour, not an edge case.**
