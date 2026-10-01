@@ -44,6 +44,30 @@ A `403` from an unverified user must direct them to verification, not merely ref
 
 Implementation: `lib/errors.js` exports `AppError(status, message)`. Route handlers throw it; one terminal middleware serialises it. No handler builds an error response by hand — that is how shape drift starts.
 
+### What the frontend does with it (#39)
+
+"Renders it directly and unaltered" holds, with one guard in front of it. `lib/error-messages.ts` exports `isPresentable`, and a message that fails it is replaced by the caller's fallback.
+
+That is not a hedge against the contract — a backend behaving correctly never produces a message that fails the guard. It exists for the paths that run only when something has **already** gone wrong: an unhandled exception escaping a route, a reverse proxy serving its own HTML error page, a provider SDK's message arriving unwrapped. Those are, by definition, the paths nobody exercised.
+
+Rejected: stack frames, exception class names, filesystem paths, `undefined` / `null` / `[object Object]`, driver names, and HTTP status codes. Status codes are matched **by context** (`status code 500`, `HTTP 502`, a leading `403 Forbidden`) rather than by their digits, because `[45]\d\d` also matches "₦404 is below the minimum" and "500 kobo short of the amount held" — a guard that eats legitimate copy gets switched off.
+
+Every call site that reads an error goes through `failureMessage(payload, fallback)`. The previous spelling, `payload?.error ?? fallback`, falls back only on `null` and `undefined` — an empty string, a 500's body or a stack trace all passed straight through to the screen.
+
+### Failure copy says what happened to the money
+
+`unreachable(reassurance)` takes its reassurance as a **required** argument, so a new call site cannot omit it — it will not compile. "Could not reach the server" on its own is the message that makes someone phone their bank.
+
+| Screen | On a connection failure |
+|---|---|
+| Booking status (client) | *Your payment is unaffected — this page just could not refresh.* |
+| Cancellation | *Nothing has been cancelled.* |
+| Manual release / refund | *No money has moved.* |
+| Configuration | *Nothing has been saved.* |
+| Read-only screens | *Check your connection and try again.* |
+
+Three `check:rules` guards hold the line mechanically: no `.stack`/`.status` interpolated into JSX, none interpolated into a string shown to a user, and no `catch` block whose entire body is a `console` call — the last being #39's "no console-only error is the sole feedback" criterion.
+
 ## 3. Auth — `routes/auth.js`
 
 | Method | Path | Auth | Notes |

@@ -6,6 +6,7 @@ import { authHeader, sessionToken } from '@/lib/session';
 import { formatNaira } from '@/lib/currency';
 import { triage, type QueueEntry } from '@/lib/disputes';
 import { EmptyState } from '@/components/empty-state';
+import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,12 +41,12 @@ export default async function AdminDisputesPage() {
     if (response.status === 403) {
       error = 'This page is for administrators.';
     } else if (!response.ok) {
-      error = payload?.error ?? 'Could not load the dispute queue.';
+      error = failureMessage(payload, 'Could not load the dispute queue.');
     } else {
       entries = triage(payload.disputes ?? []);
     }
   } catch {
-    error = 'Could not reach the server. Check your connection and try again.';
+    error = unreachable(RETRY);
   }
 
   return (

@@ -9,6 +9,8 @@
  * converts them; conversion happens only in formatNaira() at render time.
  */
 
+import { failureMessage } from './error-messages';
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
 /**
@@ -69,10 +71,10 @@ export async function apiFetch<T>(
   const payload = await readJson(response);
 
   if (!response.ok) {
-    const message =
-      isErrorShape(payload) && payload.error.trim().length > 0
-        ? payload.error
-        : UNKNOWN_MESSAGE;
+    // `isPresentable` rather than a length check: a 500's body, a proxy's own
+    // HTML error page or an unwrapped exception all have length, and this
+    // message is rendered to a user (#39).
+    const message = failureMessage(payload, UNKNOWN_MESSAGE);
     throw new ApiError(response.status, message);
   }
 
@@ -87,15 +89,6 @@ async function readJson(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
-}
-
-function isErrorShape(value: unknown): value is { error: string } {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'error' in value &&
-    typeof (value as { error: unknown }).error === 'string'
-  );
 }
 
 /** Liveness check against the backend. */

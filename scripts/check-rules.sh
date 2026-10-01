@@ -175,6 +175,36 @@ absent "No raw stack traces or HTTP status codes rendered in the web app" \
        "apps/web/src" \
        '\{[^}]*\b(error|err|e|res|response|apiError)\.(stack|status)\b[^}]*\}'
 
+# A status code or a thrown value interpolated into text — #39. The rule above
+# catches JSX interpolation; this catches the other route, which is building a
+# string and showing that instead. `Could not save (500)` is the same failure
+# wearing a different hat.
+absent "No status code or thrown value interpolated into user-facing text" \
+       "Users never see status codes or raw errors. docs/02-API-CONTRACT.md §2, issue #39." \
+       "apps/web/src" \
+       '\$\{[^}]*\b(res|response|err|error|e)\.(status|stack|statusText)\b[^}]*\}|JSON\.stringify\((err|error|e)\b'
+
+# ── A failure always reaches the user — issue #39 ───────────────────────────
+# A catch block whose entire body is a console call means the only feedback for
+# that failure is a browser console nobody has open. #39's fourth criterion.
+#
+# Deliberately narrow: it matches a catch containing exactly one console
+# statement and nothing else. A catch that logs AND sets state is correct and
+# must not be flagged, or the rule gets switched off.
+WEB_SRC="apps/web/src"
+if [ ! -d "$WEB_SRC" ]; then
+  skip "No catch block whose only feedback is a console log" "$WEB_SRC not present yet"
+else
+  hits="$(grep -rPzo '(?s)catch\s*(\([^)]*\))?\s*\{\s*console\.\w+\([^;]*\);\s*\}' \
+          "$WEB_SRC" --include=*.ts --include=*.tsx 2>/dev/null | tr '\0' '\n' || true)"
+  if [ -z "$hits" ]; then
+    pass "No catch block whose only feedback is a console log"
+  else
+    fail "No catch block whose only feedback is a console log" \
+         "A failure the user is never told about. docs/02-API-CONTRACT.md §2, issue #39." "$hits"
+  fi
+fi
+
 # ── Check-in code visibility — docs/02 §5, docs/04 §1, issue #22 ────────────
 # The code is the only evidence the two parties were physically together, and
 # that rests entirely on the artist being unable to obtain it except from the

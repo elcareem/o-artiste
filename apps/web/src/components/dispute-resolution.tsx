@@ -11,6 +11,7 @@ import {
   type DisputeDetail,
   type DisputeOutcome,
 } from '@/lib/disputes';
+import { NOTHING, failureMessage, unreachable } from '@/lib/error-messages';
 
 /**
  * Issuing a verdict — issue #32, docs/04 §6.
@@ -58,13 +59,13 @@ export function DisputeResolution({ dispute }: { dispute: DisputeDetail }) {
       const payload = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setError(payload?.error ?? 'The decision did not go through. Nothing has changed.');
+        setError(failureMessage(payload, 'The decision did not go through. Nothing has been decided.'));
         return;
       }
 
       setDone(payload.resolution.outcome);
     } catch {
-      setError('Could not reach the server. Nothing has been decided.');
+      setError(unreachable(NOTHING.decided));
     } finally {
       setBusy(false);
     }

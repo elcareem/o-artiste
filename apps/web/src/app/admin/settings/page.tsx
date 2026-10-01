@@ -6,6 +6,7 @@ import { formatNaira } from '@/lib/currency';
 import type { Settings } from '@/lib/settings';
 import { TierEditor } from '@/components/tier-editor';
 import { CommissionEditor } from '@/components/commission-editor';
+import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,13 +41,13 @@ export default async function AdminSettingsPage() {
     const payload = await response.json().catch(() => null);
 
     if (response.status === 403) error = 'This page is for administrators.';
-    else if (!response.ok) error = payload?.error ?? 'Could not load the settings.';
+    else if (!response.ok) error = failureMessage(payload, 'Could not load the settings.');
     else {
       settings = payload.settings;
       viewerRole = payload.viewerRole;
     }
   } catch {
-    error = 'Could not reach the server. Check your connection and try again.';
+    error = unreachable(RETRY);
   }
 
   if (error || !settings) {

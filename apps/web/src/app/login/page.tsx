@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { unreachable } from '@/lib/error-messages';
 
 /**
  * Sign in — supporting infrastructure for #21, not part of its stated scope.
@@ -50,7 +51,7 @@ function LoginForm() {
       router.replace(next);
       router.refresh();
     } catch {
-      setError('Could not reach the server. Check your connection and try again.');
+      setError(unreachable('You have not been signed in.'));
     } finally {
       setBusy(false);
     }

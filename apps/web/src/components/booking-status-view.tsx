@@ -13,6 +13,7 @@ import {
 } from '@/lib/booking-status';
 import { Copyable } from './copyable';
 import { CancelBooking } from './cancel-booking';
+import { isPresentable, unreachable } from '@/lib/error-messages';
 
 /**
  * The post-checkout status page — issue #21.
@@ -83,7 +84,7 @@ export function BookingStatusView({
       if (next) setBooking(next);
       return pollDelayMs(0);
     } catch {
-      setError('Could not reach the server. Check your connection and try again.');
+      setError(unreachable('Your payment is unaffected — this page just could not refresh.'));
       failures.current += 1;
       return pollDelayMs(failures.current);
     }
@@ -241,10 +242,15 @@ function formatEventDate(value: string): string {
   return new Intl.DateTimeFormat('en-NG', { dateStyle: 'full' }).format(date);
 }
 
+/**
+ * The backend's message, where it is safe to show.
+ *
+ * Previously returned ANY non-empty string, which on this screen — the one a
+ * client watches after transferring money — meant an unhandled 500 or a proxy's
+ * own error page would have been rendered to them verbatim. `isPresentable`
+ * refuses those and the caller's fallback runs instead (#39).
+ */
 function readError(payload: unknown): string | null {
-  if (typeof payload === 'object' && payload !== null && 'error' in payload) {
-    const { error } = payload as { error: unknown };
-    if (typeof error === 'string' && error.trim().length > 0) return error;
-  }
-  return null;
+  const error = (payload as { error?: unknown } | null)?.error;
+  return isPresentable(error) ? error : null;
 }

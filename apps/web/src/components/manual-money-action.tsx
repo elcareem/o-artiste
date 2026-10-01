@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { formatNaira } from '@/lib/currency';
+import { NOTHING, failureMessage, unreachable } from '@/lib/error-messages';
 
 /**
  * The safety valve — issue #37, docs/07 §7.
@@ -77,7 +78,7 @@ export function ManualMoneyAction({
       if (!res.ok) {
         // The backend's message, unaltered. It is written for a person, and
         // rewording it here would produce two sets of copy for one condition.
-        setError(payload?.error ?? 'The action did not go through. Nothing has changed.');
+        setError(failureMessage(payload, 'The action did not go through. No money has moved.'));
         return;
       }
 
@@ -87,7 +88,7 @@ export function ManualMoneyAction({
           : `Refunded to ${clientName}.`
       );
     } catch {
-      setError('Could not reach the server. Nothing has changed.');
+      setError(unreachable(NOTHING.moved));
     } finally {
       setBusy(false);
     }
