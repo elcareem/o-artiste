@@ -4,6 +4,7 @@ import { BASE_URL } from '@/lib/api';
 import { authHeader, sessionToken } from '@/lib/session';
 import { BookingStatusView } from '@/components/booking-status-view';
 import type { Booking, FundingInstruction } from '@/lib/booking-status';
+import { RETRY, unreachable } from '@/lib/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -82,6 +83,6 @@ async function load<T>(path: string, init: RequestInit): Promise<[T | null, stri
     }
     return [payload as T, null];
   } catch {
-    return [null, 'Could not reach the server. Check your connection and try again.'];
+    return [null, unreachable(RETRY)];
   }
 }

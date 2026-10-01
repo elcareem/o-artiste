@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { commissionPreview } from '@/lib/settings';
+import { NOTHING, failureMessage, unreachable } from '@/lib/error-messages';
 
 /**
  * The commission rate — issue #36, docs/07 §3.
@@ -49,12 +50,12 @@ export function CommissionEditor({
       const payload = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setError(payload?.error ?? 'Could not save the commission rate.');
+        setError(failureMessage(payload, 'Could not save the commission rate.'));
         return;
       }
       setSaved(true);
     } catch {
-      setError('Could not reach the server. Nothing has been saved.');
+      setError(unreachable(NOTHING.saved));
     } finally {
       setBusy(false);
     }

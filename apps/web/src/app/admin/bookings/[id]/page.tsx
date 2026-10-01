@@ -13,6 +13,7 @@ import {
   type Reconciliation,
 } from '@/lib/ledger';
 import { ManualMoneyAction } from '@/components/manual-money-action';
+import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -128,12 +129,12 @@ export default async function AdminBookingDetailPage({
     if (response.status === 403) {
       error = 'This page is for administrators.';
     } else if (!response.ok) {
-      error = payload?.error ?? 'Could not load this booking.';
+      error = failureMessage(payload, 'Could not load this booking.');
     } else {
       detail = payload as Detail;
     }
   } catch {
-    error = 'Could not reach the server. Check your connection and try again.';
+    error = unreachable(RETRY);
   }
 
   if (error || !detail) {

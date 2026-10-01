@@ -15,6 +15,7 @@ import {
   type CancellationPreview,
   type Party,
 } from '@/lib/cancellation';
+import { NOTHING, failureMessage, unreachable } from '@/lib/error-messages';
 
 /**
  * Cancelling a booking — issue #30.
@@ -64,14 +65,14 @@ export function CancelBooking({
       if (!res.ok) {
         // The backend's own wording, unaltered. No status codes, no error
         // objects (docs/02 §2).
-        setError(payload?.error ?? 'Could not work out what cancelling would cost. Try again.');
+        setError(failureMessage(payload, 'Could not work out what cancelling would cost. Nothing has been cancelled.'));
         return;
       }
 
       setPreview(payload.preview);
       setStep('review');
     } catch {
-      setError('Could not reach the server. Check your connection and try again.');
+      setError(unreachable(NOTHING.cancelled));
     } finally {
       setBusy(false);
     }
@@ -94,14 +95,14 @@ export function CancelBooking({
       const payload = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setError(payload?.error ?? 'The cancellation did not go through. Nothing has changed.');
+        setError(failureMessage(payload, 'The cancellation did not go through. Nothing has been cancelled.'));
         return;
       }
 
       setStep('done');
       onCancelled?.();
     } catch {
-      setError('Could not reach the server. Nothing has been cancelled.');
+      setError(unreachable(NOTHING.cancelled));
     } finally {
       setBusy(false);
     }

@@ -6272,3 +6272,83 @@ npm run lint                  → clean
 yet, so every send in the suite goes through a replaced transport. The request
 shapes are written from the providers' documented APIs and remain unconfirmed —
 recorded as an open item, not ticked.
+
+---
+
+## #39 — User-facing error and failure handling
+
+Branch `feat/39-error-handling`, stacked on #36 and #37 — it covers the screens
+those two added, and building it on a tree missing two of the five portals would
+have meant doing them again later.
+
+### The missing screen
+
+**There was no check-in redemption UI at all.** `POST /bookings/:id/check-in`
+has existed since #23 and the code has been issued and texted since #22, but no
+issue ever built the artist's side — so the code could not be redeemed through
+the product, and the check-in is what releases the money. Built here, because
+#39's second criterion cannot be demonstrated without it.
+
+### Acceptance criteria
+
+**"Submitting a form with empty required fields shows inline messages, not a
+generic alert."** `missingFields` returns a message per field, named as the form
+labels it, and the check-in form renders it against the input with
+`aria-describedby`. Tested: zero and `false` are not empty, `null` and
+`undefined` are, and a populated field produces no message.
+
+**"An already-used check-in code shows a different message from a wrong code."**
+The backend already words these distinctly — `This check-in code has already been
+used.` against `That code is not right. Check it with the client and try again.`
+— so the work was rendering them faithfully rather than collapsing them. The
+error contract forbids error codes, so the UI deliberately does **not**
+pattern-match the prose to decide what to do: after a failure it re-reads the
+booking, and switches to the checked-in view only if the state says so.
+
+**"A failed payout or refund leaves the booking view intact and readable."** The
+manual action renders its failure inside its own section; the surrounding detail
+page is a server component and is not re-rendered. Same for the cancel flow,
+which keeps its step and its typed reason.
+
+**"No console-only error is the sole feedback for any failure."** A `check:rules`
+guard matches a `catch` whose entire body is a `console` call. Deliberately
+narrow — a catch that logs *and* sets state is correct.
+
+**"Grepping the web app for rendered `error.stack` or status-code strings returns
+zero matches."** Two guards: the existing JSX one, and a new one for the other
+route — building a string and showing that instead. All three new guards were
+verified by planting a violating file and confirming each fired.
+
+### What the audit turned up
+
+**`readError` on the client's booking status page returned any non-empty
+string.** That is the screen a client watches after transferring ₦202,000, and an
+unhandled 500 or a proxy's error page would have been rendered to them verbatim.
+
+**Eleven call sites used `payload?.error ?? fallback`**, which falls back only on
+`null` and `undefined` — an empty string or a stack trace passed through.
+
+**Four money screens gave no reassurance at all**, including the client's own
+payment status page: "Could not reach the server. Check your connection and try
+again" says nothing about whether the money is safe. `unreachable` now takes the
+reassurance as a required argument, so a new call site cannot omit it.
+
+**The first status-code pattern was too greedy** — it rejected "₦404 is below the
+minimum" and "500 kobo short of the amount held". Matching by context rather than
+by digits fixed it; a guard that eats legitimate copy is one that gets switched
+off.
+
+### Verification
+
+```
+npm run test:backend          → # tests 432  # pass 432  # fail 0
+npm test --workspace apps/web → # tests 92   # pass 92   # fail 0   (65 + 27 new)
+npm run check:rules           → passed 14  failed 0  skipped 0   (12 + 2 new)
+npm run typecheck             → 0 errors
+npm run lint                  → clean
+npm run build --workspace apps/web → /check-in/[id] and its proxy registered
+```
+
+`canCheckIn` is asserted against the backend's own `ALLOWED_TRANSITIONS`, read
+from source — the same technique `booking-status.test.ts` uses — so the form and
+the backend cannot drift into offering a code field the API will refuse.

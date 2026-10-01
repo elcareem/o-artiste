@@ -6,6 +6,7 @@ import { authHeader, sessionToken } from '@/lib/session';
 import { formatNaira } from '@/lib/currency';
 import { checkInVerdict, contradictsNoShowClaim, type DisputeDetail } from '@/lib/disputes';
 import { DisputeResolution } from '@/components/dispute-resolution';
+import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,10 +49,10 @@ export default async function AdminDisputePage({
     const payload = await response.json().catch(() => null);
 
     if (response.status === 403) error = 'This page is for administrators.';
-    else if (!response.ok) error = payload?.error ?? 'Could not load this dispute.';
+    else if (!response.ok) error = failureMessage(payload, 'Could not load this dispute.');
     else dispute = payload.dispute;
   } catch {
-    error = 'Could not reach the server. Check your connection and try again.';
+    error = unreachable(RETRY);
   }
 
   if (error || !dispute) {

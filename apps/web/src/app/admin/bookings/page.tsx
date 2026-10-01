@@ -6,6 +6,7 @@ import { authHeader, sessionToken } from '@/lib/session';
 import { formatNaira } from '@/lib/currency';
 import { statusCopy } from '@/lib/booking-status';
 import { EmptyState } from '@/components/empty-state';
+import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
 
 export const dynamic = 'force-dynamic';
 
@@ -88,7 +89,7 @@ export default async function AdminBookingsPage({
       // Including a rejected filter. The backend refuses a value it cannot
       // honour rather than ignoring it, and saying so is the whole point —
       // a silently dropped filter returns a full list that looks filtered.
-      error = payload?.error ?? 'Could not load the bookings.';
+      error = failureMessage(payload, 'Could not load the bookings.');
     } else {
       rows = payload.bookings ?? [];
       total = payload.pagination?.total ?? rows.length;
@@ -96,7 +97,7 @@ export default async function AdminBookingsPage({
       totalPages = payload.pagination?.totalPages ?? 1;
     }
   } catch {
-    error = 'Could not reach the server. Check your connection and try again.';
+    error = unreachable(RETRY);
   }
 
   const pageLink = (next: number) => {

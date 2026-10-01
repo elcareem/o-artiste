@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { tierProblems, type Tier } from '@/lib/settings';
+import { NOTHING, failureMessage, unreachable } from '@/lib/error-messages';
 
 /**
  * The cancellation tier table — issue #36.
@@ -72,14 +73,14 @@ export function TierEditor({
         // The server's own wording. It is the authority on why a set is
         // invalid, and rewording it here would produce two sets of copy for the
         // same condition.
-        setError(payload?.error ?? 'Could not save the cancellation bands.');
+        setError(failureMessage(payload, 'Could not save the cancellation bands.'));
         return;
       }
 
       setSaved(true);
       onSaved?.();
     } catch {
-      setError('Could not reach the server. Nothing has been saved.');
+      setError(unreachable(NOTHING.saved));
     } finally {
       setBusy(false);
     }
