@@ -11,7 +11,7 @@
   "scripts": {
     "dev": "node --watch src/index.ts",
     "start": "node src/index.ts",
-    "test": "node --test --test-force-exit \"test/**/*.test.ts\"",
+    "test": "RATE_LIMITS=off node --test --test-force-exit \"test/**/*.test.ts\"",
     "seed": "node prisma/seed.ts",
     "create-admin": "node scripts/create-admin.ts",
     "start:worker": "node src/worker.ts",

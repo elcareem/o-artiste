@@ -15,6 +15,7 @@
 const prisma = require('../lib/prisma.ts');
 const { AppError } = require('../lib/errors.ts');
 const escrowpay = require('../lib/escrowpay.ts');
+const { recordAudit } = require('../lib/audit.ts');
 
 /** ₦50, once per successful check. Returning users are free. */
 const VERIFICATION_COST_KOBO = 5000;
@@ -31,10 +32,24 @@ async function verifyUser({
   userId,
   method,
   identifier,
+  consent,
+  context = {},
 }: {
   userId: string;
   method: string;
   identifier: string;
+  /**
+   * The person's explicit agreement to their NIN or BVN being checked with our
+   * payment partner. MUST be the boolean `true` — not "yes", not 1, not absent.
+   *
+   * Before #41 nothing asked, and the provider's `consent` field defaults to
+   * `true`, so every check claimed consent on the user's behalf. A national
+   * identity number is personal data under the NDPR, and consent to processing
+   * it has to be given, not assumed.
+   */
+  consent?: unknown;
+  /** Where the request came from, kept with the consent record. */
+  context?: { actorIp?: string | null; actorUserAgent?: string | null };
 }) {
   const normalisedMethod = String(method || '').toUpperCase();
   if (!METHODS.includes(normalisedMethod)) {
@@ -42,6 +57,16 @@ async function verifyUser({
   }
   if (typeof identifier !== 'string' || identifier.trim().length < 3) {
     throw new AppError(400, 'Enter your NIN or BVN.');
+  }
+  // Checked before anything else touches the identifier — including the cached
+  // path, because submitting an identifier for checking is itself the thing
+  // consent is being asked for.
+  if (consent !== true) {
+    throw new AppError(
+      400,
+      `Confirm that you agree to your ${normalisedMethod} being checked with our payment partner. ` +
+        'We use it only to confirm who you are, and we do not keep the number.'
+    );
   }
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
@@ -76,6 +101,20 @@ async function verifyUser({
     },
   });
 
+  // THE CONSENT RECORD, written before the identifier leaves this system and
+  // not best-effort: if we cannot record that consent was given, the check does
+  // not happen. The number itself is NOT recorded — only that it was consented
+  // to, which method, when and from where.
+  const consentRecord = await recordAudit(prisma, {
+    actorUserId: userId,
+    actorIp: context.actorIp ?? null,
+    actorUserAgent: context.actorUserAgent ?? null,
+    action: 'IDENTITY_CHECK_CONSENTED',
+    entityType: 'User',
+    entityId: userId,
+    after: { method: normalisedMethod, consent: true },
+  });
+
   let result;
   try {
     result = await escrowpay.onboardParty({
@@ -83,6 +122,10 @@ async function verifyUser({
       identifier: identifier.trim(),
       email: user.email,
       reference: `verify_${userId}`,
+      // Sent explicitly rather than left to the provider's default of `true`,
+      // with a reference to our own record of it.
+      consent: true,
+      consentReference: consentRecord.id,
     });
   } catch (err) {
     return handleProviderFailure({ user, method: normalisedMethod, err: err as AppErrorLike });

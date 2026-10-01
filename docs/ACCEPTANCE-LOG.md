@@ -6456,3 +6456,70 @@ typecheck / lint              → clean
 **Open item §11.1** (does a refund incur the payout fee) needs one real sandbox
 refund with `GET /transactions/{id}/fees` read afterwards. Sandbox mode can now do
 it, with a person paying one booking.
+
+---
+
+## #41 — Pre-launch hardening review
+
+Branch `chore/41-prelaunch-hardening`. The decision record is
+**`docs/09-LAUNCH-READINESS.md`**; this entry is the evidence trail.
+
+### Verdict
+
+**Not ready for real money.** Every code rule passes, mechanically. Six blockers
+remain — one a scope gap no issue covered (no sign-up, verification or booking
+screens in the web app), five that only the account owner can clear: the
+database plan expiring on 11 October 2026 with no backups, an unverified webhook
+signature scheme, credentials to rotate, open database access, and EscrowPay
+terms and legal advice not yet in writing.
+
+### Acceptance criteria
+
+**"Each code rule verified and evidenced."** All eight, in `09` §2. Two needed new
+mechanical checks, each confirmed to fail on a planted violation first:
+
+- *Live configuration is read only by the snapshot and the admin screens* —
+  `check:rules` rule 15.
+- *Super-admin fields are permission-checked server-side* — a sweep over every
+  router the app mounts: 42 guarded routes, 102 role/route pairs, all 403, plus
+  a test pinning which six routes are SUPER_ADMIN-only.
+
+**"Every open item is either closed or has a written, accepted risk decision."**
+**Not met — by design.** `09` §5 lists all twelve with a recommendation each; the
+decision column is for the account owner. Engineering recommends accepting
+eight, resolving one with a twenty-minute sandbox run, and **not** accepting 11.2
+or 11.3 for a public launch.
+
+**"A database restore from backup has been performed successfully."** **Not met.**
+The database is on Render's free plan, which has no backups — blocker B2.
+
+### Five defects found, all fixed and guarded
+
+| Defect | Guard that now fails if it returns |
+|---|---|
+| The check-in form rejected every valid 8-character code (shipped in #39) | four web tests, two of which read `CODE_LENGTH` and the normalisation rule from the backend's source |
+| `GET /artists/banks` shadowed by `GET /artists/:id` — unreachable for everyone | a sweep detecting any literal route behind an earlier parameter route, across all routers in mount order |
+| No `trust proxy` — every acknowledgement recorded Render's IP | `trustProxyHops` tests: 1 on Render, 0 elsewhere, explicit setting wins |
+| Identity checks asserted consent nobody gave | three tests: refused without strict `true` and nothing sent; consent recorded before the check and sent explicitly; the client refuses to onboard without it |
+| Rate limits uncounted while Redis connected | caught by the limiter's own first test |
+
+**And one I introduced and caught.** Moving the bank route, I cut at the first
+`});` — inside the handler — and nested two routes inside it. It compiled and the
+sweep passed; the full suite caught it. A new test counts each router's declared
+routes against what is registered **in a fresh process** — the first version ran
+in-process, where an earlier test had already triggered the nested registration,
+and passed against the broken file. Both versions were run against the broken
+move to confirm the second one catches it: *"artists.ts declares 7 routes but 4
+are registered at load."*
+
+### Verification
+
+```
+npm run test:backend          → # tests 485  # pass 485  # fail 0
+npm run e2e                   → 15/15 scenarios passed
+npm test --workspace apps/web → # tests 96   # pass 96   # fail 0
+npm run check:rules           → passed 15  failed 0  skipped 0
+typecheck / lint              → clean
+git history secret sweep      → placeholders and fixtures only
+.env.example completeness     → every process.env read documented, both apps
+```

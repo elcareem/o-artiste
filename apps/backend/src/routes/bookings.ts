@@ -29,6 +29,7 @@ const { codeForClient, redeem } = require('../services/checkInService.ts');
 const { confirm, claimNoShow } = require('../services/confirmationService.ts');
 const disputeService = require('../services/disputeService.ts');
 const reputationService = require('../services/reputationService.ts');
+const { LIMITS } = require('../lib/rateLimit.ts');
 
 const router = express.Router();
 
@@ -83,6 +84,7 @@ router.post(
   requireAuth,
   requireRole('CLIENT'),
   requireVerified,
+  LIMITS.createBooking,
   async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { artistId, amountKobo, eventDate, eventEndAt, eventLocation } = req.body ?? {};
@@ -344,6 +346,7 @@ router.post(
   '/bookings/:id/check-in',
   requireAuth,
   requireRole('ARTIST'),
+  LIMITS.checkIn,
   async (req: AuthedReq, res: Res, next: Next) => {
     try {
       const { code, latitude, longitude, accuracyMeters } = req.body ?? {};

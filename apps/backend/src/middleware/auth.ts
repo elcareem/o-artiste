@@ -54,7 +54,7 @@ async function requireAuth(req: Req, _res: Res, next: Next) {
  * Implicit rank is how a permission ends up somewhere nobody intended.
  */
 function requireRole(...roles: UserRole[]) {
-  return function roleGuard(req: Req, _res: Res, next: Next) {
+  const roleGuard = function roleGuard(req: Req, _res: Res, next: Next) {
     if (!req.user) {
       return next(new AppError(401, 'You need to be logged in to do that.'));
     }
@@ -75,6 +75,12 @@ function requireRole(...roles: UserRole[]) {
     }
     next();
   };
+
+  // Readable from outside so a test can sweep EVERY registered route and check
+  // each against every role it excludes (#41). A list of routes kept by hand
+  // misses the one added later, which is the one that matters.
+  (roleGuard as typeof roleGuard & { roles: readonly UserRole[] }).roles = Object.freeze([...roles]);
+  return roleGuard;
 }
 
 /**

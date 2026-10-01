@@ -19,11 +19,37 @@ const { router: queueRouter } = require('./routes/queue.ts');
 const { router: webhooksRouter } = require('./routes/webhooks.ts');
 const { requireAuth, requireRole } = require('./middleware/auth.ts');
 
+/**
+ * How many proxies sit between the client and us. Render has exactly one, and
+ * sets `RENDER=true` on its services; anywhere else it is zero unless said.
+ */
+function trustProxyHops(): number {
+  const raw = process.env.TRUST_PROXY_HOPS;
+  if (raw !== undefined && raw !== '') {
+    const hops = Number(raw);
+    if (!Number.isInteger(hops) || hops < 0) {
+      throw new Error(`TRUST_PROXY_HOPS must be a whole number of proxies, 0 or more — received "${raw}".`);
+    }
+    return hops;
+  }
+  return process.env.RENDER === 'true' ? 1 : 0;
+}
+
 function createApp() {
   const app = express();
 
   // Nothing gains from advertising the framework.
   app.disable('x-powered-by');
+
+  // WHO IS ACTUALLY CALLING. Behind Render's proxy `req.ip` is the PROXY's
+  // address unless Express is told to trust it, which meant two things before
+  // #41: every terms acknowledgement (#16) recorded Render's address as the
+  // client's — evidence that identifies nobody — and an IP-based rate limit
+  // would have throttled every user as one.
+  //
+  // Not trusted by default anywhere else: with no proxy in front, trusting one
+  // lets a caller set their own `req.ip` through X-Forwarded-For.
+  app.set('trust proxy', trustProxyHops());
 
   app.use(cors({ origin: webOrigin(), credentials: true }));
 
@@ -76,4 +102,4 @@ function webOrigin() {
   return process.env.WEB_ORIGIN || 'http://localhost:3000';
 }
 
-module.exports = { createApp };
+module.exports = { createApp, trustProxyHops };
