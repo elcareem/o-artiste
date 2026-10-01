@@ -6050,6 +6050,70 @@ exist for it red.
 
 ---
 
+## #36 — Admin configuration dashboard
+
+Branch `feat/36-admin-settings`.
+
+### Acceptance criteria
+
+**"Adding a new tier row persists as a new version without affecting existing
+bookings."** A booking is created under the four-band table, the 3–6 band is
+then split into 3–4 and 5–6 and published as a five-band version, and the
+booking's `cancellationTiersSnapshot` is re-read: still four bands, still 7000
+bps at day 3. A booking created afterwards carries five. Rows are genuinely
+addable — the band *structure* changes, not just the percentages.
+
+**"An `ADMIN`-role account cannot see or reach the commission field."**
+`GET /admin/settings` as an `ADMIN` returns `commission.editable: false` —
+marked rather than omitted, so the admin learns the field exists and is not
+theirs. `PUT /admin/config/commission` as that admin returns 403 and the rate
+is re-read unchanged. A `SUPER_ADMIN` sees all six sections editable.
+
+**"Submitting an invalid tier set via direct API call is rejected even though
+the UI prevented it."** Four sets the editor refuses to submit are sent
+straight to the API: a gap, an overlap, day 0 uncovered, and halves summing to
+9000 bps. All four return 400 naming the specific problem, and the table in
+force is re-read to confirm nothing was published.
+
+**"Change history names the actor for each prior version."** Two different
+super-admins each publish a commission rate; the history names both by email
+and role, newest first. Same for the tier history. The response is asserted to
+contain no `passwordHash` — naming an actor must not mean serialising them.
+
+### Two defects found while writing the tests
+
+**The settings screen 500'd on a system with nothing configured.**
+`resolveTierSet` throws when no tier table has been published, and both
+`GET /admin/settings` and `GET /admin/config/cancellation-tiers` called it. On a
+fresh deployment that made the screen for publishing the first table the screen
+that fails without one. Read paths now take a new `tierSetOrNull`; the booking
+path keeps the throwing version, because a booking genuinely cannot be created
+without a table. A test that runs first on an empty schema covers it.
+
+**The grace period could not be changed from the settings screen at all.** It
+was an environment variable — a redeploy to apply, no record of who changed it
+or why. Moved into a versioned `AutoReleaseConfig` table read by
+`autoReleaseJob.resolveGraceHours()`. The test changes it from 48 to 72 and
+observes the *same running process* return 72, which an environment variable
+could not have given us.
+
+### Verification
+
+```
+npm run test:backend          → # tests 416  # pass 416  # fail 0   (404 + 12 new)
+npm test --workspace apps/web → # tests 51   # pass 51   # fail 0
+npm run check:rules           → passed 11  failed 0  skipped 0
+npm run typecheck             → 0 errors
+npm run lint                  → clean
+npm run build --workspace apps/web → /admin/settings and /api/admin/settings registered
+```
+
+The web proxy at `api/admin/config/[section]` is an explicit allowlist rather
+than a pass-through, which would have become a general-purpose admin API by
+accident.
+
+---
+
 ## #37 — Admin bookings and ledger views
 
 Branch `feat/37-admin-bookings`.

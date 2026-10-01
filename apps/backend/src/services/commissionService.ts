@@ -141,9 +141,17 @@ async function setCommissionRate({
 }
 
 /** Full history, newest first. Prior records remain queryable forever. */
+/**
+ * Every rate ever set, newest first, each NAMING the person who set it.
+ *
+ * An id is not a name. A change history exists to answer "who changed this and
+ * when" (docs/07 §5), and answering it with `cmu3l…` sends the reader to
+ * another query — which, at the moment they are looking, they will not run.
+ */
 function listCommissionRates(client: PrismaLike = prisma) {
   return client.commissionRate.findMany({
     orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    include: { setBy: { select: { id: true, email: true, role: true } } },
   });
 }
 

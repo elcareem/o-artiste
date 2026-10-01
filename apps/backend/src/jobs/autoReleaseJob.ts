@@ -33,7 +33,7 @@ const JOB_NAME = 'auto-release';
  */
 function graceHours(): number {
   const raw = process.env.AUTO_RELEASE_GRACE_HOURS;
-  if (raw === undefined || raw === '') return 48;
+  if (raw === undefined || raw === '') return DEFAULT_GRACE_HOURS;
 
   const value = Number(raw);
   if (!Number.isFinite(value) || value <= 0) {
@@ -44,9 +44,41 @@ function graceHours(): number {
   return value;
 }
 
+/** The shipped default — open item `docs/00` §11.5. */
+const DEFAULT_GRACE_HOURS = 48;
+
+/**
+ * The grace period in force, from configuration.
+ *
+ * DATABASE FIRST, ENVIRONMENT SECOND. It lived only in an environment variable
+ * until #36, which made it the one tunable decision that could not be changed
+ * from the settings screen — on a host that redeploys to apply an environment
+ * variable, "configurable" and "without a deploy" are not the same thing.
+ *
+ * The variable still works, and still wins in tests, because a test that needs
+ * a one-minute grace period should not have to write a configuration row to get
+ * one.
+ */
+async function resolveGraceHours(at: Date = new Date()): Promise<number> {
+  if (process.env.AUTO_RELEASE_GRACE_HOURS) return graceHours();
+
+  try {
+    const prisma = require('../lib/prisma.ts');
+    const config = await prisma.autoReleaseConfig.findFirst({
+      where: { effectiveFrom: { lte: at } },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    });
+    return config?.graceHours ?? DEFAULT_GRACE_HOURS;
+  } catch {
+    // A configuration read that fails must not stop an artist being paid. The
+    // shipped default is defensible; no auto-release at all is not.
+    return DEFAULT_GRACE_HOURS;
+  }
+}
+
 /** When auto-release becomes due for an event ending at `eventEndAt`. */
-function deadlineFor(eventEndAt: Date | string): Date {
-  return new Date(new Date(eventEndAt).getTime() + graceHours() * 3600_000);
+function deadlineFor(eventEndAt: Date | string, hours: number = graceHours()): Date {
+  return new Date(new Date(eventEndAt).getTime() + hours * 3600_000);
 }
 
 /**
@@ -74,7 +106,8 @@ function jobIdFor(bookingId: string): string {
  * unrecorded.
  */
 async function schedule(booking: { id: string; eventEndAt: Date | string }): Promise<Date | null> {
-  const deadline = deadlineFor(booking.eventEndAt);
+  const hours = await resolveGraceHours();
+  const deadline = deadlineFor(booking.eventEndAt, hours);
 
   try {
     const { getQueue } = require('../lib/queue.ts');
@@ -95,7 +128,7 @@ async function schedule(booking: { id: string; eventEndAt: Date | string }): Pro
 
     console.log(
       `[auto-release] booking ${booking.id} scheduled for ${deadline.toISOString()}` +
-        ` (${graceHours()}h after the event)`
+        ` (${hours}h after the event)`
     );
     return deadline;
   } catch (err) {
@@ -185,7 +218,9 @@ async function run(job: import('bullmq').Job): Promise<AutoReleaseOutcome> {
 
   // Not yet due. BullMQ should not deliver early, but this job moves money and
   // a delay miscalculated somewhere else must not become an early payout.
-  const deadline = booking.autoReleaseAt ? new Date(booking.autoReleaseAt) : deadlineFor(booking.eventEndAt);
+  const deadline = booking.autoReleaseAt
+    ? new Date(booking.autoReleaseAt)
+    : deadlineFor(booking.eventEndAt, await resolveGraceHours());
   if (Date.now() < deadline.getTime()) {
     return skip('not_yet_due', `it is not due until ${deadline.toISOString()}`);
   }
@@ -198,7 +233,7 @@ async function run(job: import('bullmq').Job): Promise<AutoReleaseOutcome> {
 
   const release = await releaseBooking({
     bookingId: booking.id,
-    reason: `Auto-released ${graceHours()} hours after the event — the client did not respond and a check-in was recorded`,
+    reason: `Auto-released ${await resolveGraceHours()} hours after the event — the client did not respond and a check-in was recorded`,
   });
 
   console.log(
@@ -212,7 +247,9 @@ module.exports = {
   QUEUE_NAME,
   JOB_NAME,
   graceHours,
+  resolveGraceHours,
   deadlineFor,
+  DEFAULT_GRACE_HOURS,
   jobIdFor,
   schedule,
   cancel,
