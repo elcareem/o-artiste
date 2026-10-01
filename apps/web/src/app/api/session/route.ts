@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 
 import { BASE_URL } from '@/lib/api';
 import { COOKIE_OPTIONS, SESSION_COOKIE } from '@/lib/session';
+import { failureMessage } from '@/lib/error-messages';
 
 export async function POST(request: Request) {
   let credentials: unknown;
@@ -40,7 +41,8 @@ export async function POST(request: Request) {
     // The backend's wording, unaltered. It is deliberately vague about which
     // half of the credentials was wrong, and rewording it here would undo that.
     return NextResponse.json(
-      { error: readError(payload) ?? 'Something went wrong. Please try again.' },
+      // Through the #39 guard, so an unhandled 500's body never reaches the page.
+      { error: failureMessage(payload, 'Something went wrong. Please try again.') },
       { status: upstream.status }
     );
   }
@@ -60,12 +62,4 @@ export async function DELETE() {
   const response = NextResponse.json({ signedOut: true });
   response.cookies.set(SESSION_COOKIE, '', { ...COOKIE_OPTIONS, maxAge: 0 });
   return response;
-}
-
-function readError(payload: unknown): string | null {
-  if (typeof payload === 'object' && payload !== null && 'error' in payload) {
-    const { error } = payload as { error: unknown };
-    if (typeof error === 'string' && error.trim().length > 0) return error;
-  }
-  return null;
 }

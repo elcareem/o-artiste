@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { unreachable } from '@/lib/error-messages';
 
@@ -15,7 +16,7 @@ import { unreachable } from '@/lib/error-messages';
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get('next') ?? '/';
+  const next = params.get('next') ?? '/bookings';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -60,6 +61,12 @@ function LoginForm() {
   return (
     <div className="mx-auto w-full max-w-sm px-4 py-16">
       <h1 className="text-xl font-semibold tracking-tight">Sign in</h1>
+      <p className="mt-1 text-sm text-[var(--color-muted)]">
+        New here?{' '}
+        <Link href={`/signup${next !== '/' ? `?next=${encodeURIComponent(next)}` : ''}`} className="underline">
+          Create an account
+        </Link>
+      </p>
 
       <form onSubmit={submit} className="mt-6 space-y-4">
         <label className="block">

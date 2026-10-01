@@ -39,3 +39,54 @@ export async function authHeader(): Promise<Record<string, string>> {
   const token = await sessionToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+export type CurrentUser = {
+  id: string;
+  email: string;
+  role: 'CLIENT' | 'ARTIST' | 'ADMIN' | 'SUPER_ADMIN';
+  verificationStatus: string;
+  /** The client's display name or the artist's stage name, where there is one. */
+  name: string | null;
+  /** The artist's profile id, for links to their own public page. */
+  artistId: string | null;
+};
+
+/**
+ * Who is signed in, or `null` — issue #42.
+ *
+ * Read from `GET /me` with the session cookie, on the server. A token that has
+ * expired or been revoked answers 401 and is treated exactly like no session:
+ * the header shows "Sign in" rather than a name that no longer works.
+ *
+ * Not cached across requests: a page rendered for one person must never show
+ * another's name.
+ */
+export async function currentUser(): Promise<CurrentUser | null> {
+  const token = await sessionToken();
+  if (!token) return null;
+
+  const { BASE_URL } = await import('./api');
+  try {
+    const res = await fetch(`${BASE_URL}/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      user: { id: string; email: string; role: CurrentUser['role']; verificationStatus: string };
+      profile: { id?: string; displayName?: string; stageName?: string } | null;
+    };
+    return {
+      id: body.user.id,
+      email: body.user.email,
+      role: body.user.role,
+      verificationStatus: body.user.verificationStatus,
+      name: body.profile?.stageName ?? body.profile?.displayName ?? null,
+      artistId: body.user.role === 'ARTIST' ? body.profile?.id ?? null : null,
+    };
+  } catch {
+    // The backend is unreachable. Rendering the page signed-out is better than
+    // failing the whole page over a header.
+    return null;
+  }
+}
