@@ -9,6 +9,7 @@ const express = require('express');
 
 const { AppError } = require('../lib/errors.ts');
 const { requireAuth, requireRole } = require('../middleware/auth.ts');
+const { recordAudit } = require('../lib/audit.ts');
 const {
   setCommissionRate,
   resolveCommissionRate,
@@ -16,7 +17,7 @@ const {
 } = require('../services/commissionService.ts');
 const {
   setCancellationTiers,
-  resolveTierSet,
+  tierSetOrNull,
   listTierVersions,
 } = require('../services/cancellationTierService.ts');
 const {
@@ -32,7 +33,6 @@ const {
   refundBooking,
 } = require('../services/escrowService.ts');
 const bookingAdminService = require('../services/bookingAdminService.ts');
-const { recordAudit } = require('../lib/audit.ts');
 const payoutService = require('../services/payoutService.ts');
 const disputeService = require('../services/disputeService.ts');
 const enforcementService = require('../services/enforcementService.ts');
@@ -116,7 +116,9 @@ router.get(
   requireRole('ADMIN', 'SUPER_ADMIN'),
   async (req: Req, res: Res, next: Next) => {
     try {
-      const [current, history] = await Promise.all([resolveTierSet(), listTierVersions()]);
+      const [current, history] = await Promise.all([tierSetOrNull(), listTierVersions()]);
+      // `null` on a system where none has ever been published — the screen that
+      // publishes the first one cannot be the screen that fails without one.
       res.json({ current, history });
     } catch (err) {
       next(err);
@@ -652,6 +654,183 @@ router.put(
     }
   }
 );
+
+/**
+ * GET /admin/config/auto-release
+ *
+ * The grace period in force, plus its history — issue #36, docs/04 §4.
+ *
+ * `source` distinguishes a published row from the environment variable and from
+ * the shipped default. An operator needs to know which of the three they are
+ * looking at before changing it: editing the row does nothing while an
+ * environment variable is set.
+ */
+router.get(
+  '/admin/config/auto-release',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      const autoReleaseJob = require('../jobs/autoReleaseJob.ts');
+
+      const [graceHours, history] = await Promise.all([
+        autoReleaseJob.resolveGraceHours(),
+        prisma.autoReleaseConfig.findMany({
+          orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+          take: 20,
+          include: { setBy: { select: { id: true, email: true, role: true } } },
+        }),
+      ]);
+
+      res.json({
+        current: {
+          graceHours,
+          source: process.env.AUTO_RELEASE_GRACE_HOURS
+            ? 'environment'
+            : history.length > 0
+              ? 'published'
+              : 'default',
+        },
+        history: history.map(historyEntry),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /admin/config/auto-release
+ *
+ * SUPER_ADMIN only. The grace period decides when money moves on silence, which
+ * is a decision about every future booking.
+ */
+router.put(
+  '/admin/config/auto-release',
+  requireAuth,
+  requireRole('SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const { graceHours, effectiveFrom } = req.body ?? {};
+
+      if (!Number.isInteger(graceHours) || graceHours < 1) {
+        throw new AppError(400, 'The grace period must be a whole number of hours, at least 1.');
+      }
+      if (graceHours > 24 * 30) {
+        // Not a hard limit of the system, a limit of what is defensible: an
+        // artist waiting a month to be paid on a client's silence is the
+        // failure auto-release exists to prevent.
+        throw new AppError(400, 'A grace period longer than 30 days leaves artists unpaid on silence.');
+      }
+
+      const published = await prisma.$transaction(async (tx: PrismaTx) => {
+        const created = await tx.autoReleaseConfig.create({
+          data: {
+            graceHours,
+            effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : new Date(),
+            setByUserId: req.user.id,
+          },
+        });
+
+        await recordAudit(tx, {
+          actorUserId: req.user.id,
+          action: 'AUTO_RELEASE_CONFIG_UPDATED',
+          entityType: 'AutoReleaseConfig',
+          entityId: created.id,
+          after: { graceHours },
+        });
+
+        return created;
+      });
+
+      res.status(201).json({
+        published,
+        // Said plainly rather than discovered: the row is saved and inert.
+        ...(process.env.AUTO_RELEASE_GRACE_HOURS
+          ? {
+              warning:
+                'AUTO_RELEASE_GRACE_HOURS is set on this service and takes precedence. Unset it for this change to take effect.',
+            }
+          : {}),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/settings
+ *
+ * Every tunable decision in one response — issue #36, docs/07 §6.
+ *
+ * One request rather than six, because the settings screen shows them together
+ * and six round trips is six chances to render a half-loaded page of numbers
+ * that govern money.
+ *
+ * FIELDS THE CALLER MAY NOT CHANGE ARE MARKED, NOT OMITTED. An `ADMIN` sees
+ * that a commission rate exists and that they cannot set it, which is more
+ * useful than a screen that silently lacks a section — and the server refuses
+ * the write regardless of what the screen offers.
+ */
+router.get(
+  '/admin/settings',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const autoReleaseJob = require('../jobs/autoReleaseJob.ts');
+      const isSuperAdmin = req.user.role === 'SUPER_ADMIN';
+
+      const [commission, tiers, strikes, ladders, reputation, graceHours] = await Promise.all([
+        resolveCommissionRate(),
+        tierSetOrNull(),
+        resolveRules(),
+        enforcementService.resolveLadders(),
+        reputationService.resolveConfig(),
+        autoReleaseJob.resolveGraceHours(),
+      ]);
+
+      res.json({
+        settings: {
+          commission: { rateBasisPoints: commission.rateBasisPoints, editable: isSuperAdmin },
+          cancellationTiers: {
+            // Reported as absent rather than erroring: bookings are blocked
+            // until a table exists, and this is the screen that creates one.
+            configured: tiers !== null,
+            versionId: tiers?.versionId ?? null,
+            tiers: tiers?.tiers ?? [],
+            editable: isSuperAdmin,
+          },
+          autoRelease: {
+            graceHours,
+            source: process.env.AUTO_RELEASE_GRACE_HOURS ? 'environment' : 'configuration',
+            editable: isSuperAdmin,
+          },
+          strikes: { isDefault: strikes.isDefault, rules: strikes.rules, editable: isSuperAdmin },
+          enforcement: { isDefault: ladders.isDefault, rules: ladders.rules, editable: isSuperAdmin },
+          reputation: { ...reputation, editable: isSuperAdmin },
+        },
+        viewerRole: req.user.role,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** One prior version, with the person who set it. */
+function historyEntry(row: any) {
+  return {
+    id: row.id,
+    graceHours: row.graceHours,
+    effectiveFrom: row.effectiveFrom,
+    createdAt: row.createdAt,
+    // Named, because "who changed this and when" is the question a change
+    // history exists to answer (docs/07 §5).
+    setBy: row.setBy ? { email: row.setBy.email, role: row.setBy.role } : null,
+  };
+}
 
 
 // ---------------------------------------------------------------------------

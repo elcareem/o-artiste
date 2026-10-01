@@ -228,6 +228,9 @@ Evidence is refused once a dispute is decided: after a ruling there is nothing f
 | `POST` | `/admin/strikes/:id/review` | `ADMIN` — overrides a strike; written reason mandatory |
 | `GET` | `/admin/config/enforcement` | `ADMIN` — the ladders in force |
 | `PUT` | `/admin/config/enforcement` | `SUPER_ADMIN` — append-only |
+| `GET` | `/admin/config/auto-release` | `ADMIN` — the grace period in force, with `source`: `environment`, `published` or `default` |
+| `PUT` | `/admin/config/auto-release` | `SUPER_ADMIN` — append-only; warns when an environment variable overrides the row |
+| `GET` | `/admin/settings` | `ADMIN` — every tunable in one response, each with an `editable` flag for the caller |
 | `POST` | `/admin/queue/echo` | `ADMIN` | Schedules the do-nothing job; `delayMs` defaults to 10,000 |
 | `GET` | `/admin/queue/echo/:id` | `ADMIN` | Whether it ran, and when |
 | `GET` | `/admin/queue/dead-letter` | `ADMIN` | Jobs that exhausted every retry |

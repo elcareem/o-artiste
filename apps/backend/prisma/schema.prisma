@@ -187,6 +187,9 @@ model User {
   enforcementRules EnforcementRule[] @relation("EnforcementRuleAuthor")
   reputationConfigs ReputationConfig[] @relation("ReputationConfigAuthor")
   bookingTransitions BookingStateTransition[] @relation("TransitionActor")
+  autoReleaseConfigs AutoReleaseConfig[] @relation("AutoReleaseConfigAuthor")
+  commissionRates   CommissionRate[]   @relation("CommissionRateAuthor")
+  cancellationTiers CancellationTier[] @relation("CancellationTierAuthor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -661,6 +664,9 @@ model CommissionRate {
   rateBasisPoints Int
   effectiveFrom   DateTime
   setByUserId     String
+  /// Named rather than referenced. A change history answering "who" with an id
+  /// sends the reader to another query they will not run (docs/07 §5).
+  setBy           User     @relation("CommissionRateAuthor", fields: [setByUserId], references: [id])
 
   createdAt DateTime @default(now())
 
@@ -687,6 +693,7 @@ model CancellationTier {
 
   effectiveFrom DateTime
   setByUserId   String
+  setBy         User     @relation("CancellationTierAuthor", fields: [setByUserId], references: [id])
 
   createdAt DateTime @default(now())
 
@@ -798,6 +805,29 @@ model ReputationConfig {
   effectiveFrom DateTime
   setByUserId   String
   setBy         User     @relation("ReputationConfigAuthor", fields: [setByUserId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([effectiveFrom])
+}
+
+/// The auto-release grace period — docs/04 §4, issue #36.
+///
+/// It was an environment variable until #36, which made it the only tunable
+/// decision in the system that could not be changed from the settings screen —
+/// on a host that redeploys to apply an environment variable, "configurable"
+/// and "without a deploy" are not the same thing. Every other setting is a
+/// versioned row; this one now is too.
+model AutoReleaseConfig {
+  id String @id @default(cuid())
+
+  /// Hours after `eventEndAt` before funds release on client silence.
+  /// Open item `00` §11.5 — the right value needs real booking data.
+  graceHours Int
+
+  effectiveFrom DateTime
+  setByUserId   String
+  setBy         User     @relation("AutoReleaseConfigAuthor", fields: [setByUserId], references: [id])
 
   createdAt DateTime @default(now())
 
