@@ -467,7 +467,9 @@ than an outage. Remove the previous value after the overlap closes.
 
 **Status:** ☐
 
-- [ ] SMS provider account (e.g. Termii) → API key and sender ID
+- [ ] SMS provider account (Termii) → API key **and sender ID**. The sender ID must be registered with them before any message will be accepted; this takes a day or two and is the step most likely to be discovered late
+- [ ] Email provider account (Resend, or any accepting the same request shape) → API key and a **verified sending domain** for `EMAIL_FROM`
+- [ ] Until both are set, the platform runs with notifications logged rather than sent. Nothing breaks, but **a client will not receive their check-in code**, which is the mechanic the artist's payment depends on
 - [ ] Transactional email provider → API key and verified sender domain
 
 **Gates:** #38. Real SMS transport — #22's delivery is met by the job log until
@@ -540,6 +542,7 @@ Maintained alongside `apps/backend/.env.example`.
 | `CHECKIN_WINDOW_BEFORE_HOURS` | check-in codes | #22 — default `2`; artists arrive early to set up |
 | `CHECKIN_WINDOW_AFTER_HOURS` | check-in codes | #22 — default `12`; a forgotten check-in must not become a payment dispute |
 | `CHECKIN_CODE_SMS_LEAD_HOURS` | check-in codes | #22 — default `24`; when the SMS goes out, not when the code is issued |
-| `SMS_API_KEY` / `SMS_SENDER_ID` | notifications | #38 |
-| `EMAIL_API_KEY` / `EMAIL_FROM` | notifications | #38 |
+| `SMS_API_KEY` / `SMS_SENDER_ID` | notifications | #38 — **both or neither.** A key without a sender id fails on every send while looking configured; the startup log says so |
+| `EMAIL_API_KEY` / `EMAIL_FROM` | notifications | #38 — both. `EMAIL_FROM` must be on a domain verified with the provider |
+| `SMS_BASE_URL` / `EMAIL_BASE_URL` | notifications | #38 — optional. Default to Termii and Resend; the request *shape* is theirs |
 | `NEXT_PUBLIC_API_URL` | web | #3 |

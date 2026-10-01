@@ -137,11 +137,21 @@ async function transition({
   to,
   client = prisma,
   data = {},
+  actorUserId,
+  reason,
 }: {
   bookingId: string;
   to: BookingState;
   client?: PrismaLike;
   data?: Partial<BookingRow>;
+  /**
+   * Who caused it, where a person did. Omitted by the automated paths — an
+   * auto-release firing on a grace period, a webhook confirming funds — and
+   * that absence is the honest answer to "who did this", not a gap.
+   */
+  actorUserId?: string;
+  /** Why. Mandatory for manual admin actions, enforced at those endpoints. */
+  reason?: string;
 }): Promise<BookingRow> {
   const run = async (tx: PrismaTx): Promise<BookingRow> => {
     const booking = await tx.booking.findUnique({ where: { id: bookingId } });
@@ -172,6 +182,13 @@ async function transition({
         'This booking changed while your request was in flight. Check its status and try again.'
       );
     }
+
+    // Recorded inside the same transaction as the state change, so the two
+    // cannot disagree. A history written afterwards is a history with holes in
+    // it wherever a request died between the two writes.
+    await tx.bookingStateTransition.create({
+      data: { bookingId, fromState: booking.state, toState: to, actorUserId, reason },
+    });
 
     return (await tx.booking.findUnique({ where: { id: bookingId } })) as BookingRow;
   };
@@ -266,6 +283,12 @@ async function createBooking({
 
   return prisma.booking.create({
     data: {
+      // The history starts here, with no prior state — so a booking's timeline
+      // begins at its creation rather than at whatever happened to it first.
+      stateTransitions: {
+        create: [{ toState: 'PENDING_PAYMENT', actorUserId: clientUser.id }],
+      },
+
       clientId: clientUser.client.id,
       artistId: artist.id,
       amountKobo: amount,

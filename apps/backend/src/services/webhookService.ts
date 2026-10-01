@@ -33,6 +33,7 @@ const checkInService = require('./checkInService.ts');
 // is called, which is what keeps the webhook endpoint answering when the queue
 // is the thing that is down.
 const checkInCodeJob = require('../jobs/checkInCodeJob.ts');
+const notificationService = require('./notificationService.ts');
 const autoReleaseJob = require('../jobs/autoReleaseJob.ts');
 
 const EVENT_ID_HEADER = 'escrowpay-event-id';
@@ -291,6 +292,12 @@ async function handleTransactionFunded(payload: WebhookPayload): Promise<Webhook
   // becomes certain. It fires months from now if nobody responds — and only if
   // a check-in was recorded by then, which is re-checked when it wakes.
   await autoReleaseJob.schedule(booking);
+
+  // AFTER the auto-release deadline is written, because the confirmation prompt
+  // later reads it from the booking — and the booking confirmation email is the
+  // first thing a client gets after transferring money to an unfamiliar account
+  // (#38). Never throws; see notificationService.
+  await notificationService.bookingFunded(booking.id);
 
   console.log(`[webhook] booking ${booking.id} funded, ${fundedMinor} kobo held`);
   return { note: 'funded', bookingId: booking.id };

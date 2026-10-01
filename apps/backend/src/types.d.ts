@@ -374,11 +374,43 @@ interface SmsRequest {
 
 interface SmsResult {
   delivered: boolean;
-  /** True while #38 is unimplemented, so a caller can tell a stub from a send. */
+  /** True where no provider is configured, so a caller can tell a stub from a send. */
   stubbed: boolean;
   /** Masked, never the full number — see `maskPhone`. */
   to: string;
   segments: number;
+  /** The provider's own id, for chasing a non-delivery with them. */
+  providerId?: string | null;
+}
+
+interface EmailResult {
+  delivered: boolean;
+  stubbed: boolean;
+  /** Masked, never the full address — see `maskEmail`. */
+  to: string;
+  providerId?: string | null;
+}
+
+/** One queued notification — issue #38. */
+interface NotificationJobData {
+  channel: 'SMS' | 'EMAIL';
+  to: string;
+  /** SMS only. */
+  message?: string;
+  /** Email only. */
+  subject?: string;
+  body?: string;
+  /** What caused it, carried into the log and the dead-letter payload. */
+  reference: string;
+  /**
+   * Set on a message scheduled ahead of time. The booking is re-read at send
+   * time and the message is dropped unless its state is still in
+   * `requireState` — a prompt queued at funding fires weeks later, by which
+   * point the booking may have been cancelled, and asking a refunded client
+   * whether their artist performed is worse than sending nothing.
+   */
+  bookingId?: string;
+  requireState?: BookingState[];
 }
 
 /** The fields of a booking that determine its check-in window. */

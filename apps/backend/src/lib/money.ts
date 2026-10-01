@@ -7,9 +7,17 @@
  * This is NOT a general currency formatter and must not become one. The web
  * app's `formatNaira()` owns display; duplicating it here would create a second
  * place where money changes representation, and every such place is somewhere a
- * rounding bug can live. The one legitimate case is an error message that has
- * to name a limit, because "your rate must be between 2000000 and 300000000"
- * is not a sentence anyone can act on.
+ * rounding bug can live.
+ *
+ * Two cases legitimately need it on this side:
+ *
+ *   - an error message naming a limit, because "your rate must be between
+ *     2000000 and 300000000" is not a sentence anyone can act on;
+ *   - notification copy (#38), which is read by a client in an SMS or an email
+ *     that never passes through the web app at all.
+ *
+ * Both are text for a person. Anything returning a figure to a CALLER still
+ * returns kobo.
  */
 
 const KOBO_PER_NAIRA = 100;

@@ -29,7 +29,10 @@ const {
   writeOffLiabilities,
   reclassifyAsArtistFault,
   resolveDispute,
+  releaseBooking,
+  refundBooking,
 } = require('../services/escrowService.ts');
+const bookingAdminService = require('../services/bookingAdminService.ts');
 const payoutService = require('../services/payoutService.ts');
 const disputeService = require('../services/disputeService.ts');
 const enforcementService = require('../services/enforcementService.ts');
@@ -828,5 +831,144 @@ function historyEntry(row: any) {
     setBy: row.setBy ? { email: row.setBy.email, role: row.setBy.role } : null,
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// Operational visibility — issue #37, docs/07 §7
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /admin/bookings
+ *
+ * Filterable by state, event date and value. An unrecognised filter value is a
+ * 400 rather than a silently ignored parameter: a dropped filter returns a full
+ * list that looks like a filtered one, and the reader cannot tell.
+ */
+router.get(
+  '/admin/bookings',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      res.json(await bookingAdminService.listBookings(req.query as Record<string, unknown>));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /admin/bookings/:id
+ *
+ * State history, check-in record, terms acknowledgement and the reconciled
+ * ledger — with the net position computed here rather than in the view, because
+ * a screen that adds up money itself is a second implementation of the
+ * arithmetic, and the one that disagrees with the ledger is the one people read.
+ */
+router.get(
+  '/admin/bookings/:id',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: Req, res: Res, next: Next) => {
+    try {
+      res.json(await bookingAdminService.bookingDetail(req.params.id));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * The written reason every manual money movement carries.
+ *
+ * Mandatory at the endpoint, not in the service: `releaseBooking` takes an
+ * optional reason because the AUTOMATED paths legitimately have none — an
+ * auto-release has a grace period, not a justification. A manual one has a
+ * person behind it, and a money movement without a recorded justification is
+ * indefensible later (docs/07 §5).
+ */
+function requireWrittenReason(body: any): string {
+  const reason = body?.reason;
+  if (typeof reason !== 'string' || reason.trim().length === 0) {
+    throw new AppError(400, 'Record why you are moving this money. The reason is kept with the booking.');
+  }
+  if (reason.trim().length < 10) {
+    // "ok" and "fixed" are not reasons. The bar is low deliberately — this is
+    // about leaving something readable behind, not about paperwork.
+    throw new AppError(400, 'Give a little more detail — this is the only explanation the record will have.');
+  }
+  return reason.trim().slice(0, 2000);
+}
+
+/**
+ * POST /admin/bookings/:id/release
+ *
+ * The safety valve for cases the automated paths do not cover — a client who
+ * will not confirm and will not dispute, a booking stuck by a bug we have since
+ * fixed.
+ *
+ * Goes through `escrowService`, which stays the sole money-mover. This endpoint
+ * adds exactly two things: the role check and the mandatory reason.
+ */
+router.post(
+  '/admin/bookings/:id/release',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const reason = requireWrittenReason(req.body);
+
+      const release = await releaseBooking({ bookingId: req.params.id, reason });
+
+      await prisma.$transaction((tx: PrismaTx) =>
+        recordAudit(tx, {
+          actorUserId: req.user.id,
+          action: 'BOOKING_MANUALLY_RELEASED',
+          entityType: 'Booking',
+          entityId: req.params.id,
+          reason,
+          after: { state: 'RELEASED' },
+        })
+      );
+
+      res.json({ release });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /admin/bookings/:id/refund
+ *
+ * The same valve in the other direction.
+ */
+router.post(
+  '/admin/bookings/:id/refund',
+  requireAuth,
+  requireRole('ADMIN', 'SUPER_ADMIN'),
+  async (req: AuthedReq, res: Res, next: Next) => {
+    try {
+      const reason = requireWrittenReason(req.body);
+
+      const refund = await refundBooking({ bookingId: req.params.id, reason });
+
+      await prisma.$transaction((tx: PrismaTx) =>
+        recordAudit(tx, {
+          actorUserId: req.user.id,
+          action: 'BOOKING_MANUALLY_REFUNDED',
+          entityType: 'Booking',
+          entityId: req.params.id,
+          reason,
+          after: { state: 'REFUNDED' },
+        })
+      );
+
+      res.json({ refund });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 module.exports = { router };
