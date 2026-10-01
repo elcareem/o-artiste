@@ -6352,3 +6352,107 @@ npm run build --workspace apps/web → /check-in/[id] and its proxy registered
 `canCheckIn` is asserted against the backend's own `ALLOWED_TRANSITIONS`, read
 from source — the same technique `booking-status.test.ts` uses — so the form and
 the backend cannot drift into offering a code field the API will refuse.
+
+---
+
+## #40 — End-to-end sandbox verification
+
+Branch `test/40-e2e-sandbox`. `npm run e2e`, or `scripts/e2e-sandbox-test.sh`.
+
+### What it is, and the decision behind it
+
+**EscrowPay's public API cannot fund a sandbox escrow.** Probed against the live
+test book on 1 Oct 2026: a transaction activates to `pending_funding`, and
+`POST /charges` returns a pending bank transfer whose `next_action` is
+`display_bank_transfer`. Only the hosted checkout page can complete it in test
+mode, and its "pay" action lives in the provider's private front-end bundle —
+not something to build a test suite on.
+
+So the script has two provider modes:
+
+- **simulator** (default) — a local HTTP server speaking EscrowPay's REST API,
+  with `ESCROWPAY_BASE_URL` pointed at it. Our client runs **unmodified**;
+  nothing in `src/` is patched. Its behaviour is what the sandbox was observed to
+  do: unique parties and accounts, draft-then-activate, the `{data}` envelope,
+  `{detail:{code,message}}` errors, `{items}` for wallets, webhooks with
+  `data: {}`. It adds two invariants a mock usually lacks: **an escrow cannot
+  disburse more than it holds**, and **our wallet cannot pay out more than was
+  released into it**.
+- **sandbox** (`E2E_PROVIDER=sandbox`) — every provider call goes to the real
+  test book; at each funding step a person pays the printed hosted-checkout URL.
+  Refuses to run unless the key starts `sk_test_`.
+
+The script plays a client, an artist and an admin over HTTP, each with their own
+token. Where a scenario needs time to pass — an event ending, a grace period
+expiring — `timeTravel` rewrites the booking's times and **prints every use**.
+
+### Acceptance criteria
+
+**"The script runs start to finish against sandbox credentials and exits zero."**
+**Partly met.** Simulator mode: 15/15 scenarios, exit 0, unattended. Sandbox mode
+is built and needs a person to pay each booking (open item `docs/00` §11.12), and
+has not been run end to end — recorded as not ticked.
+
+**"Every scenario reconciles to zero in the ledger."** Every scenario ends with
+`assertReconciles`, which checks two things: our ledger sums to zero **as read
+through the admin view**, and **the provider's escrow holds nothing**. The second
+half is what found the bugs below.
+
+**"The webhook replay assertion fails if idempotency is deliberately broken."**
+A scenario breaks idempotency at both layers it has — deletes the `WebhookEvent`
+row and rewinds the booking to `PENDING_PAYMENT` — replays the funded event, and
+requires the assertion to **report** duplication. It does: `ledger entries 2 → 4;
+ledger sum -20000000 → -40000000; state transitions 2 → 3`.
+
+### Three money bugs it found
+
+**1. Our commission was never collected — on any booking.** Every money-out path
+released the artist's *net* from escrow. With payout set to `manual`, a release
+lands in our wallet and `payOut` sends the artist their share, so the commission
+was simply left inside the escrow, permanently. Root cause: a release used to pay
+the artist directly; #26 found automatic payout disabled and added the wallet
+leg, and nobody revisited the release amounts. The comment above the release
+still said *"only the artist's share leaves escrow"*, and so did the unit test
+that asserted it.
+
+**2. On a client cancellation the artist's compensation was never paid.**
+`cancelByClient` released it into our wallet and stopped — the same gap #26
+found on the completion path.
+
+**3. A failed payout was never recorded.** Webhook handlers treated `object_id`
+as a transaction id, but on `payout.*` and `release.*` it is the payout's or
+release's own id. So `payout.failed` matched no booking, logged a line, and
+changed nothing: the booking kept claiming the artist was paid and
+`awaitingPayout` never listed it.
+
+**Our ledger balanced through all three**, because it records entitlement, not
+where money physically sits. That is the argument for the provider-side check.
+
+### Proof the run has teeth for each
+
+| Reverted | Result |
+|---|---|
+| The release amounts | 5/15 pass; the provider still holds ₦10,000 on every completed booking |
+| The webhook lookup | the failed-payout scenario fails: "the booking still says the artist was paid" |
+| Idempotency (deliberately broken in-run) | the replay assertion reports duplication |
+
+The unit tests were corrected and given the same teeth: reverting the release
+amounts fails 7 assertions across `release`, `disputeResolution` and
+`clientCancellation`. Each recorder now captures the payout leg, which none did —
+and the release-test fixtures had no payout account, so that leg had never run.
+
+### Verification
+
+```
+npm run e2e                   → 15/15 scenarios passed — 175 provider calls, 46 webhooks, exit 0
+npm run test:backend          → # tests 468  # pass 468  # fail 0
+npm test --workspace apps/web → # tests 92   # pass 92   # fail 0
+npm run check:rules           → passed 14  failed 0  skipped 0
+typecheck / lint              → clean
+```
+
+### Not settled here
+
+**Open item §11.1** (does a refund incur the payout fee) needs one real sandbox
+refund with `GET /transactions/{id}/fees` read afterwards. Sandbox mode can now do
+it, with a person paying one booking.

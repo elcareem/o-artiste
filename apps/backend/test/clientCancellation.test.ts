@@ -188,6 +188,9 @@ async function funded({
       location: 'Lagos',
       baseRateKobo: amountKobo,
       profileComplete: true,
+      // So the compensation payout leg runs rather than stopping at "no
+      // account on file" — the leg whose absence #40 found.
+      payoutAccountId: `PAC_${uniq()}`,
     },
   });
 
@@ -266,6 +269,13 @@ function recordingProvider() {
         calls.push({ leg: 'refund', amountKobo: args.amountKobo, reference: args.reference });
         return { id: `RFD_${uniq()}`, status: 'completed' };
       },
+      // The leg that pays the artist out of our wallet. Recording only the two
+      // escrow legs is how its complete absence went unnoticed until #40.
+      listWallets: async () => ({ items: [{ id: 'WAL_test', currency: 'NGN', enabled: true }] }),
+      walletPayout: async (args: any) => {
+        calls.push({ leg: 'payout', amountKobo: args.amountKobo, reference: args.reference });
+        return { id: `PYO_${uniq()}`, status: 'processing' };
+      },
     },
   };
 }
@@ -329,12 +339,36 @@ describe('each tier produces the documented split', async () => {
     // The artist is instructed BEFORE the client. Both legs are retryable, so
     // the order decides who waits — and it is not the party who chose this.
     const legs = provider.calls.map((c) => c.leg);
+    const amountOf = (name: string) => provider.calls.find((c) => c.leg === name)?.amountKobo ?? 0;
+
     if (expectedCompensation > 0) {
-      assert.deepEqual(legs, ['release', 'refund'], `${daysOut} days out: wrong order`);
+      // Release, refund, then the artist actually paid from our wallet. The
+      // payout leg was missing entirely: the compensation reached our wallet and
+      // stayed there (#40).
+      assert.deepEqual(legs, ['release', 'refund', 'payout'], `${daysOut} days out: wrong legs or order`);
+
+      // The release is the artist's GROSS share — compensation plus our
+      // commission on it. Releasing only the compensation left the commission
+      // inside the escrow for good.
+      assert.equal(
+        amountOf('release'),
+        expectedCompensation + commission,
+        `${daysOut} days out: the release should carry the commission too`
+      );
+      assert.equal(amountOf('payout'), expectedCompensation, `${daysOut} days out: the artist paid their compensation`);
     } else {
       // A zero leg is skipped, not sent as a zero-amount instruction.
       assert.deepEqual(legs, ['refund'], `${daysOut} days out: a zero leg was sent`);
     }
+
+    // BETWEEN THEM THE ESCROW LEGS EMPTY IT. This is the assertion that would
+    // have caught the stranded commission the day it was written: our ledger
+    // balanced, but the provider was still holding money nobody would move.
+    assert.equal(
+      amountOf('release') + amountOf('refund'),
+      N(200000),
+      `${daysOut} days out: money left behind in the escrow`
+    );
 
     const entries = await prisma.ledgerEntry.findMany({ where: { bookingId: booking.id } });
     assert.equal(
@@ -542,7 +576,8 @@ describe('cancelling twice does not pay twice', async () => {
   await withProvider(provider.overrides, () =>
     call('POST', `/bookings/${booking.id}/cancel`, token, {})
   );
-  assert.equal(provider.calls.length, 2);
+  // Release, refund, and the artist's payout.
+  assert.equal(provider.calls.length, 3);
 
   // The second attempt must not reach the provider at all.
   const second = await withProvider(

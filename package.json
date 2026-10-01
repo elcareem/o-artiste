@@ -17,7 +17,8 @@
     "lint": "npm run lint --workspace apps/web",
     "check:rules": "bash scripts/check-rules.sh",
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspace apps/backend && npm run typecheck --workspace apps/web"
+    "typecheck": "npm run typecheck --workspace apps/backend && npm run typecheck --workspace apps/web",
+    "e2e": "scripts/e2e-sandbox-test.sh"
   },
   "overrides": {
     "qs": "^6.16.0"

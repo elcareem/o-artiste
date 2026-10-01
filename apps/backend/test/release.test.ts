@@ -104,6 +104,11 @@ async function readyToRelease({ amountKobo = N(200000), commissionBps = 500, art
         location: 'Lagos',
         baseRateKobo: amountKobo,
         profileComplete: true,
+        // So the payout leg actually runs. Without one, payOut stops at
+        // "no account on file" and the leg that pays the artist is never
+        // exercised — which is how a release sending the wrong amount into our
+        // wallet went unnoticed until #40.
+        payoutAccountId: `PAC_${uniq()}`,
       },
     }));
 
@@ -145,14 +150,29 @@ async function withProvider(overrides: Record<string, any>, fn: () => any) {
 }
 
 /** Records every release call so the amount and idempotency key can be asserted. */
+/**
+ * Records BOTH legs of a release, tagged.
+ *
+ * A release moves escrow into our wallet; `payOut` then sends the artist their
+ * net. Recording only the first leg is how a release of the wrong amount went
+ * unnoticed — every assertion here was about a figure that reached our wallet,
+ * and none about the one that reached the artist.
+ */
 function recordingProvider(calls: any[], impl?: (args: any) => any) {
   return {
     release: async (args: any) => {
-      calls.push(args);
+      calls.push({ leg: 'release', ...args });
       return impl ? impl(args) : { id: `REL_${calls.length}`, status: 'completed' };
+    },
+    listWallets: async () => ({ items: [{ id: 'WAL_test', currency: 'NGN', enabled: true }] }),
+    walletPayout: async (args: any) => {
+      calls.push({ leg: 'payout', ...args });
+      return { id: `PYO_${calls.length}`, status: 'processing' };
     },
   };
 }
+
+const leg = (calls: any[], name: 'release' | 'payout') => calls.filter((c) => c.leg === name);
 
 // ── Criterion: a ₦200,000 booking at 5% disburses to the artist ─────────────
 
@@ -174,9 +194,23 @@ describe('a ₦200,000 booking at 5% disburses ₦190,000 to the artist', async 
   assert.equal(result.moneyOutFeeKobo, N(70), 'the payout fee, borne by the platform');
   assert.equal(result.platformNetKobo, N(9930), 'so the platform nets ₦9,930');
 
-  // The amount that actually left escrow, not just the computed figure.
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].amountKobo, N(190000), 'only the artist share leaves escrow');
+  // What actually moved, leg by leg — not just the computed figure.
+  //
+  // THE WHOLE ESCROW leaves, into our wallet, because a release goes to us
+  // (`payout_preference: manual`). This assertion used to say ₦190,000 with the
+  // message "only the artist share leaves escrow" — which encoded the bug: our
+  // ₦10,000 commission was left inside the escrow for good, and the ledger
+  // balanced regardless. Found by #40's check of the provider's held balance.
+  assert.equal(leg(calls, 'release').length, 1);
+  assert.equal(leg(calls, 'release')[0].amountKobo, N(200000), 'the whole escrow, commission included, into our wallet');
+
+  // And the artist is paid their net from there.
+  assert.equal(leg(calls, 'payout').length, 1);
+  assert.equal(leg(calls, 'payout')[0].amountKobo, N(190000), 'the artist receives ₦190,000');
+  assert.ok(
+    calls.indexOf(leg(calls, 'release')[0]) < calls.indexOf(leg(calls, 'payout')[0]),
+    'paid out only after it was released into the wallet'
+  );
 
   const after = await prisma.booking.findUnique({ where: { id: booking.id } });
   assert.equal(after.state, 'RELEASED');
@@ -219,7 +253,11 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
   assert.equal(result.artistNetKobo, N(190000), 'earned');
   assert.equal(result.liabilitySettledKobo, N(2070), 'recovered');
   assert.equal(result.artistPayoutKobo, N(190000) - N(2070), 'disbursed');
-  assert.equal(calls[0].amountKobo, N(190000) - N(2070), 'and that is what left escrow');
+  // The whole escrow into our wallet; the artist paid their net LESS what they
+  // owed. The ₦2,070 recovered stays in our wallet, which is where the fees it
+  // repays were fronted from.
+  assert.equal(leg(calls, 'release')[0].amountKobo, N(200000), 'the whole escrow into our wallet');
+  assert.equal(leg(calls, 'payout')[0].amountKobo, N(190000) - N(2070), 'and the artist is paid net of what they owed');
 
   const settled = await prisma.feeLiability.findUnique({ where: { id: liability.id } });
   assert.equal(settled.status, 'SETTLED');
@@ -331,7 +369,8 @@ describe('a booking created before a commission change pays out at its snapshott
   assert.equal(result.commissionRateBpsSnapshot, 500);
   assert.equal(result.commissionKobo, N(10000), '5%, not 9%');
   assert.equal(result.artistPayoutKobo, N(190000), 'the artist gets the terms they accepted');
-  assert.equal(calls[0].amountKobo, N(190000));
+  assert.equal(leg(calls, 'release')[0].amountKobo, N(200000));
+  assert.equal(leg(calls, 'payout')[0].amountKobo, N(190000), 'paid at the snapshotted 5%, not the live 9%');
 });
 
 // ── Ordering, idempotency and failure ───────────────────────────────────────
@@ -368,11 +407,12 @@ describe('a retry after a recording failure reuses the same idempotency key', as
   );
 
   assert.equal(second.alreadyReleased, true);
-  assert.equal(calls.length, 1, 'the provider was not called a second time');
+  assert.equal(leg(calls, 'release').length, 1, 'the provider was not asked to release a second time');
+  assert.equal(leg(calls, 'payout').length, 1, 'nor to pay the artist a second time');
 
   // And the key is stable, so a genuine retry before our record landed would
   // return the original release rather than paying twice.
-  assert.equal(calls[0].reference, `${booking.escrowReference}_release`);
+  assert.equal(leg(calls, 'release')[0].reference, `${booking.escrowReference}_release`);
 
   const r = await ledger.reconcile(booking.id);
   assert.equal(r.entries.filter((e: any) => e.entryType === 'RELEASED').length, 1);

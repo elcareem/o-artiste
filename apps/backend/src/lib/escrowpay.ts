@@ -357,6 +357,21 @@ function getEscrow(transactionId: string): Promise<ProviderTransaction> {
 }
 
 /**
+ * A release or refund by its own id — to find which transaction it belongs to.
+ *
+ * Webhook payloads are documented as `data: {}`: a `release.completed` carries
+ * the RELEASE id as `object_id` and may carry nothing else. Without these, an
+ * event about a release cannot be tied back to its booking at all (#40).
+ */
+function getRelease(releaseId: string): Promise<any> {
+  return request({ method: 'GET', path: `/releases/${releaseId}` });
+}
+
+function getRefund(refundId: string): Promise<any> {
+  return request({ method: 'GET', path: `/refunds/${refundId}` });
+}
+
+/**
  * Releases funds to the beneficiary.
  *
  * Partial releases are supported, so `amountKobo` is explicit rather than
@@ -674,6 +689,8 @@ module.exports = {
   createPaymentAccount,
   createCheckoutSession,
   getEscrow,
+  getRelease,
+  getRefund,
   release,
   refund,
   onboardParty,
