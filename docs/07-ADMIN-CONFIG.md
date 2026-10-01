@@ -103,3 +103,19 @@ The answer is in the ledger, but **only if it is legible.** A list of raw entrie
 Booking detail must surface: full state history, the check-in record, the terms acknowledgement from #16, and all ledger entries — with a completed booking's entries **summing to zero in the view**, not just in the database.
 
 Manual release and refund exist as a safety valve for cases the automated paths do not cover. Both require a written reason, per §5.
+
+### As built
+
+**The state history did not exist.** `Booking.state` holds where a booking *is*, overwritten on every transition, so "how did it get here" had no answer. The milestone timestamps (`fundedAt`, `releasedAt`, …) cover the happy path and only the happy path — a booking that went to `DISPUTED` and back leaves no trace in them.
+
+`BookingStateTransition` is append-only and written **inside `transition()`'s existing compare-and-swap transaction**, so the state and its history cannot disagree; a history written afterwards has a hole wherever a request died between the two writes. Enforced by `check:rules` like the ledger.
+
+`actorUserId` is nullable on purpose. An auto-release firing on a grace period and a webhook confirming funds have no human behind them, and recording that absence is the honest answer to "who did this" — requiring an actor would make the automated transitions the ones with no record. Bookings predating the table are shown with their timeline derived from the timestamps and each entry marked `reconstructed`, because an admin deciding whether to move money needs to know which entries are recorded facts and which are inferred.
+
+**The reconciliation is computed by the backend, never by the view.** `netByParty` and `sumKobo` come from `ledgerService.reconcile`. A screen that adds up money itself is a second implementation of the arithmetic, and the one that disagrees with the ledger is the one people read.
+
+The detail payload also carries a `projection` from `computeCompletion`. The ledger's artist position is zero until a release happens — which is every booking where the release button is actually offered — so a button reading the ledger would say "release ₦0". The projection comes from the same function the real release uses.
+
+**An unbalanced ledger is only reported on a concluded booking.** A booking in flight legitimately does not sum to zero: money is held and nothing has been paid out. Warning on those would put a red banner on every healthy booking until it settled, which is how a real warning stops being read. A concluded booking with *no* entries is called out separately, because an empty ledger sums to zero and passes the balance check.
+
+**Filters are refused, not ignored.** An unrecognised state or an unreadable date is a 400. A silently dropped filter returns the full list looking like a filtered one, and the reader cannot tell — on a screen whose purpose is answering a specific question about a specific booking, that is worse than an error.

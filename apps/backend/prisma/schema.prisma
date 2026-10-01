@@ -186,6 +186,7 @@ model User {
   strikeRules    StrikeRule[]   @relation("StrikeRuleAuthor")
   enforcementRules EnforcementRule[] @relation("EnforcementRuleAuthor")
   reputationConfigs ReputationConfig[] @relation("ReputationConfigAuthor")
+  bookingTransitions BookingStateTransition[] @relation("TransitionActor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -353,6 +354,7 @@ model Booking {
   termsAcknowledgement TermsAcknowledgement?
   disputes             Dispute[]
   ledgerEntries        LedgerEntry[]
+  stateTransitions     BookingStateTransition[]
   strikes              Strike[]
   feeLiabilities       FeeLiability[]        @relation("LiabilityOrigin")
   settledLiabilities   FeeLiability[]        @relation("LiabilitySettlement")
@@ -525,6 +527,44 @@ model TermsAcknowledgement {
 ///
 /// Every entry is written INSIDE the same database transaction as the state
 /// change it accompanies.
+/// Every state change a booking has ever made — issue #37.
+///
+/// The `state` column holds where a booking IS. It is overwritten on every
+/// transition, so without this table the question "how did it get here" has no
+/// answer, and that is the question an admin is being asked when a client
+/// emails about an amount they did not expect.
+///
+/// The milestone timestamps on Booking (`fundedAt`, `releasedAt`, …) cover the
+/// happy path, but only the happy path: a booking that went to DISPUTED and
+/// back, or a transition that has no timestamp column, leaves no trace in them.
+///
+/// APPEND-ONLY, for the same reason as LedgerEntry: a history that can be
+/// edited is not a history. Enforced by `npm run check:rules`.
+model BookingStateTransition {
+  id        String  @id @default(cuid())
+  bookingId String
+  booking   Booking @relation(fields: [bookingId], references: [id])
+
+  /// Null on the row recording a booking's creation — there is no prior state.
+  fromState BookingState?
+  toState   BookingState
+
+  /// Null where no human caused it: an auto-release firing on a grace period,
+  /// or a provider webhook confirming funds landed. That absence is itself the
+  /// answer to "who did this" and must be recordable, so requiring an actor
+  /// here would make the automated transitions the ones with no record.
+  actorUserId String?
+  actor       User?   @relation("TransitionActor", fields: [actorUserId], references: [id])
+
+  /// What moved it. Mandatory for manual admin actions, enforced at the
+  /// endpoint rather than by the column, which cannot distinguish them.
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([bookingId, createdAt])
+}
+
 model LedgerEntry {
   id        String  @id @default(cuid())
   bookingId String

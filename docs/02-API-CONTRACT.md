@@ -212,8 +212,8 @@ Evidence is refused once a dispute is decided: after a ruling there is nothing f
 
 | Method | Path | Auth |
 |---|---|---|
-| `GET` | `/admin/bookings` | `ADMIN` |
-| `GET` | `/admin/bookings/:id` | `ADMIN` |
+| `GET` | `/admin/bookings` | `ADMIN` — filterable by `state`, `from`, `to`, `minKobo`, `maxKobo`; an unrecognised value is a 400, never ignored |
+| `GET` | `/admin/bookings/:id` | `ADMIN` — state history, check-in, terms acknowledgement, reconciled ledger, and the projected completion |
 | `POST` | `/admin/bookings/:id/release` | `ADMIN` — written reason mandatory |
 | `POST` | `/admin/bookings/:id/refund` | `ADMIN` — written reason mandatory |
 | `GET` | `/admin/disputes` | `ADMIN` |

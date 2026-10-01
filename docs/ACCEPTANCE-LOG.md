@@ -6047,3 +6047,83 @@ npm run lint / build          → clean
 
 Verified by breaking it: removing the threshold check turned the two tests that
 exist for it red.
+
+---
+
+## #37 — Admin bookings and ledger views
+
+Branch `feat/37-admin-bookings`.
+
+### The dependency that was missing
+
+**Booking state transitions were not recorded anywhere.** `transition()`
+overwrote `Booking.state` and nothing else, so #37's "full state history" had no
+source. The milestone timestamps cover the happy path only — a booking that went
+to `DISPUTED` and back leaves no trace in them.
+
+`BookingStateTransition` is append-only and written inside `transition()`'s
+existing compare-and-swap transaction, so the state and its history cannot
+disagree. `check:rules` gained a twelfth rule forbidding update and delete on it,
+the same guard the ledger has.
+
+### Acceptance criteria
+
+**"A completed booking's ledger entries sum to zero in the view."** A booking is
+carried through funding, confirmation and release, and the detail payload is
+asserted to report `sumKobo: 0` and `balanced: true` — the number the admin
+reads, not just the database invariant `assertBalanced` already protects. The
+per-party positions are asserted to sum to zero independently, and a
+`COMMISSION` entry is asserted present, because "why ₦188,000 and not ₦200,000"
+has to be answerable by reading.
+
+This test initially asserted the client's net was `-amountKobo` and failed with
+`-20,200,000`. The ledger was right: the client bears the money-in fee on top of
+the amount (#18). The assertion now computes it through `moneyInFee`.
+
+**"A manual action without a written reason is rejected."** Five bodies — absent,
+empty, blank, whitespace, and the two-character `"ok"` — are rejected with 400
+for both release and refund, and the booking's state and timestamps are re-read
+afterwards to confirm nothing moved. A 400 that still released would be the worst
+available outcome.
+
+**"The terms acknowledgement from #16 is retrievable from the booking detail."**
+Acknowledged through the real endpoint while the booking is `PENDING_PAYMENT`,
+then read back from the admin detail with the tiers as displayed. A booking with
+no acknowledgement returns the field as `null` rather than omitting it — an
+absent key reads as "this screen does not show that", which is a different
+statement from "this did not happen".
+
+**"A reclassified cancellation shows both original and offsetting entries."** A
+client cancellation inside the 1–2 day band is reclassified as artist fault. The
+entry count is asserted to grow, every original id is asserted still present,
+every `CORRECTION` is asserted to name an entry that is itself in the view, and
+the client's net position is asserted back to zero.
+
+### Two mistakes caught by their own tests
+
+**The manual-release button would have offered "Release ₦0."** It read the
+artist's net position from the ledger, which is zero until a release happens —
+i.e. on every booking where the button is actually available. The backend now
+returns a `projection` from `computeCompletion`, the same function the real
+release uses.
+
+**Then the projection subtracted the payout fee from the artist's share.** It is
+borne by the platform and reduces our take, not theirs (#18). A test now asserts
+the artist's share equals the amount less commission, and explicitly asserts it
+does *not* equal that figure minus the payout fee.
+
+### Verification
+
+```
+npm run test:backend          → # tests 420  # pass 420  # fail 0   (404 + 16 new)
+npm test --workspace apps/web → # tests 54   # pass 54   # fail 0   (41 + 13 new)
+npm run check:rules           → passed 12  failed 0  skipped 0
+npm run typecheck             → 0 errors
+npm run lint                  → clean
+npm run build --workspace apps/web → /admin/bookings, /admin/bookings/[id],
+                                     /api/admin/bookings/[id]/[action] registered
+```
+
+The web proxy at `api/admin/bookings/[id]/[action]` allowlists `release` and
+`refund`. Forwarding the segment verbatim would have made it a tunnel to
+anything added under `/admin/bookings/:id/*` later.

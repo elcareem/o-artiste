@@ -82,6 +82,15 @@ absent "No ledger update or delete path" \
        "apps/backend/src apps/backend/test apps/backend/prisma apps/web/src" \
        'ledgerEntry\.(update|delete|updateMany|deleteMany|upsert)'
 
+# ── Append-only booking history — issue #37 ─────────────────────────────────
+# The same argument as the ledger: a history that can be edited is not a
+# history. The state column already holds where a booking IS, so the only
+# purpose of this table is being the record of how it got there.
+absent "No booking state history update or delete path" \
+       "The booking state history is append-only; it is the record of how a booking reached its state. docs/07 §7." \
+       "apps/backend/src apps/backend/test apps/backend/prisma apps/web/src" \
+       'bookingStateTransition\.(update|delete|updateMany|deleteMany|upsert)'
+
 # The transaction guard in ledgerService is only unbypassable while that module
 # is the sole writer. A second writer reintroduces exactly the orphaned-row and
 # lost-entry failures the guard exists to prevent, so the restriction is
