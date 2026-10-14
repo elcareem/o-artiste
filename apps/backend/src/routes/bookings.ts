@@ -74,6 +74,22 @@ function publicBooking(booking: BookingRow) {
 }
 
 /**
+ * GET /me/bookings — the caller's own bookings, with what needs their attention
+ * first. Issue #45.
+ *
+ * Scoped by the relation the caller is on, never by a parameter, so there is no
+ * id to substitute. Admins use /admin/bookings.
+ */
+router.get('/me/bookings', requireAuth, requireRole('CLIENT', 'ARTIST'), async (req: AuthedReq, res: Res, next: Next) => {
+  try {
+    const { listMyBookings } = require('../services/myBookingsService.ts');
+    res.json({ bookings: await listMyBookings({ userId: req.user.id, role: req.user.role }) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /bookings
  *
  * `requireVerified` closes #10's deferred criterion: an unverified client

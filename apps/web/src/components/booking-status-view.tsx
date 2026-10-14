@@ -14,6 +14,7 @@ import {
 import { Copyable } from './copyable';
 import { CancelBooking } from './cancel-booking';
 import { isPresentable, unreachable } from '@/lib/error-messages';
+import { formatLagos } from '@/lib/dates';
 
 /**
  * The post-checkout status page — issue #21.
@@ -239,7 +240,7 @@ function Message({ title, body }: { title: string; body: string }) {
 function formatEventDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('en-NG', { dateStyle: 'full' }).format(date);
+  return formatLagos(date, 'date') ?? '—';
 }
 
 /**

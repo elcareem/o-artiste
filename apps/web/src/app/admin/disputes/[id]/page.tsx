@@ -7,6 +7,7 @@ import { formatNaira } from '@/lib/currency';
 import { checkInVerdict, contradictsNoShowClaim, type DisputeDetail } from '@/lib/disputes';
 import { DisputeResolution } from '@/components/dispute-resolution';
 import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
+import { formatLagos } from '@/lib/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,7 +80,7 @@ export default async function AdminDisputePage({
       </h1>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
         {formatNaira(dispute.booking.amountKobo)} held since{' '}
-        {new Date(dispute.openedAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })}
+        {formatLagos(dispute.openedAt, 'shortDate')}
       </p>
 
       {/* ABOVE THE FOLD. docs/04 §6. */}
