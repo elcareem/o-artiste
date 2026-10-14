@@ -206,9 +206,12 @@ router.get(
         database: await checkDatabase(),
         queue: await checkQueue(),
         configuration: describeConfiguration(),
+        // Whether our fee constants are still the provider's prices — it has
+        // changed them without notice (feeScheduleService).
+        feeSchedule: await require('../services/feeScheduleService.ts').checkFeeSchedule(),
       };
 
-      const failing = [checks.database, checks.queue].filter((c) => !c.ok).length;
+      const failing = [checks.database, checks.queue, checks.feeSchedule].filter((c) => !c.ok).length;
 
       // 503 when something is genuinely broken, so this can be pointed at by a
       // monitor rather than read by a person who happens to look.

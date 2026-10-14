@@ -26,7 +26,13 @@
 const BPS_DENOMINATOR = 10000;
 
 // --- EscrowPay money-in: 1.5% + ₦100, capped at ₦2,000 up to ₦250,000;
-//     0.8% uncapped above. docs/05 §1.
+//     0.8% + ₦100, uncapped, above. docs/05 §1.
+//
+//     The upper tier was 0.8% flat until the provider's fee configuration v2,
+//     effective 8 October 2026 — changed without notice and found two weeks
+//     later. `feeScheduleService` now compares these constants against the
+//     provider's published configuration, so the next change is caught the day
+//     it happens (GET /admin/diagnostics).
 const MONEY_IN_THRESHOLD_KOBO = 25000000; // ₦250,000
 const MONEY_IN_LOW_BPS = 150; // 1.5%
 const MONEY_IN_FLAT_KOBO = 10000; // ₦100
@@ -62,8 +68,10 @@ function moneyInFee(amountKobo: Kobo): Kobo {
   assertInteger(amountKobo, 'amountKobo');
 
   if (amountKobo > MONEY_IN_THRESHOLD_KOBO) {
-    // Uncapped above the threshold.
-    return applyBps(amountKobo, MONEY_IN_HIGH_BPS);
+    // Uncapped above the threshold — and fixed-plus-percentage on BOTH tiers
+    // since v2, so the schedule steps up by ₦100 across ₦250,000 rather than
+    // meeting exactly at ₦2,000.
+    return applyBps(amountKobo, MONEY_IN_HIGH_BPS) + MONEY_IN_FLAT_KOBO;
   }
 
   const uncapped = applyBps(amountKobo, MONEY_IN_LOW_BPS) + MONEY_IN_FLAT_KOBO;
@@ -318,6 +326,9 @@ module.exports = {
   BPS_DENOMINATOR,
   MONEY_IN_THRESHOLD_KOBO,
   MONEY_IN_CAP_KOBO,
+  MONEY_IN_FLAT_KOBO,
+  MONEY_IN_LOW_BPS,
+  MONEY_IN_HIGH_BPS,
   MONEY_OUT_THRESHOLD_KOBO,
   MONEY_OUT_LOW_KOBO,
   MONEY_OUT_HIGH_KOBO,

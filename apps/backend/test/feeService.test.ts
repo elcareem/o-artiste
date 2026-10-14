@@ -42,17 +42,25 @@ test('the canonical ₦200,000 booking, under the provider’s fee bearers', () 
 // ---------------------------------------------------------------------------
 
 test('money-in at the ₦250,000 boundary, both sides', () => {
-  // #14 names these. At exactly ₦250,000 the cap and the upper rate coincide:
-  // ₦2,000 is precisely 0.8% of ₦250,000, so the schedule is CONTINUOUS here.
+  // #14 names these. ₦250,000 itself is in the LOWER tier (the provider's
+  // `up_to_minor` is inclusive), so it is capped at ₦2,000.
   assert.equal(fee.moneyInFee(N(249999)), N(2000), 'capped');
-  assert.equal(fee.moneyInFee(N(250000)), N(2000), 'cap == 0.8% exactly');
-  // 0.8% of ₦250,001 = 200,000.8 kobo, floored to 200,000.
-  assert.equal(fee.moneyInFee(N(250001)), 200000);
+  assert.equal(fee.moneyInFee(N(250000)), N(2000), 'capped, lower tier inclusive');
 
-  // The curve does not dip across the boundary — #14's technical note calls it
-  // non-monotonic there, which is wrong. ₦260,000 costs MORE than ₦250,000.
-  assert.equal(fee.moneyInFee(N(260000)), N(2080));
-  assert.ok(fee.moneyInFee(N(260000)) > fee.moneyInFee(N(250000)), 'continuous, not a dip');
+  // Above it: 0.8% PLUS ₦100 since the provider's fee configuration v2
+  // (8 October 2026). 0.8% of ₦250,001 = 200,000.8 kobo, floored to 200,000,
+  // plus 10,000. Before v2 this asserted 200,000 — the schedule was continuous
+  // here, and now it steps up by ₦100.
+  assert.equal(fee.moneyInFee(N(250001)), 210000);
+  assert.equal(fee.moneyInFee(N(260000)), N(2180));
+
+  // Still never cheaper above the boundary than at it.
+  assert.ok(fee.moneyInFee(N(250001)) > fee.moneyInFee(N(250000)), 'a step up, not a dip');
+});
+
+test('money-in at the top of the range, under fee configuration v2', () => {
+  // ₦3,000,000: 0.8% is ₦24,000, plus the ₦100 fixed part.
+  assert.equal(fee.moneyInFee(N(3000000)), N(24100));
 });
 
 test('money-in where the cap ACTUALLY starts binding, around ₦126,667', () => {

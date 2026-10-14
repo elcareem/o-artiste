@@ -486,6 +486,17 @@ async function scenario(name: string, fn: () => Promise<string | void>) {
 
   console.log('scenarios');
 
+  await scenario('our fee constants match the provider\'s published prices', async () => {
+    // The provider changed two prices in October 2026 without notice. This reads
+    // the check the way an operator would — through GET /admin/diagnostics.
+    const r = await call('GET', '/admin/diagnostics', admin.token);
+    const fees = r.body?.diagnostics?.feeSchedule;
+    check(fees, 'diagnostics has no feeSchedule check');
+    check(fees.reachable, `could not read the fee configuration: ${fees.detail}`);
+    check(fees.ok && fees.drift.length === 0, `fee drift: ${fees.drift.join(' | ')}`);
+    return fees.detail;
+  });
+
   await scenario('happy path: book → fund → check in → both confirm → release', async () => {
     const p = await newParties('happy');
     const b = await book(p);

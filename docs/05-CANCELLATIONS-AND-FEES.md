@@ -11,7 +11,7 @@ Implemented by **#14** (`feeService.js`, pure), **#27**, **#28**, **#29**. Every
 | Fee | Rule | **Borne by** | **When** |
 |---|---|---|---|
 | **Platform commission** | Configurable bps, default **500** (5%), applied to the artist's gross share | Artist | at release |
-| **EscrowPay money-in** | 1.5% + ₦100, **capped at ₦2,000**, for amounts up to ₦250,000; **0.8% uncapped** above | **Client** | **at funding, on top of the amount** |
+| **EscrowPay money-in** | 1.5% + ₦100, **capped at ₦2,000**, for amounts up to ₦250,000; **0.8% + ₦100 uncapped** above *(the + ₦100 since 8 Oct 2026 — see below)* | **Client** | **at funding, on top of the amount** |
 | **EscrowPay money-out** | **₦40** for payouts up to ₦50,000; **₦70** above | **Platform** | at payout |
 | **Verification** | ₦50 per successful check, **once per person for life** | Platform | at onboarding |
 
@@ -46,9 +46,11 @@ Verification is an onboarding cost and a platform cost. **It never enters per-bo
 
 ### The ₦250,000 boundary
 
-At exactly ₦250,000 the cap and the upper rate coincide: ₦2,000 is precisely 0.8% of ₦250,000. The schedule is therefore **continuous** at that point, and a booking just above it pays fractionally more, not less.
+At exactly ₦250,000 the lower tier still applies (the provider's tier bound is inclusive), so it costs ₦2,000. **Since the provider's fee configuration v2 (8 October 2026) the upper tier is 0.8% + ₦100**, so the schedule now **steps up by ₦100** across the boundary: ₦250,001 costs ₦2,100. Before v2 the two tiers met exactly at ₦2,000 and the schedule was continuous there.
 
-> **Correction to #14's technical note**, which describes the curve as non-monotonic around ₦250,000: it is not. ₦250,000 costs ₦2,000 and ₦260,000 costs ₦2,080, which is an increase. What *is* non-monotonic is the **effective rate across the whole range** — the flat ₦100 makes small bookings expensive in percentage terms, the rate then falls through the capped band from 1.6% down to 0.8%, and sits flat at 0.8% above. Both sides of the boundary are still tested per #14's acceptance criteria; the tests are worth having, the stated reason was just wrong.
+**The provider changes its prices without notice.** v2 was found two weeks after it took effect, during which every booking above ₦250,000 under-recorded the client's fee by ₦100. Our constants are now compared with `GET /fees/configuration` by `feeScheduleService`, and any difference fails `GET /admin/diagnostics` with a 503 — point a monitor at it.
+
+> **Correction to #14's technical note**, which describes the curve as non-monotonic around ₦250,000: it is not. ₦250,000 costs ₦2,000 and ₦260,000 costs ₦2,180 (₦2,080 before v2), which is an increase. What *is* non-monotonic is the **effective rate across the whole range** — the flat ₦100 makes small bookings expensive in percentage terms, the rate then falls through the capped band from 1.6% down to 0.8%, and sits just above 0.8% beyond it. Both sides of the boundary are still tested per #14's acceptance criteria; the tests are worth having, the stated reason was just wrong.
 
 ## 2. Where the cap binds
 
