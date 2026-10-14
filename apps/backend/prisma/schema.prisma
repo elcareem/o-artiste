@@ -170,6 +170,12 @@ model User {
   /// is what stops a network blip from permanently locking a real user out.
   verificationFailureReason String?
   verificationAttempts      Int     @default(0)
+  /// Times the details did not MATCH the NIN/BVN record — separate from
+  /// `verificationAttempts`, which also counts provider outages. A wrong date of
+  /// birth gets a correction; repeated mismatches end in REJECTED, because
+  /// otherwise this endpoint is a way to guess the date of birth behind a stolen
+  /// number.
+  verificationMismatches    Int     @default(0)
   lastVerificationAttemptAt DateTime?
 
   accountStanding       AccountStanding @default(GOOD)

@@ -90,6 +90,7 @@ async function onboardVerifiedParty(label: string, attempts = 5) {
         email: `oartiste.${label}.${Date.now()}.${i}@gmail.com`,
         reference: ref(label),
         consent: true,
+        dateOfBirth: '1990-01-15',
       });
     } catch (err) {
       if ((err as ThrownError).providerCode !== 'identity_already_exists') throw err;
@@ -142,6 +143,7 @@ describe('an odd-digit identifier fails verification with a reason, not a crash'
         email: `oartiste.fail.${Date.now()}@gmail.com`,
         reference: ref('fail'),
         consent: true,
+        dateOfBirth: '1990-01-15',
       }),
     (err: ThrownError) => {
       assert.equal((err as ThrownError).providerCode, 'identity_verification_failed');

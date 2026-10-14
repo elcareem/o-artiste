@@ -186,11 +186,17 @@ function createProviderSimulator({
       if (!body?.type || !body?.identifier || !body?.email) {
         return { status: 422, body: { detail: [{ loc: ['body'], msg: 'Field required' }] } };
       }
+      // Required since October 2026, and checked against the record.
+      if (!body.date_of_birth) {
+        return fail(422, 'date_of_birth_required', 'date_of_birth is required to verify this identity.');
+      }
       if (identifiers.has(body.identifier)) {
         return fail(409, 'identity_already_exists', 'An identity with this identifier already exists in this environment.');
       }
-      // The sandbox's own rule: an odd last digit is a failed verification.
-      if (Number(String(body.identifier).slice(-1)) % 2 === 1) {
+      // The sandbox's own rules: verified records carry date of birth
+      // 1990-01-15, and any other date is a data mismatch; an odd last digit is
+      // a failed verification whatever the date.
+      if (body.date_of_birth !== '1990-01-15' || Number(String(body.identifier).slice(-1)) % 2 === 1) {
         return fail(422, 'identity_verification_failed', 'The identity could not be verified.');
       }
       identifiers.add(body.identifier);

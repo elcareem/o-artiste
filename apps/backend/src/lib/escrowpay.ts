@@ -462,6 +462,7 @@ function onboardParty({
   reference,
   consent,
   consentReference,
+  dateOfBirth,
 }: {
   type: string;
   identifier: string;
@@ -469,6 +470,8 @@ function onboardParty({
   reference: string;
   consent: true;
   consentReference?: string;
+  /** `YYYY-MM-DD`. Required by the provider since October 2026. */
+  dateOfBirth: string;
 }): Promise<any> {
   if (consent !== true) {
     // A programming error, not a user one: the service layer asks the person.
@@ -483,6 +486,7 @@ function onboardParty({
       identifier,
       email,
       consent,
+      date_of_birth: dateOfBirth,
       ...(consentReference ? { consent_reference: consentReference.slice(0, 120) } : {}),
     },
   });

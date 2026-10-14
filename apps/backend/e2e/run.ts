@@ -190,7 +190,7 @@ async function scenario(name: string, fn: () => Promise<string | void>) {
     const actor = { token: body.token, userId: body.user.id, email };
 
     // Identity verification through the provider, as onboarding does it.
-    await expectOk('POST', '/me/verification', actor.token, { method: 'NIN', identifier: freshNin(), consent: true });
+    await expectOk('POST', '/me/verification', actor.token, { method: 'NIN', identifier: freshNin(), consent: true, dateOfBirth: '1990-01-15' });
     return actor;
   }
 

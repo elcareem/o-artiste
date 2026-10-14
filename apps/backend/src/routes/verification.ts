@@ -22,12 +22,13 @@ const router = express.Router();
  */
 router.post('/me/verification', requireAuth, LIMITS.verification, async (req: AuthedReq, res: Res, next: Next) => {
   try {
-    const { method, identifier, consent } = req.body ?? {};
+    const { method, identifier, consent, dateOfBirth } = req.body ?? {};
     const result = await verifyUser({
       userId: req.user.id,
       method,
       identifier,
       consent,
+      dateOfBirth,
       context: { actorIp: req.ip ?? null, actorUserAgent: req.get('user-agent') ?? null },
     });
     res.status(result.cached ? 200 : 201).json({ verification: result });
