@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 
 import { BASE_URL } from '@/lib/api';
-import { authHeader, sessionToken } from '@/lib/session';
+import { authHeader, currentUser, sessionToken } from '@/lib/session';
 import { BookingStatusView } from '@/components/booking-status-view';
 import type { Booking, FundingInstruction } from '@/lib/booking-status';
 import { RETRY, unreachable } from '@/lib/error-messages';
@@ -32,6 +32,13 @@ export default async function BookingStatusPage({
     redirect(`/login?next=${encodeURIComponent(`/booking-status/${id}`)}`);
   }
 
+  // WHO IS LOOKING. This page never said, so its view assumed the client:
+  // an artist reaching a booking from "My bookings" (#45) was shown the
+  // client's cancellation wording. The backend acts on the real role either
+  // way; the page now describes what will actually happen to them.
+  const viewer = await currentUser();
+  const party: 'CLIENT' | 'ARTIST' = viewer?.role === 'ARTIST' ? 'ARTIST' : 'CLIENT';
+
   const headers = await authHeader();
   const [booking, error] = await load<{ booking: Booking }>(
     `/bookings/${encodeURIComponent(id)}`,
@@ -43,7 +50,9 @@ export default async function BookingStatusPage({
   // idempotency key, so a repeat returns the same escrow (#18) — but there is
   // nothing to show once the money has arrived.
   let funding: FundingInstruction | null = null;
-  if (booking?.booking.state === 'PENDING_PAYMENT') {
+  // The client's to pay — an artist looking at an unpaid booking has no
+  // payment details to see.
+  if (booking?.booking.state === 'PENDING_PAYMENT' && party === 'CLIENT') {
     const [payload] = await load<{ funding: FundingInstruction }>(
       `/bookings/${encodeURIComponent(id)}/funding`,
       { method: 'POST', headers }
@@ -57,6 +66,7 @@ export default async function BookingStatusPage({
       initialBooking={booking?.booking ?? null}
       initialFunding={funding}
       initialError={error}
+      party={party}
     />
   );
 }

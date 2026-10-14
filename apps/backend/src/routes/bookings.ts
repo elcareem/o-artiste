@@ -70,6 +70,14 @@ function publicBooking(booking: BookingRow) {
     // client is being told that not responding has a consequence, and that only
     // works if they are told when.
     autoReleaseAt: booking.autoReleaseAt,
+
+    // Present only where the caller loaded them (GET /bookings/:id does). The
+    // check-in TIME, never the code: the time is evidence both parties should
+    // see; the code is the secret (docs/04 §1).
+    checkedInAt: (booking as any).checkIn?.redeemedAt ?? null,
+    openDisputeId:
+      ((booking as any).disputes ?? []).find((d: { state: DisputeState }) => !require('../services/disputeService.ts').isResolved(d.state))
+        ?.id ?? null,
   };
 }
 
@@ -133,7 +141,16 @@ router.get('/bookings/:id', requireAuth, async (req: AuthedReq, res: Res, next: 
   try {
     const booking = await prisma.booking.findUnique({
       where: { id: req.params.id },
-      include: { client: true, artist: true },
+      include: {
+        client: true,
+        artist: true,
+        // Whether — and when — the artist checked in, and any open dispute
+        // (#47). Both parties see both: the page must not offer "the artist
+        // did not come" over a check-in on record, which invites a false
+        // claim and the strike that follows it.
+        checkIn: { select: { redeemedAt: true } },
+        disputes: { select: { id: true, state: true }, orderBy: { createdAt: 'desc' } },
+      },
     });
 
     const isParticipant =
