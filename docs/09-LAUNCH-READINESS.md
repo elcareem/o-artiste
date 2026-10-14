@@ -2,22 +2,23 @@
 
 Issue #41. The record that each non-negotiable rule was verified, and that every open item was **resolved or accepted as a launch risk by a named person** — before the system holds money belonging to people who are trusting it.
 
-**As of 1 October 2026.** Sign-off fields are blank on purpose: the decisions in §5 are the business's to make, not the engineering team's.
+**As of 14 October 2026** (first written 1 October). Sign-off fields are blank on purpose: the decisions in §5 are the business's to make, not the engineering team's.
 
 ---
 
 ## 1. Verdict: not ready for real money
 
-The code rules all pass, but six things stand between this system and a real booking. The first is a scope gap the backlog never covered; the rest are actions only the account owner can take.
+The code rules all pass. The missing screens (B1) are now built; what remains are actions only the account owner can take — and one of them, the database, has become an outage.
 
 | # | Blocker | Owner | Why it blocks |
 |---|---|---|---|
-| **B1** | **The web app has no screens for signing up, identity verification, an artist's profile and bank account, creating a booking, accepting terms, confirming after the event, raising a dispute, or a "my bookings" list.** | Engineering, once scoped | Every one of these exists as a backend endpoint and none has a screen, because no issue in the backlog asked for them. A real person can browse artists, sign in, and check in at an event — but cannot sign up or book. |
-| **B2** | **The database is on Render's free plan, which expires on 11 October 2026 and has no backups.** | Account owner | In ten days the database is deleted. And #41 requires a restore to have been *performed*, which is impossible without backups. Upgrade, enable backups, restore one to a scratch database, and record the date here. |
+| ~~**B1**~~ | ~~The web app had no screens for signing up, identity verification, an artist's profile and bank account, creating a booking, accepting terms, confirming after the event, raising a dispute, or a "my bookings" list.~~ **Built in #42–#47, awaiting merge.** | Engineering | Each was checked against running servers and the real EscrowPay sandbox, apart from paying for a booking, which the sandbox cannot do unattended (11.12). |
+| **B2** | **THE PRODUCTION DATABASE NO LONGER ANSWERS.** On 14 October `GET /artists` on the deployed API returns 500 while `/health` returns ok — the process is up and its database is not. Render's free plan expired on 11 October and kept no backups. | Account owner — **now** | Nothing on the deployed site that reads data works, including signing in. Provision a paid PostgreSQL instance with backups, set `DATABASE_URL` on the API service (migrations apply on deploy), restore one backup into a scratch database, and record the date here. Every account and booking on the old database should be treated as gone. |
 | **B3** | **The webhook signature scheme has never been checked against a real EscrowPay delivery.** | Account owner | Every webhook test verifies our handler against our reading of EscrowPay's docs. If the reading is wrong, every real delivery is rejected with 401 — and a client's payment is never recorded. Send one test delivery from the EscrowPay dashboard's Events tab and report the status code. |
 | **B4** | **Credentials were exposed in a working session and must be rotated:** the production database password and the `sk_test_` API key. | Account owner | Neither is in the repository (verified — §3), but both were pasted into a conversation transcript. Rotate both; issue a fresh `sk_live_` key only at go-live. |
 | **B5** | **The database accepts connections from anywhere (`0.0.0.0/0`).** | Account owner | Restrict inbound access to the Render services that need it before any real identity data is stored. |
 | **B6** | **EscrowPay's commercial terms and our own regulatory position are not in writing** (open items 11.2, 11.3). | Account owner | See §5. These are the two items this document recommends **not** accepting as risks for a public launch. |
+| **B7** | **EscrowPay changes its contract and prices without notice** (open item 11.13). | Account owner | In October 2026 `date_of_birth` became required on onboarding — nobody could verify, and so nobody could book, until it was handled — and two prices changed. Both are now handled, and prices are checked on every `GET /admin/diagnostics`; the contract has no equivalent check. Ask EscrowPay for change notification in writing. |
 
 ---
 
