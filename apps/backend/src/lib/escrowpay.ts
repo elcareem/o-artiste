@@ -600,6 +600,15 @@ async function estimateFees({
   });
 }
 
+/**
+ * The provider's live fee configuration — added to their API in October 2026.
+ * Read by feeScheduleService to detect when the provider changes its prices,
+ * which it has done without notice.
+ */
+function feeConfiguration(): Promise<any> {
+  return request({ method: 'GET', path: '/fees/configuration' });
+}
+
 function getTransactionFees(transactionId: string): Promise<any> {
   return request({ method: 'GET', path: `/transactions/${transactionId}/fees` });
 }
@@ -725,6 +734,7 @@ module.exports = {
   listBanks,
   estimateFees,
   getTransactionFees,
+  feeConfiguration,
   credentialContext,
   health,
   verifyWebhookSignature,

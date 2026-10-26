@@ -151,8 +151,11 @@ describe('a returning user is charged once, not twice', async () => {
   );
 
   const costs = await prisma.platformCost.findMany({ where: { userId: user.id } });
-  assert.equal(costs.length, 1, 'the ₦50 is once per person for life');
-  assert.equal(costs[0].amountKobo, 5000);
+  assert.equal(costs.length, 1, 'the check is charged once per person for life');
+  // ₦70 since the provider's fee change of 14 October 2026 (was ₦50) — the
+  // figure feeScheduleService checks against the provider.
+  assert.equal(costs[0].amountKobo, service.VERIFICATION_COST_KOBO);
+  assert.equal(service.VERIFICATION_COST_KOBO, 7000);
   assert.equal(costs[0].category, 'IDENTITY_VERIFICATION');
 
   // Recorded as a platform cost, NOT a ledger entry — every ledger row belongs

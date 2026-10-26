@@ -17,8 +17,12 @@ const { AppError } = require('../lib/errors.ts');
 const escrowpay = require('../lib/escrowpay.ts');
 const { recordAudit } = require('../lib/audit.ts');
 
-/** ₦50, once per successful check. Returning users are free. */
-const VERIFICATION_COST_KOBO = 5000;
+/**
+ * ₦70, once per successful check — the provider's price since 14 October 2026
+ * (it was ₦50). Returning users are free. Compared against the provider's live
+ * configuration by feeScheduleService.
+ */
+const VERIFICATION_COST_KOBO = 7000;
 const COST_CATEGORY = 'IDENTITY_VERIFICATION';
 
 const METHODS = Object.freeze(['NIN', 'BVN']);
