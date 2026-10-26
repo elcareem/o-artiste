@@ -14,6 +14,7 @@ import {
 import { Copyable } from './copyable';
 import { CancelBooking } from './cancel-booking';
 import { AfterEvent } from './after-event';
+import { CheckInCodeCard } from './check-in-code-card';
 import { isPresentable, unreachable } from '@/lib/error-messages';
 import { formatLagos } from '@/lib/dates';
 
@@ -195,6 +196,9 @@ export function BookingStatusView({
         {booking.eventLocation && <Row label="Location" value={booking.eventLocation} />}
         <Row label="Reference" value={booking.escrowReference} />
       </dl>
+
+      {/* The client's check-in code, from funding until it is used (#48). */}
+      <CheckInCodeCard bookingId={bookingId} state={booking.state} party={party} />
 
       {/* After the event: confirm, report a no-show, or dispute (#47). */}
       <AfterEvent booking={booking} party={party} />

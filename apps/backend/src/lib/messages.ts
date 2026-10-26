@@ -160,7 +160,7 @@ function bookingConfirmedEmail({
       `Amount held: ${formatNairaForMessage(amountKobo)}`,
       '',
       checkInCodeHint
-        ? 'Nearer the date we will text you a check-in code. Give it to the artist when they arrive — that is what starts the payment moving, and it is why you should not share it beforehand.'
+        ? 'Your check-in code is on your booking page, and we will also text it to you nearer the date. Give it to the artist when they arrive — that is what starts the payment moving, and it is why you should not share it beforehand.'
         : null,
       checkInCodeHint ? '' : null,
       'The money is released after the event, once you confirm it went ahead. If something goes wrong, you can raise a dispute and the funds stay held until it is settled.',
