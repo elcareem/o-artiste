@@ -7,6 +7,7 @@ import { formatNaira } from '@/lib/currency';
 import { statusCopy } from '@/lib/booking-status';
 import { EmptyState } from '@/components/empty-state';
 import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
+import { formatLagos } from '@/lib/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -226,11 +227,7 @@ export default async function AdminBookingsPage({
                   <tr key={row.id} className="border-b border-[var(--color-line)]">
                     <td className="py-2 pr-3 whitespace-nowrap">
                       <Link href={`/admin/bookings/${row.id}`} className="underline">
-                        {new Date(row.eventDate).toLocaleDateString('en-NG', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })}
+                        {formatLagos(row.eventDate, 'shortDate')}
                       </Link>
                     </td>
                     <td className="py-2 pr-3">{row.client.displayName ?? row.client.email ?? '—'}</td>

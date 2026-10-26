@@ -225,6 +225,25 @@ else
   fi
 fi
 
+# ── Lagos time, everywhere — issue #45 ──────────────────────────────────────
+# Server components render on Render, in UTC: a date formatted without a pinned
+# zone showed a 7pm Lagos event as 6pm, including the check-in time an admin
+# weighs in a dispute. Every date goes through lib/dates.ts.
+WEB_SRC="apps/web/src"
+if [ ! -d "$WEB_SRC" ]; then
+  skip "Dates are formatted only through lib/dates.ts" "$WEB_SRC not present yet"
+else
+  hits="$(grep -rnE 'toLocale(String|DateString|TimeString)\(|new Intl\.DateTimeFormat\(' "$WEB_SRC" --include=*.ts --include=*.tsx 2>/dev/null \
+          | grep -vE '(lib/dates\.ts|\.test\.ts):' \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*)' || true)"
+  if [ -z "$hits" ]; then
+    pass "Dates are formatted only through lib/dates.ts"
+  else
+    fail "Dates are formatted only through lib/dates.ts" \
+         "An unpinned date renders in the server's timezone (UTC on Render). Use formatLagos." "$hits"
+  fi
+fi
+
 # ── Check-in code visibility — docs/02 §5, docs/04 §1, issue #22 ────────────
 # The code is the only evidence the two parties were physically together, and
 # that rests entirely on the artist being unable to obtain it except from the

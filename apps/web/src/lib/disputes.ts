@@ -6,6 +6,7 @@
  */
 
 import { formatNaira } from './currency.ts';
+import { formatLagos } from './dates.ts';
 
 export type DisputeOutcome = 'RELEASE' | 'REFUND' | 'SPLIT';
 
@@ -76,10 +77,8 @@ export function checkInVerdict(dispute: DisputeDetail): string {
     return 'No check-in was recorded. Nobody has evidence the artist was at the event.';
   }
 
-  const when = new Date(dispute.checkIn.redeemedAt).toLocaleString('en-NG', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  // Lagos time: this is the evidence an admin weighs, and in UTC it was an hour off.
+  const when = formatLagos(dispute.checkIn.redeemedAt, 'shortDateTime') ?? 'an unrecorded time';
 
   const base = `The artist redeemed the client's code at ${when}, which the client handed over in person.`;
 

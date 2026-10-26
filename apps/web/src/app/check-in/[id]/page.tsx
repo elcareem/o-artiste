@@ -7,6 +7,7 @@ import { statusCopy } from '@/lib/booking-status';
 import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
 import { canCheckIn, whyNotYet } from '@/lib/check-in';
 import { CheckInForm } from '@/components/check-in-form';
+import { formatLagos } from '@/lib/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -82,13 +83,7 @@ export default async function CheckInPage({ params }: { params: Promise<{ id: st
       <h1 className="text-xl font-semibold tracking-tight">Check in</h1>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
         {formatNaira(booking.amountKobo)} ·{' '}
-        {new Date(booking.eventDate).toLocaleString('en-NG', {
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long',
-          hour: '2-digit',
-          minute: '2-digit',
-        })}
+        {formatLagos(booking.eventDate, 'dateTime')}
         {booking.eventLocation ? ` · ${booking.eventLocation}` : ''}
       </p>
 

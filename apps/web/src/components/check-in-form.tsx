@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { statusCopy } from '@/lib/booking-status';
 import { codeProblem, normaliseCode } from '@/lib/check-in';
 import { NOTHING, failureMessage, thrownMessage } from '@/lib/error-messages';
+import { formatLagos } from '@/lib/dates';
 
 /**
  * The artist redeems the client's code on arrival — issue #39, docs/04 §2.
@@ -124,10 +125,7 @@ export function CheckInForm({
       }
 
       setDone(
-        `Recorded at ${new Date(payload.checkIn.redeemedAt).toLocaleTimeString('en-NG', {
-          hour: '2-digit',
-          minute: '2-digit',
-        })}. ${
+        `Recorded at ${formatLagos(payload.checkIn.redeemedAt, 'time')}. ${
           payload.checkIn.hasLocation
             ? 'Your location was attached.'
             : 'No location was available, which makes no difference to your payment.'

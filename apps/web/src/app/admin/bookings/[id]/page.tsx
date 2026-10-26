@@ -14,6 +14,7 @@ import {
 } from '@/lib/ledger';
 import { ManualMoneyAction } from '@/components/manual-money-action';
 import { RETRY, failureMessage, unreachable } from '@/lib/error-messages';
+import { formatLagos } from '@/lib/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,13 +81,7 @@ type Detail = {
 
 const when = (value: string | null | undefined) =>
   value
-    ? new Date(value).toLocaleString('en-NG', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
+    ? (formatLagos(value, 'shortDateTime') ?? '—')
     : '—';
 
 const band = (tier: { minDaysBefore: number; maxDaysBefore: number | null }) =>
