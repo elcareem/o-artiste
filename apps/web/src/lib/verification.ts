@@ -76,13 +76,38 @@ export function identifierProblem(method: Method | '', raw: string): string | nu
   return null;
 }
 
-export type VerificationForm = { method: Method | ''; identifier: string; consent: boolean };
+export type VerificationForm = { method: Method | ''; identifier: string; dateOfBirth: string; consent: boolean };
+
+/** Mirrors MIN_AGE_YEARS in the backend's verificationService. */
+export const MIN_AGE_YEARS = 18;
+
+/**
+ * The date of birth, as the provider wants it — `YYYY-MM-DD`, a real date, an
+ * adult. Required by EscrowPay since October 2026 and matched against the
+ * NIN/BVN record. Checked here first so a slip never costs one of the person's
+ * three tries at matching.
+ */
+export function dateOfBirthProblem(raw: string, now: Date = new Date()): string | null {
+  const text = String(raw ?? '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return 'Your date of birth is needed — exactly as it appears on your NIN or BVN record.';
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) {
+    return 'That is not a real date.';
+  }
+  if (y < 1900) return 'Check the year.';
+  if (Date.UTC(y + MIN_AGE_YEARS, m - 1, d) > now.getTime()) return `You need to be ${MIN_AGE_YEARS} or older to use o-artiste.`;
+  return null;
+}
 
 export function verificationProblems(form: VerificationForm): Partial<Record<keyof VerificationForm, string>> {
   const problems: Partial<Record<keyof VerificationForm, string>> = {};
   if (form.method !== 'NIN' && form.method !== 'BVN') problems.method = 'Choose NIN or BVN.';
   const id = identifierProblem(form.method, form.identifier);
   if (id) problems.identifier = id;
+  const dob = dateOfBirthProblem(form.dateOfBirth);
+  if (dob) problems.dateOfBirth = dob;
   // The box is never pre-ticked and nothing here ticks it: consent the person
   // did not give is not consent (#41).
   if (form.consent !== true) problems.consent = 'Tick the box to agree to the check. We cannot run it without your consent.';
@@ -91,5 +116,10 @@ export function verificationProblems(form: VerificationForm): Partial<Record<key
 
 /** The body the API expects. `consent` is sent as the boolean it must be. */
 export function verificationBody(form: VerificationForm) {
-  return { method: form.method, identifier: form.identifier.replace(/\s/g, ''), consent: form.consent === true };
+  return {
+    method: form.method,
+    identifier: form.identifier.replace(/\s/g, ''),
+    dateOfBirth: form.dateOfBirth.trim(),
+    consent: form.consent === true,
+  };
 }

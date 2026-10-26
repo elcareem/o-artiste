@@ -566,3 +566,45 @@ test wallet funding destination and valid for account resolution.
 { "bank_code": "999", "bank_name": "EscrowPay Bank",
   "bank_short_name": "ESCPAY", "bank_logo_url": null, "notes": "…" }
 ```
+
+---
+
+# Changes observed after the initial mapping
+
+The provider changes its contract without notice. Each change below was found by
+a failing live call, not by an announcement — which is why the committed spec is
+refreshed and diffed rather than trusted.
+
+## 14 October 2026 — `date_of_birth` required on onboarding
+
+`POST /parties/onboard` now requires `date_of_birth` (`YYYY-MM-DD`), checked
+against the NIN/BVN record. Without it: 422 `date_of_birth_required` — which
+meant **nobody could verify, so nobody could book or be booked**, on any
+environment, until it was handled. A mismatch is 422
+`identity_verification_failed` (reason `data_mismatch`); a case held for manual
+review is 422 `identity_requires_review`.
+
+Sandbox: verified fixtures carry `date_of_birth` **1990-01-15**; any other date is
+a mismatch.
+
+What changed on our side: the date of birth is asked for, validated (a real date,
+18 or over), sent, and **never stored**. A mismatch is no longer a permanent
+rejection on the first try — it allows correction, three times in total, because
+an uncapped retry would let someone holding a stolen NIN guess the date of birth
+behind it. `identity_requires_review` is a rejection with its own message.
+
+Removed from the spec at the same time, none of them used by us:
+`/identities`, `/identities/{id}`, `/identities/{id}/verification-attempts`,
+`/identity-verification-attempts/{id}`. Added: `GET /fees/configuration`.
+
+## 8 and 14 October 2026 — fee configuration v2
+
+Read from the new `GET /fees/configuration`:
+
+| Fee | Before | Now |
+|---|---|---|
+| Money-in above ₦250,000 | 0.8% | **0.8% + ₦100** (v2, from 8 Oct) |
+| Identity verification | ₦50 | **₦70**, per NIN or BVN (from 14 Oct) |
+| Payout | ₦40 / ₦70 | unchanged |
+
+Handled separately from the onboarding change.

@@ -96,7 +96,7 @@ describe('a successful verification stores the result and the party, never the i
   const { user } = await makeUser();
 
   const result = await withStub(async () => successResponse('abc123'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
   );
 
   assert.equal(result.status, 'VERIFIED');
@@ -121,7 +121,7 @@ describe('re-running verification for an already-verified user makes NO provider
   const { user } = await makeUser();
 
   await withStub(async () => successResponse('cached1'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
   );
 
   // The stub now throws if called at all, so a second provider call fails loudly.
@@ -131,7 +131,7 @@ describe('re-running verification for an already-verified user makes NO provider
       called = true;
       throw new Error('the provider must not be called for a verified user');
     },
-    () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+    () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
   );
 
   assert.equal(called, false, 'no provider call for a returning user');
@@ -144,10 +144,10 @@ describe('a returning user is charged once, not twice', async () => {
   const { user } = await makeUser();
 
   await withStub(async () => successResponse('cost1'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
   );
   await withStub(async () => successResponse('cost1'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
   );
 
   const costs = await prisma.platformCost.findMany({ where: { userId: user.id } });
@@ -170,7 +170,7 @@ describe('a provider timeout leaves the user RETRYABLE, not failed', async () =>
         async () => {
           throw providerError('provider_unreachable', 'timeout of 15000ms exceeded');
         },
-        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
       ),
     (err: ThrownError) => {
       // 503, not 403 — this is our partner being unreachable, not a rejection.
@@ -189,7 +189,7 @@ describe('a provider timeout leaves the user RETRYABLE, not failed', async () =>
 
   // And a later attempt succeeds, so the state really was recoverable.
   const retry = await withStub(async () => successResponse('after_retry'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
   );
   assert.equal(retry.status, 'VERIFIED');
 });
@@ -209,7 +209,7 @@ describe('a 4xx from the provider is a fixable request, not an outage', async ()
           err.providerStatus = 422;
           throw err;
         },
-        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
+        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
       ),
     (err: ThrownError) => {
       assert.equal(err.status, 400, 'a fixable request is 400, not 503');
@@ -225,30 +225,43 @@ describe('a 4xx from the provider is a fixable request, not an outage', async ()
   assert.equal((await service.getStatus(user.id)).retryable, true);
 });
 
-describe('a genuine mismatch is REJECTED and is not retryable', async () => {
+describe('a mismatch can be corrected — up to a limit, then it needs support', async () => {
   const { user } = await makeUser();
+  const mismatch = () =>
+    withStub(
+      async () => {
+        throw providerError(
+          'identity_verification_failed',
+          'Identity verification did not succeed; party was not created (data_mismatch).'
+        );
+      },
+      () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901', consent: true, dateOfBirth: '1990-01-15' })
+    );
 
-  await assert.rejects(
-    () =>
-      withStub(
-        async () => {
-          throw providerError(
-            'identity_verification_failed',
-            'Identity verification did not succeed; party was not created (data_mismatch).'
-          );
-        },
-        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901', consent: true })
-      ),
-    (err: ThrownError) => err.status === 403
-  );
+  // THE FIRST TWO ARE CORRECTABLE. Since the provider began checking the date
+  // of birth, a mismatch is most often a mistyped birthday — and this used to
+  // be a permanent rejection on the first one.
+  for (const left of [2, 1]) {
+    await assert.rejects(mismatch, (err: ThrownError) => {
+      assert.equal(err.status, 422);
+      assert.match(err.message, /do not match the record/);
+      assert.match(err.message, new RegExp(`${left} tr(y|ies) left`));
+      return true;
+    });
+    const s = await service.getStatus(user.id);
+    assert.equal(s.status, 'UNVERIFIED');
+    assert.equal(s.retryable, true);
+  }
+
+  // THE THIRD IS FINAL. Without a cap, this endpoint would let someone holding
+  // a stolen NIN guess the date of birth behind it.
+  await assert.rejects(mismatch, (err: ThrownError) => err.status === 403 && /Contact support/.test(err.message));
 
   const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
   assert.equal(stored.verificationStatus, 'REJECTED');
+  assert.equal(stored.verificationMismatches, service.MAX_MISMATCHES);
   assert.match(stored.verificationFailureReason, /data_mismatch/);
 
-  assert.equal((await service.getStatus(user.id)).retryable, false);
-
-  // A resubmission is refused without reaching the provider.
   let called = false;
   await assert.rejects(() =>
     withStub(
@@ -256,13 +269,85 @@ describe('a genuine mismatch is REJECTED and is not retryable', async () => {
         called = true;
         return successResponse();
       },
-      () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901', consent: true })
+      () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901', consent: true, dateOfBirth: '1990-01-15' })
     )
   );
   assert.equal(called, false, 'a rejected identity is not retried against the provider');
-
-  // No cost was incurred for a failed check.
   assert.equal(await prisma.platformCost.count({ where: { userId: user.id } }), 0);
+});
+
+describe('a provider outage never uses up a mismatch try', async () => {
+  const { user } = await makeUser();
+  for (let i = 0; i < 4; i++) {
+    await assert.rejects(() =>
+      withStub(
+        async () => {
+          throw providerError('upstream_unavailable', 'Upstream unavailable', 503);
+        },
+        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' })
+      )
+    );
+  }
+  const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+  assert.equal(stored.verificationMismatches, 0, 'an outage counted against the person');
+  assert.notEqual(stored.verificationStatus, 'REJECTED');
+});
+
+describe('a case held for manual review is not retried, and says so', async () => {
+  const { user } = await makeUser();
+  await assert.rejects(
+    () =>
+      withStub(
+        async () => {
+          throw providerError('identity_requires_review', 'Held for review.', 502);
+        },
+        () => service.verifyUser({ userId: user.id, method: 'BVN', identifier: '22222222222', consent: true, dateOfBirth: '1990-01-15' })
+      ),
+    (err: ThrownError) => err.status === 403 && /manual check/.test(err.message)
+  );
+  assert.equal((await service.getStatus(user.id)).retryable, false);
+});
+
+describe('the date of birth is required, checked, sent — and never stored', async () => {
+  const { user } = await makeUser();
+  let sent: any = null;
+  let calls = 0;
+  const attempt = (dateOfBirth: unknown) =>
+    withStub(
+      async (args: any) => {
+        calls++;
+        sent = args;
+        return successResponse('dob');
+      },
+      () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth })
+    );
+
+  // Refused before the provider is called — so a typo costs nothing and does
+  // not use up one of the person's limited mismatch tries.
+  for (const [dob, pattern] of [
+    [undefined, /Enter your date of birth/],
+    ['15/01/1990', /Enter your date of birth/],
+    ['1990-02-30', /not a real date/],
+    ['2015-01-15', /18 or older/],
+    ['1850-01-15', /Check the year/],
+  ] as const) {
+    await assert.rejects(() => attempt(dob), (err: ThrownError) => err.status === 400 && pattern.test(err.message));
+  }
+  assert.equal(calls, 0, 'an invalid date reached the provider');
+
+  await attempt('1990-01-15');
+  assert.equal(sent.dateOfBirth, '1990-01-15', 'the date of birth was not sent');
+
+  // Nowhere in what we keep: not on the user, not in the consent record.
+  const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+  const audit = await prisma.auditLog.findMany({ where: { entityId: user.id } });
+  assert.doesNotMatch(JSON.stringify({ stored, audit }), /1990-01-15/);
+});
+
+describe('someone turning 18 today is an adult; tomorrow, not yet', async () => {
+  const now = new Date('2026-10-14T12:00:00Z');
+  assert.equal(service.validateDateOfBirth('2008-10-14', now), '2008-10-14');
+  assert.throws(() => service.validateDateOfBirth('2008-10-15', now), /18 or older/);
 });
 
 describe('409 identity_already_exists is treated as success, not failure', async () => {
@@ -279,7 +364,7 @@ describe('409 identity_already_exists is treated as success, not failure', async
         502
       );
     },
-    () => service.verifyUser({ userId: user.id, method: 'BVN', identifier: '22222222222', consent: true })
+    () => service.verifyUser({ userId: user.id, method: 'BVN', identifier: '22222222222', consent: true, dateOfBirth: '1990-01-15' })
   );
 
   assert.equal(result.status, 'VERIFIED');
@@ -307,7 +392,7 @@ describe('input is validated before the provider is troubled', async () => {
             called = true;
             return successResponse();
           },
-          () => service.verifyUser({ userId: user.id, method, identifier, consent: true })
+          () => service.verifyUser({ userId: user.id, method, identifier, consent: true, dateOfBirth: '1990-01-15' })
         ),
       (err: ThrownError) => err.status === 400
     );
@@ -334,7 +419,7 @@ describe('the endpoints require auth and report status', async () => {
       fetch(`${server.url}/me/verification`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ method: 'NIN', identifier: '12345678902', consent: true }),
+        body: JSON.stringify({ method: 'NIN', identifier: '12345678902', consent: true, dateOfBirth: '1990-01-15' }),
       })
     );
     assert.equal(res.status, 201);
@@ -373,7 +458,7 @@ describe('an identity check without explicit consent is refused before anything 
       },
       async () => {
         await assert.rejects(
-          () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent }),
+          () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent, dateOfBirth: '1990-01-15' }),
           (err: any) => {
             assert.equal(err.status, 400, `consent ${JSON.stringify(consent)} was accepted`);
             // Says what is being asked and why, in the person's terms.
@@ -407,6 +492,7 @@ describe('consent is recorded before the check, and sent to the provider explici
       method: 'NIN',
       identifier: '12345678902',
       consent: true,
+      dateOfBirth: '1990-01-15',
       context: { actorIp: '203.0.113.7', actorUserAgent: 'test-agent' },
     })
   );
@@ -431,7 +517,7 @@ describe('the provider client refuses to onboard without consent at all', async 
   const ep = require('../src/lib/escrowpay.ts');
   // A programming error rather than a user one — and caught before any request.
   assert.throws(
-    () => ep.onboardParty({ type: 'nin', identifier: '12345678902', email: 'a@b.co', reference: 'r' }),
+    () => ep.onboardParty({ type: 'nin', identifier: '12345678902', email: 'a@b.co', reference: 'r', dateOfBirth: '1990-01-15' }),
     /requires consent: true/
   );
 });

@@ -16,7 +16,7 @@ import { IDENTIFIER_LENGTH, verificationBody, verificationProblems, type Verific
  */
 export function VerificationForm({ next }: { next: string }) {
   const router = useRouter();
-  const [form, setForm] = useState<Form>({ method: '', identifier: '', consent: false });
+  const [form, setForm] = useState<Form>({ method: '', identifier: '', dateOfBirth: '', consent: false });
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,12 +98,29 @@ export function VerificationForm({ next }: { next: string }) {
         {show('identifier') && <span className="mt-1 block text-sm">{show('identifier')}</span>}
       </label>
 
+      <label className="block">
+        <span className="text-sm font-medium">Date of birth</span>
+        <input
+          type="date"
+          value={form.dateOfBirth}
+          onChange={(e) => setForm((f) => ({ ...f, dateOfBirth: e.target.value }))}
+          autoComplete="bday"
+          max={new Date().toISOString().slice(0, 10)}
+          aria-invalid={show('dateOfBirth') ? true : undefined}
+          className="mt-1 min-h-11 w-full rounded-md border border-[var(--color-line)] bg-transparent px-3"
+        />
+        <span className="mt-1 block text-xs text-[var(--color-muted)]">
+          Exactly as it is on your {form.method || 'NIN or BVN'} record — it is checked against it.
+        </span>
+        {show('dateOfBirth') && <span className="mt-1 block text-sm">{show('dateOfBirth')}</span>}
+      </label>
+
       <div className="rounded-md border border-[var(--color-line)] p-3 text-sm">
         <p className="font-medium">Before you agree</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--color-muted)]">
           <li>Your number is checked by our payment partner, EscrowPay, through their licensed identity provider.</li>
           <li>We pay for the check. It costs you nothing.</li>
-          <li>We keep only the result — that you are verified, and when. We do not store the number.</li>
+          <li>We keep only the result — that you are verified, and when. We do not store the number or your date of birth.</li>
         </ul>
         <label className="mt-3 flex items-start gap-2">
           <input
@@ -113,7 +130,7 @@ export function VerificationForm({ next }: { next: string }) {
             aria-invalid={show('consent') ? true : undefined}
             className="mt-1"
           />
-          <span>I agree to my {form.method || 'NIN or BVN'} being checked to confirm my identity.</span>
+          <span>I agree to my {form.method || 'NIN or BVN'} and date of birth being checked to confirm my identity.</span>
         </label>
         {show('consent') && <p className="mt-1">{show('consent')}</p>}
       </div>

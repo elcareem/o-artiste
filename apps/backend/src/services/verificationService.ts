@@ -28,11 +28,46 @@ const METHODS = Object.freeze(['NIN', 'BVN']);
  *
  * @returns {{status, method, verifiedAt, partyId, cached: boolean}}
  */
+/** Correctable mismatches before an account needs support. */
+const MAX_MISMATCHES = 3;
+
+/** The youngest a person can be to book or be booked: a contract needs an adult. */
+const MIN_AGE_YEARS = 18;
+
+/**
+ * A real calendar date, `YYYY-MM-DD`, for an adult.
+ *
+ * Checked here as well as by the provider so an impossible date — 2026-02-30,
+ * a birthday next year — is refused before it costs a provider call, and before
+ * it uses up one of the person's limited mismatch tries.
+ */
+function validateDateOfBirth(raw: unknown, now: Date = new Date()): string {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new AppError(400, 'Enter your date of birth, as it appears on your NIN or BVN record.');
+
+  const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = new Date(Date.UTC(y, m - 1, d));
+  // Date.UTC rolls 30 February over into March; a real date survives the round trip.
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) {
+    throw new AppError(400, 'That date of birth is not a real date.');
+  }
+
+  const adultFrom = new Date(Date.UTC(y + MIN_AGE_YEARS, m - 1, d));
+  if (adultFrom.getTime() > now.getTime()) {
+    throw new AppError(400, `You need to be ${MIN_AGE_YEARS} or older to use o-artiste.`);
+  }
+  if (y < 1900) throw new AppError(400, 'Check the year of your date of birth.');
+
+  return text;
+}
+
 async function verifyUser({
   userId,
   method,
   identifier,
   consent,
+  dateOfBirth,
   context = {},
 }: {
   userId: string;
@@ -48,6 +83,12 @@ async function verifyUser({
    * it has to be given, not assumed.
    */
   consent?: unknown;
+  /**
+   * `YYYY-MM-DD`. Required by the provider since October 2026 and checked
+   * against the NIN/BVN record. Sent, NEVER STORED — the same rule as the
+   * number itself: it is personal data we need for one call and no longer.
+   */
+  dateOfBirth?: unknown;
   /** Where the request came from, kept with the consent record. */
   context?: { actorIp?: string | null; actorUserAgent?: string | null };
 }) {
@@ -61,6 +102,8 @@ async function verifyUser({
   // Checked before anything else touches the identifier — including the cached
   // path, because submitting an identifier for checking is itself the thing
   // consent is being asked for.
+  const dob = validateDateOfBirth(dateOfBirth);
+
   if (consent !== true) {
     throw new AppError(
       400,
@@ -126,6 +169,7 @@ async function verifyUser({
       // with a reference to our own record of it.
       consent: true,
       consentReference: consentRecord.id,
+      dateOfBirth: dob,
     });
   } catch (err) {
     return handleProviderFailure({ user, method: normalisedMethod, err: err as AppErrorLike });
@@ -171,31 +215,55 @@ async function handleProviderFailure({
     });
   }
 
-  // A GENUINE REJECTION — the details did not match.
+  // THE DETAILS DID NOT MATCH THE RECORD.
+  //
+  // This used to be a permanent rejection on the first failure. That stopped
+  // being defensible when the provider began checking the DATE OF BIRTH
+  // (October 2026): one mistyped birthday would have locked a person out for
+  // good. A mismatch now gets a correction — but only MAX_MISMATCHES of them in
+  // total, because otherwise this endpoint is a way for someone holding a
+  // stolen NIN to guess the date of birth behind it, one request at a time.
   if (code === 'identity_verification_failed') {
+    const mismatches = (user.verificationMismatches ?? 0) + 1;
+    const exhausted = mismatches >= MAX_MISMATCHES;
+
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        verificationStatus: 'REJECTED',
+        verificationStatus: exhausted ? 'REJECTED' : 'UNVERIFIED',
+        verificationMismatches: mismatches,
         verificationFailureReason: err.providerMessage ?? 'verification_failed',
       },
     });
-    // Said as it is. This used to end "check the number and try again" — but
-    // the status is now REJECTED, and every further attempt is refused with
-    // "contact support". Inviting a retry that cannot succeed sends someone
-    // round the loop once more before they find that out (#43).
+
+    if (exhausted) {
+      throw new AppError(
+        403,
+        'Those details still do not match the record, so we cannot try again automatically. Contact support and we will look into it with you.'
+      );
+    }
+
+    const left = MAX_MISMATCHES - mismatches;
     throw new AppError(
-      403,
-      'We could not verify that identity, so we cannot try it again automatically. Contact support and we will look into it with you.'
+      422,
+      `Those details do not match the record for that ${method}. Check your date of birth and the number, then try again — ` +
+        `${left} ${left === 1 ? 'try' : 'tries'} left.`
     );
   }
 
-  // A REQUEST WE GOT WRONG — a 4xx that is not one of the cases above, such as
-  // a malformed email. Retrying unchanged fails identically forever, so telling
-  // the user to "try again in a few minutes" would be actively misleading.
-  //
-  // The user returns to UNVERIFIED rather than RETRYABLE_FAILURE: nothing is
-  // broken, the submitted details simply need correcting.
+  // Held for a person to look at, on the provider's side. Not retryable — a
+  // resubmission would only start another review — and not a mismatch either.
+  if (code === 'identity_requires_review') {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { verificationStatus: 'REJECTED', verificationFailureReason: 'identity_requires_review' },
+    });
+    throw new AppError(
+      403,
+      'Your details need a manual check before we can verify you. Contact support and we will look into it with you.'
+    );
+  }
+
   if (err.providerStatus && err.providerStatus >= 400 && err.providerStatus < 500) {
     await prisma.user.update({
       where: { id: user.id },
@@ -315,6 +383,8 @@ async function getStatus(userId: string) {
 
 module.exports = {
   verifyUser,
+  validateDateOfBirth,
+  MAX_MISMATCHES,
   getStatus,
   VERIFICATION_COST_KOBO,
   COST_CATEGORY,
