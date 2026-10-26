@@ -146,7 +146,12 @@ async function createEscrowForBooking({
   // --- Persist only now. -------------------------------------------------
   const updated = await prisma.booking.update({
     where: { id: booking.id },
-    data: { escrowId: transaction.id },
+    data: {
+      escrowId: transaction.id,
+      // Kept now because EscrowPay hands the link out only on creation: a repeat
+      // request for the same session comes back without it. Test mode only.
+      testCheckoutUrl: escrowpay.isTestKey() ? (session?.hosted_url ?? null) : null,
+    },
   });
 
   return fundingInstructionFor(updated, session, activated);
@@ -184,6 +189,18 @@ function fundingInstructionFor(
     // Bank transfer only. There is no card path in this system, and the
     // provider reports the same constraint from their side.
     channels: session?.allowed_channels ?? ['bank_transfer'],
+    // TEST MODE ONLY. The sandbox's bank account is simulated — no real bank
+    // can send to it — so EscrowPay's hosted checkout is the only way to pay a
+    // test booking. With a live key this is always null: there, the real bank
+    // transfer above is how a client pays, and a second route to the same
+    // money is a second thing to get wrong (#49).
+    //
+    // From the session when it has just been created, otherwise from the
+    // booking — EscrowPay omits the link on every request after the first.
+    testCheckoutUrl: escrowpay.isTestKey()
+      ? (session?.hosted_url ?? (booking as BookingRow & { testCheckoutUrl?: string | null }).testCheckoutUrl ?? null)
+      : null,
+
     bankTransfer: instructions
       ? {
           accountNumber: instructions.account_number,

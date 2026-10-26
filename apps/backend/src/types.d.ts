@@ -205,6 +205,12 @@ interface FundingInstruction {
   amountToTransferKobo: Kobo;
   channels: string[];
   bankTransfer: BankTransferInstruction | null;
+  /**
+   * EscrowPay's hosted checkout — TEST MODE ONLY (#49). In the sandbox the
+   * bank account above is simulated and no real bank can send to it; the
+   * hosted page is the only way to pay. Always null with a live key.
+   */
+  testCheckoutUrl: string | null;
 }
 
 /** What a release did — `escrowService.releaseBooking`. */
@@ -243,6 +249,7 @@ interface ReleaseSummaryExtra {
 /** A provider checkout session, as far as we rely on it. */
 interface CheckoutSession {
   allowed_channels?: string[];
+  hosted_url?: string | null;
   payment_instructions?: {
     amount_minor?: Kobo;
     account_number: string;

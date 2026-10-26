@@ -181,6 +181,8 @@ export type FundingInstruction = {
   amountToTransferKobo: number;
   channels: string[];
   bankTransfer: BankTransfer | null;
+  /** EscrowPay's hosted checkout, present ONLY with a test key (#49). */
+  testCheckoutUrl?: string | null;
 };
 
 export type Booking = {

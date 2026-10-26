@@ -145,6 +145,26 @@ export function BookingStatusView({
 
       {awaitingPayment && funding && (
         <section className="mt-6 rounded-lg border border-[var(--color-line)] p-5">
+          {funding.testCheckoutUrl && (
+            // TEST MODE ONLY — the backend sends this link only with a sk_test_
+            // key. The account below is simulated and no real bank can pay it;
+            // EscrowPay's test checkout is the way to pay a test booking (#49).
+            <div className="mb-5 rounded-md border border-dashed border-[var(--color-line)] px-4 py-3 text-sm">
+              <p className="font-medium">Test mode</p>
+              <p className="mt-1 text-[var(--color-muted)]">
+                No real money moves. Pay this test booking on EscrowPay&apos;s test checkout; this page updates once it
+                is paid.
+              </p>
+              <a
+                href={funding.testCheckoutUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-2 inline-block rounded-md border border-[var(--color-line)] px-3 py-1.5 font-medium hover:border-[var(--color-accent)]"
+              >
+                Pay on the test checkout
+              </a>
+            </div>
+          )}
           <h2 className="font-semibold tracking-tight">Transfer the exact amount</h2>
 
           <p className="mt-3 text-2xl font-semibold tabular-nums">

@@ -297,6 +297,10 @@ model Booking {
   escrowReference String  @unique
   /// The provider's id, recorded only once create succeeds.
   escrowId        String?
+  /// EscrowPay's hosted checkout link — TEST MODE ONLY, null with a live key
+  /// (#49). The provider returns it only when the session is first created, so
+  /// it is kept here for every later visit to the payment page.
+  testCheckoutUrl String?
 
   // --- Configuration snapshot (docs/07 §4) ---------------------------------
   // Frozen at creation. ALL later payout and cancellation math reads these,
