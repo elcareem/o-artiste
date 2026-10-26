@@ -25,12 +25,22 @@ const PASSWORD = 'correct horse battery staple';
 
 let server: TestServer;
 
+// The fee check compares our constants with the provider's published prices.
+// These tests are about diagnostics, not about today's prices, so the provider
+// is the simulator's copy of its configuration — a live price change must fail
+// feeSchedule.test.ts, not every test here.
+const escrowpay = require('../src/lib/escrowpay.ts');
+const { FEE_CONFIGURATION } = require('../e2e/provider-simulator.ts');
+const realFeeConfiguration = escrowpay.feeConfiguration;
+
 test.before(async () => {
   if (ready) await ready;
+  escrowpay.feeConfiguration = async () => JSON.parse(JSON.stringify(FEE_CONFIGURATION));
   server = await startServer(createApp());
 });
 
 test.after(async () => {
+  escrowpay.feeConfiguration = realFeeConfiguration;
   if (server) await server.close();
   if (hasRedis) await queueLib.closeAll();
 });
@@ -196,6 +206,27 @@ describe('a broken dependency answers 503, so a monitor can see it', async () =>
     assert.match(res.body.diagnostics.database.detail, /connection terminated/);
   } finally {
     prismaLib.booking.count = original;
+  }
+});
+
+describe('a provider price change answers 503 and says what changed', async () => {
+  const admin = await makeUser('ADMIN');
+  const token = await login(admin.email);
+
+  const stub = escrowpay.feeConfiguration;
+  escrowpay.feeConfiguration = async () => {
+    const changed = JSON.parse(JSON.stringify(FEE_CONFIGURATION));
+    changed.find((f: any) => f.fee_type === 'identity_verification_nin').fixed_minor = 9000;
+    return changed;
+  };
+
+  try {
+    const res = await get('/admin/diagnostics', token);
+    assert.equal(res.status, 503, 'prices we no longer charge correctly are a failure');
+    assert.equal(res.body.diagnostics.feeSchedule.ok, false);
+    assert.match(res.body.diagnostics.feeSchedule.drift.join('\n'), /identity_verification_nin: we record ₦80; the provider charges ₦90/);
+  } finally {
+    escrowpay.feeConfiguration = stub;
   }
 });
 

@@ -4,7 +4,8 @@
  * WHY THIS EXISTS. EscrowPay changed two prices in October 2026 without notice —
  * the money-in fee above ₦250,000 gained a ₦100 fixed part, and the identity
  * check went from ₦50 to ₦70 — and nothing here noticed for two weeks. In that
- * time every large booking's ledger under-recorded the client's fee.
+ * time every large booking's ledger under-recorded the client's fee. It changed
+ * them again on 16 October (v4), and this check is what found it.
  *
  * Our arithmetic stays in feeService, as constants: fees are snapshot-able,
  * testable and reviewable that way, and a provider outage cannot change what a
@@ -105,8 +106,14 @@ function driftAgainst(items: ProviderFee[]): string[] {
     }
     ours.tiers.forEach((o, i) => {
       const p = theirTiers[i];
+      // Our top tier is open-ended. The provider may bound its own (v4 stops at
+      // ₦50,000,000); any bound at or above our largest permitted booking is the
+      // same thing for us, because no amount we send can reach it.
+      const boundsMatch =
+        (p.up_to_minor ?? null) === o.up_to_minor ||
+        (o.up_to_minor === null && p.up_to_minor !== null && p.up_to_minor >= escrowpay.MAX_TRANSACTION_KOBO);
       const same =
-        (p.up_to_minor ?? null) === o.up_to_minor &&
+        boundsMatch &&
         p.calculation_type === o.calculation_type &&
         (p.fixed_minor ?? 0) === (o.fixed_minor ?? 0) &&
         (p.percentage_basis_points ?? 0) === (o.percentage_basis_points ?? 0) &&

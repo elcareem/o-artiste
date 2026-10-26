@@ -81,7 +81,7 @@ export type StatusCopy = {
  * What each state means, written for the client.
  *
  * Deliberately in the client's terms and not the system's: "escrow", "webhook"
- * and "state machine" appear nowhere. Someone who has just transferred ₦202,000
+ * and "state machine" appear nowhere. Someone who has just transferred ₦203,000
  * wants to know whether their money is safe and what happens next.
  */
 const COPY: Record<BookingState, StatusCopy> = {

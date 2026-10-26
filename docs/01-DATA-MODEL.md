@@ -179,7 +179,7 @@ Worked example — a ₦200,000 booking completing at 5% commission:
 
 The running sum after funding is **−₦200,000**, and that is correct rather than a failure: it is the money sitting in escrow, received from the client and not yet distributed. The invariant is that a **settled** booking sums to zero, so the ledger must be able to represent an in-flight one honestly.
 
-Net positions: the client parts with **₦202,000**, the artist receives **₦190,000**, the platform nets **₦9,930**, and the provider takes **₦2,070**. Those are the figures #26 asserts. The arithmetic behind each line is in `05` — including the correction found at #18, where the provider's live fee configuration turned out to charge money-in to the client at funding and money-out to the platform, rather than deducting both from the escrow. The artist figure recorded here was previously ₦187,930.
+Net positions: the client parts with **₦203,000**, the artist receives **₦190,000**, the platform nets **₦9,930**, and the provider takes **₦3,070** (under fee configuration v4; ₦202,000 and ₦2,070 before 16 October 2026). Those are the figures #26 asserts. The arithmetic behind each line is in `05` — including the correction found at #18, where the provider's live fee configuration turned out to charge money-in to the client at funding and money-out to the platform, rather than deducting both from the escrow. The artist figure recorded here was previously ₦187,930.
 
 Commission is recorded **gross**, with the payout fee as its own pair, rather than netting the fee into the commission line. Both balance identically; only the gross form still shows what the platform's take was before its costs.
 
@@ -191,7 +191,7 @@ A correction is the exact negation of the entry it offsets, typed `CORRECTION` a
 
 **`FEE_LIABILITY_ACCRUED(PLATFORM)` is a receivable, not income.** It is the bookkeeping counterpart that lets the cancellation balance on its own — the platform is out of pocket by the fees and holds a claim of equal value. `FEE_LIABILITY_SETTLED(PLATFORM)` is the cash that later arrives.
 
-The two are therefore **not** summed together to measure the platform's position: doing so counts the same ₦2,070 twice, once as a claim and once as its collection. The platform is whole when the fees it bore on the cancellation (`ESCROW_FEE_IN` + `ESCROW_FEE_OUT`, both negative there) plus the recovery on the settling booking come to zero.
+The two are therefore **not** summed together to measure the platform's position: doing so counts the same ₦3,070 twice, once as a claim and once as its collection. The platform is whole when the fees it bore on the cancellation (`ESCROW_FEE_IN` + `ESCROW_FEE_OUT`, both negative there) plus the recovery on the settling booking come to zero.
 
 Two traps in that calculation, both hit while writing #28's test:
 

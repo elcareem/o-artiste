@@ -1,7 +1,7 @@
 /**
  * Strike consequences and enforcement — docs/06 §5, issue #34.
  *
- * THE ACCOUNT CONSEQUENCE IS THE DETERRENT, NOT THE FEE. A ₦2,070 liability is
+ * THE ACCOUNT CONSEQUENCE IS THE DETERRENT, NOT THE FEE. A ₦3,070 liability is
  * a rounding error to a working artist; losing listing visibility is not. A
  * client left scrambling for a replacement act two days before their event has
  * suffered a harm no cancellation percentage compensates, and the only

@@ -121,10 +121,10 @@ describe('a completed booking reconciles to exactly zero', async () => {
 
   // The canonical ₦200,000 figures from docs/05 §1, read back off the ledger
   // rather than recomputed — this is what the parties actually ended up with.
-  assert.equal(r.byParty.CLIENT, -N(202000), 'client parts with ₦202,000');
+  assert.equal(r.byParty.CLIENT, -N(203000), 'client parts with ₦203,000');
   assert.equal(r.byParty.ARTIST, N(190000), 'artist receives ₦190,000');
   assert.equal(r.byParty.PLATFORM, N(9930), 'platform nets ₦9,930 after the payout fee');
-  assert.equal(r.byParty.PROVIDER, N(2070), 'provider takes ₦2,000 in + ₦70 out');
+  assert.equal(r.byParty.PROVIDER, N(3070), 'provider takes ₦3,000 in + ₦70 out');
 });
 
 describe('an unsettled booking does not balance, and says so', async () => {
@@ -204,7 +204,7 @@ describe('a client is made whole on an artist cancellation', async () => {
   // Zero fee exposure means the client's net position is exactly zero: they get
   // back the escrow AND the money-in fee they paid on top of it.
   assert.equal(r.byParty.CLIENT, 0, 'the client ends whole, not merely refunded');
-  assert.equal(r.byParty.ARTIST, -N(2070), 'the artist carries the fee liability');
+  assert.equal(r.byParty.ARTIST, -N(3070), 'the artist carries the fee liability');
 });
 
 // ── Criterion: a failed state change rolls back its ledger entry ─────────────
@@ -260,7 +260,7 @@ describe('the base Prisma client is refused outright', async () => {
         bookingId: booking.id,
         entryType: 'FUNDED',
         party: 'CLIENT',
-        amountKobo: -N(202000),
+        amountKobo: -N(203000),
       }),
     (err: ThrownError) => {
       assert.ok(err instanceof AppError);
@@ -307,10 +307,10 @@ describe('a correction produces two entries, not one modified entry', async () =
 
   const original = rows.find((e: any) => e.id === funded.id);
   assert.equal(original.entryType, 'FUNDED');
-  assert.equal(original.amountKobo, -N(202000), 'the original is untouched');
+  assert.equal(original.amountKobo, -N(203000), 'the original is untouched');
 
   assert.equal(correction.entryType, 'CORRECTION');
-  assert.equal(correction.amountKobo, N(202000), 'the correction is the exact negation');
+  assert.equal(correction.amountKobo, N(203000), 'the correction is the exact negation');
   assert.equal(correction.offsetsEntryId, funded.id, 'and names what it offsets');
   assert.match(correction.description, /funded at the wrong amount/);
 
@@ -395,7 +395,7 @@ describe('a liability accrued on one booking and settled on another leaves both 
   await inTx(async (tx: PrismaTx) => {
     await ledger.recordFunding(tx, later);
     await ledger.recordRelease(tx, later);
-    await ledger.recordFeeLiabilitySettlement(tx, later.id, N(2070));
+    await ledger.recordFeeLiabilitySettlement(tx, later.id, N(3070));
   });
 
   assert.equal((await ledger.reconcile(cancelled.id)).sumKobo, 0);
@@ -404,8 +404,8 @@ describe('a liability accrued on one booking and settled on another leaves both 
   // The artist's position across both: they carried the liability, then paid it.
   const a1 = (await ledger.reconcile(cancelled.id)).byParty.ARTIST;
   const a2 = (await ledger.reconcile(later.id)).byParty.ARTIST;
-  assert.equal(a1, -N(2070));
-  assert.equal(a2, N(190000) - N(2070), 'the settlement comes off the payout, not the commission');
+  assert.equal(a1, -N(3070));
+  assert.equal(a2, N(190000) - N(3070), 'the settlement comes off the payout, not the commission');
 });
 
 // ── The primitive's own guards ───────────────────────────────────────────────

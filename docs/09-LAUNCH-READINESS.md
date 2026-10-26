@@ -18,7 +18,7 @@ The code rules all pass. The missing screens (B1) are now built; what remains ar
 | **B4** | **Credentials were exposed in a working session and must be rotated:** the production database password and the `sk_test_` API key. | Account owner | Neither is in the repository (verified — §3), but both were pasted into a conversation transcript. Rotate both; issue a fresh `sk_live_` key only at go-live. |
 | **B5** | **The database accepts connections from anywhere (`0.0.0.0/0`).** | Account owner | Restrict inbound access to the Render services that need it before any real identity data is stored. |
 | **B6** | **EscrowPay's commercial terms and our own regulatory position are not in writing** (open items 11.2, 11.3). | Account owner | See §5. These are the two items this document recommends **not** accepting as risks for a public launch. |
-| **B7** | **EscrowPay changes its contract and prices without notice** (open item 11.13). | Account owner | In October 2026 `date_of_birth` became required on onboarding — nobody could verify, and so nobody could book, until it was handled — and two prices changed. Both are now handled, and prices are checked on every `GET /admin/diagnostics`; the contract has no equivalent check. Ask EscrowPay for change notification in writing. |
+| **B7** | **EscrowPay changes its contract and prices without notice** (open item 11.13). | Account owner | In October 2026 `date_of_birth` became required on onboarding — nobody could verify, and so nobody could book, until it was handled — and prices changed twice (v2 on 8 October, v4 on 16 October). All are now handled, and prices are checked on every `GET /admin/diagnostics`; the contract has no equivalent check. Ask EscrowPay for change notification in writing. |
 
 ---
 
@@ -55,7 +55,7 @@ Hardening found five defects. All are fixed in this branch, each with a test tha
 
 | Requirement | Status | Evidence / action |
 |---|---|---|
-| Rate limiting on auth, booking creation and check-in | ✅ | Redis-backed, so it holds across instances. Sign-in 10 / 15 min per address and account; registration 5 / hour per address; booking creation 20 / hour per user; check-in 10 / 10 min per artist and booking. **Also identity verification, 5 / day per user — each attempt costs ₦50 at the provider.** Fails open, so a Redis outage never locks anyone out; none of these endpoints relies on the limit alone. An off switch exists for the test suite and **is ignored on Render**. |
+| Rate limiting on auth, booking creation and check-in | ✅ | Redis-backed, so it holds across instances. Sign-in 10 / 15 min per address and account; registration 5 / hour per address; booking creation 20 / hour per user; check-in 10 / 10 min per artist and booking. **Also identity verification, 5 / day per user — each attempt costs ₦80 at the provider.** Fails open, so a Redis outage never locks anyone out; none of these endpoints relies on the limit alone. An off switch exists for the test suite and **is ignored on Render**. |
 | Secrets absent from the repository | ✅ | Full history scanned for `sk_test_`/`sk_live_` keys, `whsec_` secrets and credentialed connection strings: only placeholders and test fixtures. The leaked credentials (B4) exist only in a conversation transcript. |
 | `.env.example` complete | ✅ | Every `process.env` read in both apps is documented — checked mechanically, not by reading. |
 | Production webhook URL registered with EscrowPay | ⚠️ **Account owner to confirm** | Registered after an earlier finding that none was. Confirm exactly **one** URL is registered and that B3's test delivery reaches it. |
@@ -88,7 +88,7 @@ Each must be **resolved**, or **accepted as a launch risk** by a named person wi
 | **11.7** Cancellation-rate display threshold | Configurable; shown only after **5** concluded bookings in a 12-month window. | Accept. | | |
 | **11.8** Provider amount unit | **Resolved:** `amount_minor`, in kobo, verified against the sandbox. | Close. | | |
 | **11.9** Automatic payout disabled; releases land in our wallet | Open. Two-leg payout implemented; money sits with us for seconds. `GET /admin/payouts/awaiting` lists anything that stays. | Accept for launch **only** with 11.3 resolved, and ask EscrowPay to enable automatic payout. | | |
-| **11.10** ₦50 identity charge | **Resolved:** once per person. | Close. | | |
+| **11.10** Identity charge (₦80 since v4) | **Resolved:** once per person. | Close. | | |
 | **11.11** Notification request shapes unverified | Open — no credentials. | Obtain a Termii key and a **registered** sender ID (registration takes days), and an email provider with a verified domain. Watch the first real send: a wrong shape is a 4xx, which is logged and not retried. | | |
 | **11.12** Sandbox cannot be funded through the API | Open | Ask EscrowPay for a test-mode funding endpoint; meanwhile accept, with sandbox mode run by hand before launch. | | |
 

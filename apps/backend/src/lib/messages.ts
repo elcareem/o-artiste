@@ -130,7 +130,7 @@ type Email = { subject: string; body: string };
  * Booking confirmed, money held.
  *
  * States who holds the money, because that is the question a client has after
- * transferring ₦202,000 to an account they have never seen before. "A licensed
+ * transferring ₦203,000 to an account they have never seen before. "A licensed
  * bank, not us and not the artist" is the sentence that answers it.
  */
 function bookingConfirmedEmail({

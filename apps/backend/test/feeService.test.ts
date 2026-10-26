@@ -25,8 +25,8 @@ test('the canonical ₦200,000 booking, under the provider’s fee bearers', () 
   // changed by decision rather than adjusted quietly.
   const r = fee.computeCompletion({ amountKobo: N(200000), commissionBps: 500 });
 
-  assert.equal(r.moneyInFeeKobo, N(2000), 'money-in is capped at ₦2,000');
-  assert.equal(r.clientPaysKobo, N(202000), 'the client transfers amount PLUS the fee');
+  assert.equal(r.moneyInFeeKobo, N(3000), 'money-in is capped at ₦3,000');
+  assert.equal(r.clientPaysKobo, N(203000), 'the client transfers amount PLUS the fee');
   assert.equal(r.commissionKobo, N(10000), '5% of ₦200,000');
   assert.equal(r.moneyOutFeeKobo, N(70), 'payout above ₦50,000');
 
@@ -43,39 +43,39 @@ test('the canonical ₦200,000 booking, under the provider’s fee bearers', () 
 
 test('money-in at the ₦250,000 boundary, both sides', () => {
   // #14 names these. ₦250,000 itself is in the LOWER tier (the provider's
-  // `up_to_minor` is inclusive), so it is capped at ₦2,000.
-  assert.equal(fee.moneyInFee(N(249999)), N(2000), 'capped');
-  assert.equal(fee.moneyInFee(N(250000)), N(2000), 'capped, lower tier inclusive');
+  // `up_to_minor` is inclusive), so it is capped at ₦3,000.
+  assert.equal(fee.moneyInFee(N(249999)), N(3000), 'capped');
+  assert.equal(fee.moneyInFee(N(250000)), N(3000), 'capped, lower tier inclusive');
 
-  // Above it: 0.8% PLUS ₦100 since the provider's fee configuration v2
-  // (8 October 2026). 0.8% of ₦250,001 = 200,000.8 kobo, floored to 200,000,
-  // plus 10,000. Before v2 this asserted 200,000 — the schedule was continuous
-  // here, and now it steps up by ₦100.
-  assert.equal(fee.moneyInFee(N(250001)), 210000);
-  assert.equal(fee.moneyInFee(N(260000)), N(2180));
+  // Above it: 1.25% PLUS ₦150 under the provider's fee configuration v4
+  // (16 October 2026). 1.25% of ₦250,001 = 312,501.25 kobo, floored to
+  // 312,501, plus 15,000. (v1 was continuous here; v2 stepped up by ₦100; v4
+  // steps up by ₦275.01.)
+  assert.equal(fee.moneyInFee(N(250001)), 327501);
+  assert.equal(fee.moneyInFee(N(260000)), N(3400));
 
   // Still never cheaper above the boundary than at it.
   assert.ok(fee.moneyInFee(N(250001)) > fee.moneyInFee(N(250000)), 'a step up, not a dip');
 });
 
-test('money-in at the top of the range, under fee configuration v2', () => {
-  // ₦3,000,000: 0.8% is ₦24,000, plus the ₦100 fixed part.
-  assert.equal(fee.moneyInFee(N(3000000)), N(24100));
+test('money-in at the top of the range, under fee configuration v4', () => {
+  // ₦3,000,000: 1.25% is ₦37,500, plus the ₦150 fixed part.
+  assert.equal(fee.moneyInFee(N(3000000)), N(37650));
 });
 
-test('money-in where the cap ACTUALLY starts binding, around ₦126,667', () => {
+test('money-in where the cap ACTUALLY starts binding, at ₦190,000', () => {
   // The boundary #14's list misses entirely. Below this the percentage governs
-  // and rounding is live; above it the fee is a flat ₦2,000. Testing only the
+  // and rounding is live; above it the fee is a flat ₦3,000. Testing only the
   // ₦250,000 edge would never exercise the percentage region.
   //
-  // 1.5% + ₦100 exceeds ₦2,000 once amount > ₦126,666.67.
-  assert.equal(fee.moneyInFee(N(126666)), 199999, 'just under: percentage governs');
-  assert.equal(fee.moneyInFee(N(126667)), N(2000), 'exactly at: 200000.5 → floored 200000, == cap');
-  assert.equal(fee.moneyInFee(N(126668)), N(2000), 'just over: capped');
+  // 1.5% + ₦150 reaches ₦3,000 at exactly ₦190,000 (it was ₦126,667 under v2).
+  assert.equal(fee.moneyInFee(N(189999)), 299998, 'just under: 284,998.5 → floored 284,998, + 15,000');
+  assert.equal(fee.moneyInFee(N(190000)), N(3000), 'exactly at: the percentage meets the cap');
+  assert.equal(fee.moneyInFee(N(190001)), N(3000), 'just over: capped');
 
   // Well below the cap, the percentage plus the flat fee governs.
-  assert.equal(fee.moneyInFee(N(20000)), N(400), '1.5% of ₦20,000 = ₦300, + ₦100');
-  assert.equal(fee.moneyInFee(N(50000)), N(850), '1.5% of ₦50,000 = ₦750, + ₦100');
+  assert.equal(fee.moneyInFee(N(20000)), N(450), '1.5% of ₦20,000 = ₦300, + ₦150');
+  assert.equal(fee.moneyInFee(N(50000)), N(900), '1.5% of ₦50,000 = ₦750, + ₦150');
 });
 
 test('money-out at the ₦50,000 boundary, both sides', () => {
@@ -181,7 +181,7 @@ test('client cancellation: the client bears the fees, the artist’s share does 
   // bear for cancelling is the money-in fee they already paid at funding, which
   // is sunk rather than deducted here.
   assert.equal(r.clientRefundKobo, N(140000));
-  assert.equal(r.clientSunkFeeKobo, N(2000), 'paid at funding, not returned');
+  assert.equal(r.clientSunkFeeKobo, N(3000), 'paid at funding, not returned');
 
   // The artist's compensation is reduced by commission alone — never by fees.
   assert.equal(r.commissionKobo, N(3000), '5% of the artist’s ₦60,000');
@@ -196,7 +196,7 @@ test('the ₦0 floor is UNREACHABLE with the default tiers — measured, not ass
   //
   // The floor triggers only when the client's share is smaller than the escrow
   // fees. On the smallest booking the provider will accept (₦20,000), fees are
-  // ₦440 — and even the harshest default band returns the client ₦3,000. The
+  // ₦490 — and even the harshest default band returns the client ₦3,000. The
   // gap is an order of magnitude.
   for (const [band, bps] of [
     ['day-of', 1500],
@@ -233,7 +233,7 @@ test('a 0 bps refund band produces a ₦0 refund, stated rather than implied', (
   assert.equal(r.clientShareKobo, 0);
   assert.equal(r.clientRefundKobo, 0, 'zero, never negative');
   // They still lose the money-in fee they paid at funding.
-  assert.equal(r.clientSunkFeeKobo, N(400));
+  assert.equal(r.clientSunkFeeKobo, N(450));
 
   // The artist takes the whole escrow less commission.
   assert.ok(r.artistCompensationKobo > 0);

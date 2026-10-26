@@ -1,7 +1,7 @@
 /**
  * Identity verification — docs/02-API-CONTRACT.md §6, issue #10.
  *
- * Verification runs at ONBOARDING, not at checkout. The ₦50 the provider
+ * Verification runs at ONBOARDING, not at checkout. The fee the provider
  * charges is once per person for life, not per transaction, so it belongs to
  * the account and must never touch per-booking economics.
  *
@@ -18,11 +18,11 @@ const escrowpay = require('../lib/escrowpay.ts');
 const { recordAudit } = require('../lib/audit.ts');
 
 /**
- * ₦70, once per successful check — the provider's price since 14 October 2026
- * (it was ₦50). Returning users are free. Compared against the provider's live
- * configuration by feeScheduleService.
+ * ₦80, once per successful check — the provider's price since 16 October 2026
+ * (₦50 until 14 October, then ₦70). Returning users are free. Compared against
+ * the provider's live configuration by feeScheduleService.
  */
-const VERIFICATION_COST_KOBO = 7000;
+const VERIFICATION_COST_KOBO = 8000;
 const COST_CATEGORY = 'IDENTITY_VERIFICATION';
 
 const METHODS = Object.freeze(['NIN', 'BVN']);

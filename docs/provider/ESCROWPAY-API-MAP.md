@@ -597,6 +597,23 @@ Removed from the spec at the same time, none of them used by us:
 `/identities`, `/identities/{id}`, `/identities/{id}/verification-attempts`,
 `/identity-verification-attempts/{id}`. Added: `GET /fees/configuration`.
 
+## 16 October 2026 — fee configuration v4
+
+Found on 26 October by the drift check (`GET /admin/diagnostics` answered 503),
+not by a failing call. Read from `GET /fees/configuration`:
+
+| Fee | v2 | v4 |
+|---|---|---|
+| Money-in up to ₦250,000 | 1.5% + ₦100, capped at ₦2,000 | **1.5% + ₦150, capped at ₦3,000** |
+| Money-in above ₦250,000 | 0.8% + ₦100, unbounded | **1.25% + ₦150**, top tier bounded at ₦50,000,000 |
+| Identity verification | ₦70 | **₦80**, per NIN or BVN |
+| Payout | ₦40 / ₦70 | unchanged |
+
+A ₦200,000 booking now costs the client ₦203,000. The ₦50,000,000 bound is
+outside anything we can send (bookings stop at ₦3,000,000), so the drift check
+treats it as equal to our open-ended top tier. The estimate tables above are
+the v1 observations of 1 October and are kept as recorded.
+
 ## 8 and 14 October 2026 — fee configuration v2
 
 Read from the new `GET /fees/configuration`:

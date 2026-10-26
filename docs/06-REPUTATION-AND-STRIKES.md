@@ -58,7 +58,7 @@ Enforcement — suspension, restricted booking, removal — is §5 and #34. A st
 
 ## 5. Enforcement ladders
 
-**The account consequence, not the fee, is the real deterrent.** A ₦2,000 fee liability is a rounding error to a working artist; losing listing visibility is not.
+**The account consequence, not the fee, is the real deterrent.** A ₦3,000 fee liability is a rounding error to a working artist; losing listing visibility is not.
 
 ### Artist ladder
 

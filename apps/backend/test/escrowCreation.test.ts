@@ -139,7 +139,7 @@ const happyProvider = (txId = `TXN_${uniq()}`): Record<string, any> => ({
       masked_account_number: '****4680',
       bank_code: '090175',
       account_name: 'O-artist',
-      amount_minor: N(202000),
+      amount_minor: N(203000),
       currency: 'NGN',
       expires_at: new Date(Date.now() + 1800000).toISOString(),
       provider: 'rubies',
@@ -182,8 +182,8 @@ describe('a created booking returns a valid funding instruction', async () => {
   // Both figures are named, because they differ and the client must not be
   // surprised at their banking app (docs/05 §1).
   assert.equal(funding.bookingAmountKobo, N(200000));
-  assert.equal(funding.providerFeeKobo, N(2000));
-  assert.equal(funding.amountToTransferKobo, N(202000));
+  assert.equal(funding.providerFeeKobo, N(3000));
+  assert.equal(funding.amountToTransferKobo, N(203000));
 
   assert.deepEqual(funding.channels, ['bank_transfer']);
   assert.equal(funding.escrowId, txId);
@@ -451,7 +451,7 @@ describe('a returning client gets the account number back, not an empty instruct
   const session = {
     allowed_channels: ['bank_transfer'],
     payment_instructions: {
-      amount_minor: N(202000),
+      amount_minor: N(203000),
       account_number: '8881754743',
       account_name: 'O-artist',
       bank_code: '090175',
@@ -485,7 +485,7 @@ describe('a returning client gets the account number back, not an empty instruct
   );
 
   assert.equal(second.bankTransfer.accountNumber, '8881754743', 'the returning client can still pay');
-  assert.equal(second.amountToTransferKobo, N(202000));
+  assert.equal(second.amountToTransferKobo, N(203000));
   assert.equal(second.escrowId, 'TXN_return', 'and it is the same escrow');
 
   // The same idempotency key both times, so the provider returns the same
@@ -510,5 +510,5 @@ describe('an unreachable provider on re-read still shows the booking, without in
 
   assert.equal(instruction.bankTransfer, null, 'no fabricated account details');
   assert.equal(instruction.bookingAmountKobo, N(200000), 'but the booking is still readable');
-  assert.equal(instruction.amountToTransferKobo, N(202000));
+  assert.equal(instruction.amountToTransferKobo, N(203000));
 });

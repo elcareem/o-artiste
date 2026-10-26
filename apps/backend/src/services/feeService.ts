@@ -25,19 +25,25 @@
 
 const BPS_DENOMINATOR = 10000;
 
-// --- EscrowPay money-in: 1.5% + ₦100, capped at ₦2,000 up to ₦250,000;
-//     0.8% + ₦100, uncapped, above. docs/05 §1.
+// --- EscrowPay money-in, fee configuration v4 (from 16 October 2026):
+//     ₦150 + 1.5%, capped at ₦3,000, up to ₦250,000;
+//     ₦150 + 1.25%, uncapped, above. docs/05 §1.
 //
-//     The upper tier was 0.8% flat until the provider's fee configuration v2,
-//     effective 8 October 2026 — changed without notice and found two weeks
-//     later. `feeScheduleService` now compares these constants against the
-//     provider's published configuration, so the next change is caught the day
-//     it happens (GET /admin/diagnostics).
+//     The provider's top tier is bounded at ₦50,000,000; ours is not, because
+//     no booking can exceed ₦3,000,000 (MAX_TRANSACTION_KOBO) and the bound is
+//     never reached. feeScheduleService treats the two as the same for that
+//     reason.
+//
+//     History, because these change without notice: v1 had the upper tier at
+//     0.8% flat; v2 (8 Oct) added ₦100 to it; v4 (16 Oct) raised the fixed part
+//     to ₦150, the cap to ₦3,000 and the upper rate to 1.25%. Each was found by
+//     a failing live call or, since v2, by the drift check in
+//     feeScheduleService — run on every GET /admin/diagnostics.
 const MONEY_IN_THRESHOLD_KOBO = 25000000; // ₦250,000
 const MONEY_IN_LOW_BPS = 150; // 1.5%
-const MONEY_IN_FLAT_KOBO = 10000; // ₦100
-const MONEY_IN_CAP_KOBO = 200000; // ₦2,000
-const MONEY_IN_HIGH_BPS = 80; // 0.8%
+const MONEY_IN_FLAT_KOBO = 15000; // ₦150
+const MONEY_IN_CAP_KOBO = 300000; // ₦3,000
+const MONEY_IN_HIGH_BPS = 125; // 1.25%
 
 // --- EscrowPay money-out: ₦40 up to ₦50,000; ₦70 above.
 const MONEY_OUT_THRESHOLD_KOBO = 5000000; // ₦50,000
@@ -68,9 +74,9 @@ function moneyInFee(amountKobo: Kobo): Kobo {
   assertInteger(amountKobo, 'amountKobo');
 
   if (amountKobo > MONEY_IN_THRESHOLD_KOBO) {
-    // Uncapped above the threshold — and fixed-plus-percentage on BOTH tiers
-    // since v2, so the schedule steps up by ₦100 across ₦250,000 rather than
-    // meeting exactly at ₦2,000.
+    // Uncapped above the threshold, fixed-plus-percentage on both tiers. The
+    // schedule steps UP across ₦250,000: ₦3,000 at the cap, ₦3,275.01 just
+    // above it.
     return applyBps(amountKobo, MONEY_IN_HIGH_BPS) + MONEY_IN_FLAT_KOBO;
   }
 

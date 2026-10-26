@@ -11,9 +11,9 @@ Implemented by **#14** (`feeService.js`, pure), **#27**, **#28**, **#29**. Every
 | Fee | Rule | **Borne by** | **When** |
 |---|---|---|---|
 | **Platform commission** | Configurable bps, default **500** (5%), applied to the artist's gross share | Artist | at release |
-| **EscrowPay money-in** | 1.5% + ₦100, **capped at ₦2,000**, for amounts up to ₦250,000; **0.8% + ₦100 uncapped** above *(the + ₦100 since 8 Oct 2026 — see below)* | **Client** | **at funding, on top of the amount** |
+| **EscrowPay money-in** | 1.5% + ₦150, **capped at ₦3,000**, for amounts up to ₦250,000; **1.25% + ₦150 uncapped** above *(fee configuration v4, since 16 Oct 2026 — see below)* | **Client** | **at funding, on top of the amount** |
 | **EscrowPay money-out** | **₦40** for payouts up to ₦50,000; **₦70** above | **Platform** | at payout |
-| **Verification** | ₦50 per successful check, **once per person for life** | Platform | at onboarding |
+| **Verification** | ₦80 per successful check (v4), **once per person for life** | Platform | at onboarding |
 
 > ### Correction — the fee bearers, found at #18
 >
@@ -39,22 +39,22 @@ Implemented by **#14** (`feeService.js`, pure), **#27**, **#28**, **#29**. Every
 >
 > **Consequence for disclosure:** the client pays more than the headline price,
 > so #16's acknowledgement step and #21's funding page must both state the fee
-> plainly. A client who expects to transfer ₦200,000 and is asked for ₦202,000
+> plainly. A client who expects to transfer ₦200,000 and is asked for ₦203,000
 > is exactly the surprise the FCCPA obligations exist to prevent.
 
 Verification is an onboarding cost and a platform cost. **It never enters per-booking economics** — it is not deducted from a payout, not added to a fee total, and not charged again for a returning user.
 
 ### The ₦250,000 boundary
 
-At exactly ₦250,000 the lower tier still applies (the provider's tier bound is inclusive), so it costs ₦2,000. **Since the provider's fee configuration v2 (8 October 2026) the upper tier is 0.8% + ₦100**, so the schedule now **steps up by ₦100** across the boundary: ₦250,001 costs ₦2,100. Before v2 the two tiers met exactly at ₦2,000 and the schedule was continuous there.
+At exactly ₦250,000 the lower tier still applies (the provider's tier bound is inclusive), so it costs ₦3,000. **Under the provider's fee configuration v4 (16 October 2026) the upper tier is 1.25% + ₦150**, so the schedule **steps up by ₦275.01** across the boundary: ₦250,001 costs ₦3,275.01. (v1 met exactly at ₦2,000 and was continuous there; v2 stepped up by ₦100.) v4 also bounds its top tier at ₦50,000,000; ours is open-ended, which is the same thing because no booking can exceed ₦3,000,000.
 
-**The provider changes its prices without notice.** v2 was found two weeks after it took effect, during which every booking above ₦250,000 under-recorded the client's fee by ₦100. Our constants are now compared with `GET /fees/configuration` by `feeScheduleService`, and any difference fails `GET /admin/diagnostics` with a 503 — point a monitor at it.
+**The provider changes its prices without notice.** v2 was found two weeks after it took effect, during which every booking above ₦250,000 under-recorded the client's fee by ₦100. v4 (16 October) was found by the drift check below, ten days after it took effect, on a deployment that held no bookings. Our constants are now compared with `GET /fees/configuration` by `feeScheduleService`, and any difference fails `GET /admin/diagnostics` with a 503 — point a monitor at it.
 
-> **Correction to #14's technical note**, which describes the curve as non-monotonic around ₦250,000: it is not. ₦250,000 costs ₦2,000 and ₦260,000 costs ₦2,180 (₦2,080 before v2), which is an increase. What *is* non-monotonic is the **effective rate across the whole range** — the flat ₦100 makes small bookings expensive in percentage terms, the rate then falls through the capped band from 1.6% down to 0.8%, and sits just above 0.8% beyond it. Both sides of the boundary are still tested per #14's acceptance criteria; the tests are worth having, the stated reason was just wrong.
+> **Correction to #14's technical note**, which describes the curve as non-monotonic around ₦250,000: it is not. ₦250,000 costs ₦3,000 and ₦260,000 costs ₦3,400, which is an increase. What *is* non-monotonic is the **effective rate across the whole range** — the flat ₦150 makes small bookings expensive in percentage terms, the rate then falls through the capped band from 2.25% down to 1.2%, and sits just above 1.25% beyond it. Both sides of the boundary are still tested per #14's acceptance criteria; the tests are worth having, the stated reason was just wrong.
 
 ## 2. Where the cap binds
 
-For amounts up to ₦250,000, the ₦2,000 cap starts binding once `1.5% + ₦100 > ₦2,000`, i.e. above roughly **₦126,667**. Below that the percentage governs and rounding is live; above it the fee is a constant ₦2,000. Tests must cover both regions, not only the ₦250,000 edge.
+For amounts up to ₦250,000, the ₦3,000 cap starts binding once `1.5% + ₦150 ≥ ₦3,000`, i.e. at exactly **₦190,000** (₦126,667 under v2). Below that the percentage governs and rounding is live; above it the fee is a constant ₦3,000. Tests must cover both regions, not only the ₦250,000 edge.
 
 ## 3. Worked example — the canonical ₦200,000 booking
 
@@ -63,21 +63,21 @@ Booking ₦200,000 = **20,000,000 kobo**, commission 500 bps, completing normall
 | Step | Arithmetic | Kobo |
 |---|---|---|
 | Booking amount | what the escrow holds | 20,000,000 |
-| Money-in, added for the client | 1.5% = 300,000, + ₦100 = 310,000, **capped** | +200,000 |
-| **Client transfers** | | **20,200,000** |
+| Money-in, added for the client | 1.5% = 300,000, + ₦150 = 315,000, **capped** | +300,000 |
+| **Client transfers** | | **20,300,000** |
 | Commission | 5% of 20,000,000 | −1,000,000 |
 | **Artist net** | escrow less commission | **19,000,000** |
 | Money-out, absorbed by us | payout above ₦50,000 → ₦70 | −7,000 |
 | **Platform net** | commission less the payout fee | **993,000** |
 
-**The client pays ₦202,000. The artist receives ₦190,000. The platform nets
+**The client pays ₦203,000. The artist receives ₦190,000. The platform nets
 ₦9,930.**
 
 It reconciles against what the **client paid**, not against the booking amount —
 the money-in fee is part of their outflow but never enters escrow:
 
 ```
-19,000,000 (artist) + 993,000 (platform) + 207,000 (provider) = 20,200,000 ✓
+19,000,000 (artist) + 993,000 (platform) + 307,000 (provider) = 20,300,000 ✓
 ```
 
 > The figure previously recorded here was **₦187,930**, computed from the
@@ -202,7 +202,7 @@ Whether the refund leg itself incurs a money-out fee is **open item `00` §11.1*
 
 Fees can exceed a small refund — a ₦20,000 booking cancelled day-of refunds ₦3,000 gross against roughly ₦2,400 of fees, and a ₦25,000 booking cancelled day-of refunds ₦3,750 against fees that may exceed it outright.
 
-**The refund floors at ₦0. It is never negative, and the shortfall is not recovered from anyone.** Building collection logic for a sub-₦2,000 gap costs more than the gap.
+**The refund floors at ₦0. It is never negative, and the shortfall is not recovered from anyone.** Building collection logic for a sub-₦3,000 gap costs more than the gap.
 
 But it must be **shown before the client commits** (§7), never discovered afterwards.
 
@@ -223,7 +223,7 @@ This case has a structural problem the client case does not: the artist bears th
 
 1. **Accrual** — at artist cancellation. Ledger: the platform bears the cost now (`FEE_LIABILITY_ACCRUED`).
 2. **Settlement** — netted off the artist's **next** release, inside `escrowService.js`, before disbursing. That payout is the only moment the artist has money in the system to settle against. Ledger: `FEE_LIABILITY_SETTLED`.
-3. **Write-off** — if the account closes or goes permanently inactive. Pursuing a ₦2,000 debt through collections costs more than the debt.
+3. **Write-off** — if the account closes or goes permanently inactive. Pursuing a ₦3,000 debt through collections costs more than the debt.
 
 Both the accrual and the settlement are visible in the ledger — #28 asserts exactly that, because a liability that appears only as a smaller payout is indistinguishable from a miscalculation.
 

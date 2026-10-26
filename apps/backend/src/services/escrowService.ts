@@ -544,7 +544,7 @@ async function cancelByClient({
  *
  * Resolved with a `FeeLiability` — the platform fronts the cost and recovers it
  * from the artist's next payout (#26). If they never book again it is written
- * off, because pursuing a ₦2,000 debt through collections costs more than the
+ * off, because pursuing a ₦3,000 debt through collections costs more than the
  * debt.
  *
  * THE CLIENT RECEIVES 100%, PLUS THE FEE THEY PAID AT FUNDING. Not a
@@ -1268,7 +1268,7 @@ async function instructProvider(
 /**
  * Writes off an artist's outstanding liabilities.
  *
- * Pursuing a ₦2,000 debt through collections costs more than the debt, so a
+ * Pursuing a ₦3,000 debt through collections costs more than the debt, so a
  * liability against an account that will never transact again is written off
  * rather than carried indefinitely. The write-off is RECORDED, not deleted: the
  * platform bore that cost and the ledger has to keep saying so.
@@ -1531,7 +1531,7 @@ function refundSummaryFor(
  * the same mistake the ledger exists to avoid. A liability the payout cannot
  * cover in full stays outstanding for the next one.
  *
- * In practice these are ~₦2,070 against payouts of tens of thousands, so the
+ * In practice these are ~₦3,070 against payouts of tens of thousands, so the
  * case is rare; it is handled explicitly rather than left to chance.
  */
 async function selectSettleableLiabilities({

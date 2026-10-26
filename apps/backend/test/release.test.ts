@@ -219,8 +219,8 @@ describe('a ₦200,000 booking at 5% disburses ₦190,000 to the artist', async 
   assert.equal(r.sumKobo, 0, 'the booking reconciles to zero');
   assert.equal(r.byParty.ARTIST, N(190000));
   assert.equal(r.byParty.PLATFORM, N(9930));
-  assert.equal(r.byParty.CLIENT, -N(202000));
-  assert.equal(r.byParty.PROVIDER, N(2070));
+  assert.equal(r.byParty.CLIENT, -N(203000));
+  assert.equal(r.byParty.PROVIDER, N(3070));
 });
 
 // ── Criterion: a liability is netted off, both halves visible ───────────────
@@ -238,7 +238,7 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
     data: {
       artistUserId: artistUser.id,
       originBookingId: cancelled.booking.id,
-      amountKobo: N(2070),
+      amountKobo: N(3070),
       status: 'OUTSTANDING',
     },
   });
@@ -251,13 +251,13 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
   );
 
   assert.equal(result.artistNetKobo, N(190000), 'earned');
-  assert.equal(result.liabilitySettledKobo, N(2070), 'recovered');
-  assert.equal(result.artistPayoutKobo, N(190000) - N(2070), 'disbursed');
+  assert.equal(result.liabilitySettledKobo, N(3070), 'recovered');
+  assert.equal(result.artistPayoutKobo, N(190000) - N(3070), 'disbursed');
   // The whole escrow into our wallet; the artist paid their net LESS what they
-  // owed. The ₦2,070 recovered stays in our wallet, which is where the fees it
+  // owed. The ₦3,070 recovered stays in our wallet, which is where the fees it
   // repays were fronted from.
   assert.equal(leg(calls, 'release')[0].amountKobo, N(200000), 'the whole escrow into our wallet');
-  assert.equal(leg(calls, 'payout')[0].amountKobo, N(190000) - N(2070), 'and the artist is paid net of what they owed');
+  assert.equal(leg(calls, 'payout')[0].amountKobo, N(190000) - N(3070), 'and the artist is paid net of what they owed');
 
   const settled = await prisma.feeLiability.findUnique({ where: { id: liability.id } });
   assert.equal(settled.status, 'SETTLED');
@@ -273,8 +273,8 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
 
   assert.equal(accrued.length, 2, 'the accrual is a balanced pair');
   assert.equal(settledEntries.length, 2, 'and so is the settlement');
-  assert.equal(accrued.find((e: any) => e.party === 'ARTIST').amountKobo, -N(2070));
-  assert.equal(settledEntries.find((e: any) => e.party === 'ARTIST').amountKobo, -N(2070));
+  assert.equal(accrued.find((e: any) => e.party === 'ARTIST').amountKobo, -N(3070));
+  assert.equal(settledEntries.find((e: any) => e.party === 'ARTIST').amountKobo, -N(3070));
 
   // Each booking still reconciles on its own, even though the liability spans
   // two of them.
@@ -282,7 +282,7 @@ describe('an outstanding fee liability is netted off, with accrual and settlemen
   assert.equal(payout.sumKobo, 0);
 
   // The artist's position on the payout booking: earned, minus recovered.
-  assert.equal(payout.byParty.ARTIST, N(190000) - N(2070));
+  assert.equal(payout.byParty.ARTIST, N(190000) - N(3070));
 });
 
 describe('a liability larger than the payout is left outstanding rather than settled in part', async () => {
@@ -322,7 +322,7 @@ describe('several small liabilities settle oldest first, up to what the payout c
   const origin = await readyToRelease({ artistUser });
 
   const made: any[] = [];
-  for (const amountKobo of [N(2070), N(2070), N(2070)]) {
+  for (const amountKobo of [N(3070), N(3070), N(3070)]) {
     made.push(
       await prisma.feeLiability.create({
         data: { artistUserId: artistUser.id, originBookingId: origin.booking.id, amountKobo, status: 'OUTSTANDING' },
@@ -337,8 +337,8 @@ describe('several small liabilities settle oldest first, up to what the payout c
     escrowService.releaseBooking({ bookingId: booking.id })
   );
 
-  assert.equal(result.liabilitySettledKobo, N(6210), 'all three settled');
-  assert.equal(result.artistPayoutKobo, N(19000) - N(6210));
+  assert.equal(result.liabilitySettledKobo, N(9210), 'all three settled');
+  assert.equal(result.artistPayoutKobo, N(19000) - N(9210));
 
   const statuses = await prisma.feeLiability.findMany({ where: { id: { in: made.map((l: any) => l.id) } } });
   assert.ok(statuses.every((l: any) => l.status === 'SETTLED'));
@@ -504,7 +504,7 @@ describe('reconciliation holds across the fee boundaries', async () => {
 
 describe('the payout preview discloses liabilities this payout would settle', async () => {
   // #26 introduced the deduction; without this the preview says ₦190,000 and
-  // the artist receives ₦187,930, discovering the difference afterwards.
+  // the artist receives ₦186,930, discovering the difference afterwards.
   // docs/00 §7 requires them to see their net BEFORE agreeing, and a "net"
   // that omits a known deduction is not a net.
   const { createApp } = require('../src/app.ts');
@@ -518,7 +518,7 @@ describe('the payout preview discloses liabilities this payout would settle', as
     data: {
       artistUserId: artistUser.id,
       originBookingId: origin.booking.id,
-      amountKobo: N(2070),
+      amountKobo: N(3070),
       status: 'OUTSTANDING',
     },
   });
@@ -534,9 +534,9 @@ describe('the payout preview discloses liabilities this payout would settle', as
     const { payout } = ((await res.json()) as any);
 
     assert.equal(payout.artistNetKobo, N(190000), 'what the booking earns');
-    assert.equal(payout.outstandingLiabilityKobo, N(2070), 'what they owe');
-    assert.equal(payout.liabilitySettleableKobo, N(2070), 'what this payout can clear');
-    assert.equal(payout.estimatedPayoutKobo, N(187930), 'what would actually reach them');
+    assert.equal(payout.outstandingLiabilityKobo, N(3070), 'what they owe');
+    assert.equal(payout.liabilitySettleableKobo, N(3070), 'what this payout can clear');
+    assert.equal(payout.estimatedPayoutKobo, N(186930), 'what would actually reach them');
     assert.equal(payout.liabilities.length, 1, 'and which liability it is');
 
     // Reported separately rather than folded into artistNetKobo: an earlier

@@ -1,8 +1,9 @@
 /**
  * Are our fee constants still the provider's prices? — the drift check.
  *
- * Built after EscrowPay changed two prices in October 2026 without notice.
- * The fixture is the provider's live configuration as read on 14 October 2026.
+ * Built after EscrowPay changed two prices in October 2026 without notice, and
+ * proved when it changed them again (v4, 16 October 2026). The fixture is the
+ * provider's live configuration as read on 26 October 2026.
  */
 
 const test = require('node:test');
@@ -10,43 +11,56 @@ const assert = require('node:assert/strict');
 
 const { driftAgainst } = require('../src/services/feeScheduleService.ts');
 
-/** GET /fees/configuration, 14 October 2026, trimmed to the fields compared. */
-const LIVE_V2 = [
+/** GET /fees/configuration, 26 October 2026 (v4), trimmed to the fields compared. */
+const LIVE_V4 = [
   {
-    fee_type: 'escrow_service', payer: 'payer', timing: 'at_funding', calculation_type: 'tiered', version: 2,
+    fee_type: 'escrow_service', payer: 'payer', timing: 'at_funding', calculation_type: 'tiered', version: 4,
     tiers: [
-      { up_to_minor: 25000000, calculation_type: 'fixed_plus_percentage', fixed_minor: 10000, percentage_basis_points: 150, maximum_minor: 200000 },
-      { up_to_minor: null, calculation_type: 'fixed_plus_percentage', fixed_minor: 10000, percentage_basis_points: 80, maximum_minor: null },
+      { up_to_minor: 25000000, calculation_type: 'fixed_plus_percentage', fixed_minor: 15000, percentage_basis_points: 150, maximum_minor: 300000 },
+      { up_to_minor: 5000000000, calculation_type: 'fixed_plus_percentage', fixed_minor: 15000, percentage_basis_points: 125, maximum_minor: null },
     ],
   },
   {
-    fee_type: 'payout', payer: 'business', timing: 'at_payout', calculation_type: 'tiered', version: 2,
+    fee_type: 'payout', payer: 'business', timing: 'at_payout', calculation_type: 'tiered', version: 4,
     tiers: [
       { up_to_minor: 5000000, calculation_type: 'fixed', fixed_minor: 4000, percentage_basis_points: 0, maximum_minor: null },
       { up_to_minor: null, calculation_type: 'fixed', fixed_minor: 7000, percentage_basis_points: 0, maximum_minor: null },
     ],
   },
-  { fee_type: 'identity_verification_nin', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 7000, percentage_basis_points: 0 },
-  { fee_type: 'identity_verification_bvn', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 7000, percentage_basis_points: 0 },
+  { fee_type: 'identity_verification_nin', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 8000, percentage_basis_points: 0 },
+  { fee_type: 'identity_verification_bvn', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 8000, percentage_basis_points: 0 },
 ];
 
-const clone = () => JSON.parse(JSON.stringify(LIVE_V2));
+const clone = () => JSON.parse(JSON.stringify(LIVE_V4));
 
 test('our constants match the provider as it stands', () => {
-  assert.deepEqual(driftAgainst(LIVE_V2), []);
+  assert.deepEqual(driftAgainst(LIVE_V4), []);
 });
 
-test('the change that went unnoticed for two weeks would now be reported', () => {
-  // v1: the upper money-in tier had no fixed part, and identity checks were ₦50.
-  const v1 = clone();
-  v1[0].tiers[1].fixed_minor = 0;
-  v1[2].fixed_minor = 5000;
-  v1[3].fixed_minor = 5000;
+test('the v2 → v4 change would be reported, every part of it', () => {
+  // v2 (8 October 2026): ₦100 fixed, ₦2,000 cap, 0.8% above ₦250,000, an
+  // unbounded top tier, and identity checks at ₦70.
+  const v2 = clone();
+  v2[0].tiers[0].fixed_minor = 10000;
+  v2[0].tiers[0].maximum_minor = 200000;
+  v2[0].tiers[1] = { ...v2[0].tiers[1], up_to_minor: null, fixed_minor: 10000, percentage_basis_points: 80 };
+  v2[2].fixed_minor = 7000;
+  v2[3].fixed_minor = 7000;
 
-  const drift = driftAgainst(v1);
-  assert.equal(drift.length, 3);
-  assert.match(drift[0], /escrow_service tier 2: we assume above: ₦100 \+ 0\.8%; the provider charges above: ₦0 \+ 0\.8%/);
-  assert.match(drift.join('\n'), /identity_verification_nin: we record ₦70; the provider charges ₦50/);
+  const drift = driftAgainst(v2).join('\n');
+  assert.equal(driftAgainst(v2).length, 4);
+  assert.match(drift, /escrow_service tier 1/);
+  assert.match(drift, /escrow_service tier 2/);
+  assert.match(drift, /identity_verification_nin: we record ₦80; the provider charges ₦70/);
+  assert.match(drift, /identity_verification_bvn/);
+});
+
+test('a bounded top tier is the same as ours only if no booking can reach the bound', () => {
+  // v4 bounds the top tier at ₦50,000,000; ours is open-ended because bookings
+  // stop at ₦3,000,000. A bound inside our range would be a real difference.
+  const low = clone();
+  low[0].tiers[1].up_to_minor = 100000000; // ₦1,000,000
+  assert.match(driftAgainst(low).join('\n'), /escrow_service tier 2/);
 });
 
 test('who pays is checked, not only how much', () => {

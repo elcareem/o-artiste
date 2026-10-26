@@ -173,7 +173,7 @@ const LIMITS = {
   }),
 
   /**
-   * Identity verification COSTS ₦50 PER ATTEMPT at the provider. Without a limit,
+   * Identity verification COSTS US MONEY PER ATTEMPT at the provider. Without a limit,
    * a script with one valid token is a way to spend our money.
    */
   verification: rateLimit({

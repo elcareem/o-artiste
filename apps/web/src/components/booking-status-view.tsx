@@ -174,7 +174,7 @@ export function BookingStatusView({
           {/* BOTH FIGURES ARE NAMED. The provider charges its fee to the payer
               on top of the booking amount rather than deducting it from the
               escrow, so a client expecting to send ₦200,000 is asked for
-              ₦202,000. Being surprised by that at the banking app is exactly
+              ₦203,000. Being surprised by that at the banking app is exactly
               what the disclosure rules exist to prevent (docs/05 §1). */}
           <p className="mt-1 text-sm text-[var(--color-muted)]">
             {formatNaira(funding.bookingAmountKobo)} for the booking, plus{' '}

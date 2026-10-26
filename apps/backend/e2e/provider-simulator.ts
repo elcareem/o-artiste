@@ -52,29 +52,29 @@ type Txn = {
 };
 
 /**
- * The provider's own money-in fee — configuration v2, from 8 October 2026.
+ * The provider's own money-in fee — configuration v4, from 16 October 2026.
  * Written out here rather than imported from feeService, because this plays the
  * PROVIDER: if our constants drift, the e2e run should disagree with them.
  */
 function moneyInFee(kobo: number): number {
-  if (kobo <= 25_000_000) return Math.min(Math.floor((kobo * 150) / 10_000) + 10_000, 200_000);
-  return Math.floor((kobo * 80) / 10_000) + 10_000;
+  if (kobo <= 25_000_000) return Math.min(Math.floor((kobo * 150) / 10_000) + 15_000, 300_000);
+  return Math.floor((kobo * 125) / 10_000) + 15_000;
 }
 
-/** GET /fees/configuration, as the provider published it on 14 October 2026. */
+/** GET /fees/configuration, as the provider published it on 26 October 2026 (v4). */
 const FEE_CONFIGURATION = [
   { fee_type: 'escrow_service', payer: 'payer', timing: 'at_funding', calculation_type: 'tiered', fixed_minor: 0, percentage_basis_points: 0,
     tiers: [
-      { up_to_minor: 25_000_000, calculation_type: 'fixed_plus_percentage', fixed_minor: 10_000, percentage_basis_points: 150, maximum_minor: 200_000 },
-      { up_to_minor: null, calculation_type: 'fixed_plus_percentage', fixed_minor: 10_000, percentage_basis_points: 80, maximum_minor: null },
+      { up_to_minor: 25_000_000, calculation_type: 'fixed_plus_percentage', fixed_minor: 15_000, percentage_basis_points: 150, maximum_minor: 300_000 },
+      { up_to_minor: 5_000_000_000, calculation_type: 'fixed_plus_percentage', fixed_minor: 15_000, percentage_basis_points: 125, maximum_minor: null },
     ] },
   { fee_type: 'payout', payer: 'business', timing: 'at_payout', calculation_type: 'tiered', fixed_minor: 0, percentage_basis_points: 0,
     tiers: [
       { up_to_minor: 5_000_000, calculation_type: 'fixed', fixed_minor: 4_000, percentage_basis_points: 0, maximum_minor: null },
       { up_to_minor: null, calculation_type: 'fixed', fixed_minor: 7_000, percentage_basis_points: 0, maximum_minor: null },
     ] },
-  { fee_type: 'identity_verification_nin', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 7_000, percentage_basis_points: 0, tiers: [] },
-  { fee_type: 'identity_verification_bvn', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 7_000, percentage_basis_points: 0, tiers: [] },
+  { fee_type: 'identity_verification_nin', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 8_000, percentage_basis_points: 0, tiers: [] },
+  { fee_type: 'identity_verification_bvn', payer: 'business', timing: 'at_funding', calculation_type: 'fixed', fixed_minor: 8_000, percentage_basis_points: 0, tiers: [] },
 ];
 
 function createProviderSimulator({
@@ -498,4 +498,4 @@ function createProviderSimulator({
   };
 }
 
-module.exports = { createProviderSimulator, moneyInFee };
+module.exports = { createProviderSimulator, moneyInFee, FEE_CONFIGURATION };
