@@ -96,7 +96,7 @@ describe('a successful verification stores the result and the party, never the i
   const { user } = await makeUser();
 
   const result = await withStub(async () => successResponse('abc123'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
   );
 
   assert.equal(result.status, 'VERIFIED');
@@ -121,7 +121,7 @@ describe('re-running verification for an already-verified user makes NO provider
   const { user } = await makeUser();
 
   await withStub(async () => successResponse('cached1'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
   );
 
   // The stub now throws if called at all, so a second provider call fails loudly.
@@ -131,7 +131,7 @@ describe('re-running verification for an already-verified user makes NO provider
       called = true;
       throw new Error('the provider must not be called for a verified user');
     },
-    () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+    () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
   );
 
   assert.equal(called, false, 'no provider call for a returning user');
@@ -144,10 +144,10 @@ describe('a returning user is charged once, not twice', async () => {
   const { user } = await makeUser();
 
   await withStub(async () => successResponse('cost1'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
   );
   await withStub(async () => successResponse('cost1'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
   );
 
   const costs = await prisma.platformCost.findMany({ where: { userId: user.id } });
@@ -170,7 +170,7 @@ describe('a provider timeout leaves the user RETRYABLE, not failed', async () =>
         async () => {
           throw providerError('provider_unreachable', 'timeout of 15000ms exceeded');
         },
-        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
       ),
     (err: ThrownError) => {
       // 503, not 403 — this is our partner being unreachable, not a rejection.
@@ -189,7 +189,7 @@ describe('a provider timeout leaves the user RETRYABLE, not failed', async () =>
 
   // And a later attempt succeeds, so the state really was recoverable.
   const retry = await withStub(async () => successResponse('after_retry'), () =>
-    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+    service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
   );
   assert.equal(retry.status, 'VERIFIED');
 });
@@ -209,7 +209,7 @@ describe('a 4xx from the provider is a fixable request, not an outage', async ()
           err.providerStatus = 422;
           throw err;
         },
-        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902' })
+        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent: true })
       ),
     (err: ThrownError) => {
       assert.equal(err.status, 400, 'a fixable request is 400, not 503');
@@ -237,7 +237,7 @@ describe('a genuine mismatch is REJECTED and is not retryable', async () => {
             'Identity verification did not succeed; party was not created (data_mismatch).'
           );
         },
-        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901' })
+        () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901', consent: true })
       ),
     (err: ThrownError) => err.status === 403
   );
@@ -256,7 +256,7 @@ describe('a genuine mismatch is REJECTED and is not retryable', async () => {
         called = true;
         return successResponse();
       },
-      () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901' })
+      () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678901', consent: true })
     )
   );
   assert.equal(called, false, 'a rejected identity is not retried against the provider');
@@ -279,7 +279,7 @@ describe('409 identity_already_exists is treated as success, not failure', async
         502
       );
     },
-    () => service.verifyUser({ userId: user.id, method: 'BVN', identifier: '22222222222' })
+    () => service.verifyUser({ userId: user.id, method: 'BVN', identifier: '22222222222', consent: true })
   );
 
   assert.equal(result.status, 'VERIFIED');
@@ -307,7 +307,7 @@ describe('input is validated before the provider is troubled', async () => {
             called = true;
             return successResponse();
           },
-          () => service.verifyUser({ userId: user.id, method, identifier })
+          () => service.verifyUser({ userId: user.id, method, identifier, consent: true })
         ),
       (err: ThrownError) => err.status === 400
     );
@@ -334,7 +334,7 @@ describe('the endpoints require auth and report status', async () => {
       fetch(`${server.url}/me/verification`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ method: 'NIN', identifier: '12345678902' }),
+        body: JSON.stringify({ method: 'NIN', identifier: '12345678902', consent: true }),
       })
     );
     assert.equal(res.status, 201);
@@ -355,4 +355,83 @@ describe('the endpoints require auth and report status', async () => {
 
 test.after(async () => {
   if (prisma) await prisma.$disconnect();
+});
+
+// ---------------------------------------------------------------------------
+// Consent — issue #41
+// ---------------------------------------------------------------------------
+
+describe('an identity check without explicit consent is refused before anything is sent', async () => {
+  const { user } = await makeUser();
+  let providerCalls = 0;
+
+  for (const consent of [undefined, false, 'true', 'yes', 1, null, {}]) {
+    await withStub(
+      async () => {
+        providerCalls++;
+        return successResponse('should-not-happen');
+      },
+      async () => {
+        await assert.rejects(
+          () => service.verifyUser({ userId: user.id, method: 'NIN', identifier: '12345678902', consent }),
+          (err: any) => {
+            assert.equal(err.status, 400, `consent ${JSON.stringify(consent)} was accepted`);
+            // Says what is being asked and why, in the person's terms.
+            assert.match(err.message, /agree to your NIN being checked/);
+            assert.match(err.message, /do not keep the number/);
+            return true;
+          }
+        );
+      }
+    );
+  }
+
+  // NOTHING LEFT THE SYSTEM. A refusal that still sent the identifier on would
+  // be worse than no check at all.
+  assert.equal(providerCalls, 0, 'the identifier reached the provider without consent');
+  const after = await prisma.user.findUnique({ where: { id: user.id } });
+  assert.equal(after.verificationAttempts, 0, 'a refused request counted as an attempt');
+});
+
+describe('consent is recorded before the check, and sent to the provider explicitly', async () => {
+  const { user } = await makeUser();
+  let sentBody: any = null;
+
+  await withStub(
+    async (args: any) => {
+      sentBody = args;
+      return successResponse('consent-check');
+    },
+    () => service.verifyUser({
+      userId: user.id,
+      method: 'NIN',
+      identifier: '12345678902',
+      consent: true,
+      context: { actorIp: '203.0.113.7', actorUserAgent: 'test-agent' },
+    })
+  );
+
+  const record = await prisma.auditLog.findFirst({
+    where: { action: 'IDENTITY_CHECK_CONSENTED', entityId: user.id },
+  });
+  assert.ok(record, 'no consent record');
+  assert.equal(record.actorUserId, user.id);
+  assert.equal(record.actorIp, '203.0.113.7');
+  assert.equal(record.after.method, 'NIN');
+  // The number itself is never recorded — only that it was consented to.
+  assert.doesNotMatch(JSON.stringify(record), /12345678902/);
+
+  // Explicit, not the provider's default, and pointing at our own record.
+  assert.ok(sentBody, 'the provider was never called');
+  assert.equal(sentBody.consent, true);
+  assert.equal(sentBody.consentReference, record.id);
+});
+
+describe('the provider client refuses to onboard without consent at all', async () => {
+  const ep = require('../src/lib/escrowpay.ts');
+  // A programming error rather than a user one — and caught before any request.
+  assert.throws(
+    () => ep.onboardParty({ type: 'nin', identifier: '12345678902', email: 'a@b.co', reference: 'r' }),
+    /requires consent: true/
+  );
 });

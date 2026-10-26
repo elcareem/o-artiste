@@ -14,6 +14,7 @@ const {
 } = require('../lib/auth.ts');
 const { requireAuth } = require('../middleware/auth.ts');
 const { recordAuditSafe, actorContext } = require('../lib/audit.ts');
+const { LIMITS } = require('../lib/rateLimit.ts');
 
 const router = express.Router();
 
@@ -28,7 +29,7 @@ const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
  * SUPER_ADMIN, and an attempt to claim one is rejected with 403 rather than
  * quietly downgraded — a silent downgrade hides an attempt worth seeing.
  */
-router.post('/auth/register', async (req: Req, res: Res, next: Next) => {
+router.post('/auth/register', LIMITS.register, async (req: Req, res: Res, next: Next) => {
   try {
     const { email, phone, password, role, displayName, stageName } = req.body ?? {};
 
@@ -104,7 +105,7 @@ router.post('/auth/register', async (req: Req, res: Res, next: Next) => {
 });
 
 /** POST /auth/login */
-router.post('/auth/login', async (req: Req, res: Res, next: Next) => {
+router.post('/auth/login', LIMITS.login, async (req: Req, res: Res, next: Next) => {
   try {
     const { email, password } = req.body ?? {};
 

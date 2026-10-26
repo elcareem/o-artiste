@@ -447,24 +447,44 @@ async function refund({
  * In the test book this runs against EscrowPay's simulator, never Prembly:
  * an identifier ending in an even digit verifies, an odd one fails.
  */
+/**
+ * Onboards a party, which runs the identity check.
+ *
+ * `consent` is REQUIRED and must be `true`. It defaulted to `true` here until
+ * #41 — on top of the provider defaulting it to `true` as well — so a caller
+ * could submit someone's NIN while claiming consent nobody gave. Now a caller
+ * has to say so, and should say where it is recorded.
+ */
 function onboardParty({
   type,
   identifier,
   email,
   reference,
-  consent = true,
+  consent,
+  consentReference,
 }: {
   type: string;
   identifier: string;
   email?: string;
   reference: string;
-  consent?: boolean;
+  consent: true;
+  consentReference?: string;
 }): Promise<any> {
+  if (consent !== true) {
+    // A programming error, not a user one: the service layer asks the person.
+    throw new Error('onboardParty requires consent: true — ask the person before checking their identity.');
+  }
   return request({
     method: 'POST',
     path: '/parties/onboard',
     idempotencyKey: reference,
-    body: { type, identifier, email, consent },
+    body: {
+      type,
+      identifier,
+      email,
+      consent,
+      ...(consentReference ? { consent_reference: consentReference.slice(0, 120) } : {}),
+    },
   });
 }
 

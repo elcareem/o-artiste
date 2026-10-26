@@ -9,6 +9,7 @@ const express = require('express');
 
 const { requireAuth } = require('../middleware/auth.ts');
 const { verifyUser, getStatus } = require('../services/verificationService.ts');
+const { LIMITS } = require('../lib/rateLimit.ts');
 
 const router = express.Router();
 
@@ -19,10 +20,16 @@ const router = express.Router();
  *
  * The identifier is used for this call and never stored.
  */
-router.post('/me/verification', requireAuth, async (req: AuthedReq, res: Res, next: Next) => {
+router.post('/me/verification', requireAuth, LIMITS.verification, async (req: AuthedReq, res: Res, next: Next) => {
   try {
-    const { method, identifier } = req.body ?? {};
-    const result = await verifyUser({ userId: req.user.id, method, identifier });
+    const { method, identifier, consent } = req.body ?? {};
+    const result = await verifyUser({
+      userId: req.user.id,
+      method,
+      identifier,
+      consent,
+      context: { actorIp: req.ip ?? null, actorUserAgent: req.get('user-agent') ?? null },
+    });
     res.status(result.cached ? 200 : 201).json({ verification: result });
   } catch (err) {
     next(err);

@@ -30,6 +30,7 @@ scripts/         Rule enforcement
 | [06-REPUTATION-AND-STRIKES](docs/06-REPUTATION-AND-STRIKES.md) | Strike triggers, enforcement ladders, cancellation rate |
 | [07-ADMIN-CONFIG](docs/07-ADMIN-CONFIG.md) | Permission tiers, versioned config, snapshots, audit |
 | [08-BUILD-PLAN](docs/08-BUILD-PLAN.md) | Implementation order and phase gates |
+| [09-LAUNCH-READINESS](docs/09-LAUNCH-READINESS.md) | **What stands between this system and real money** — blockers, evidence, and the open decisions |
 
 ## The rules that do not bend
 

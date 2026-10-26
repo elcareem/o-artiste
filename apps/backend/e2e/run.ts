@@ -43,6 +43,9 @@ process.env.QUEUE_PREFIX = `e2e-${process.pid}-${Date.now()}`;
 // the degraded-not-broken path #38 guarantees cannot affect money.
 delete process.env.SMS_API_KEY;
 delete process.env.EMAIL_API_KEY;
+// The run registers ~35 accounts from one address in seconds. Limits are
+// exercised on their own in test/rateLimit.test.ts. Ignored on Render.
+process.env.RATE_LIMITS = 'off';
 
 const { createProviderSimulator, moneyInFee } = require('./provider-simulator.ts');
 
@@ -187,7 +190,7 @@ async function scenario(name: string, fn: () => Promise<string | void>) {
     const actor = { token: body.token, userId: body.user.id, email };
 
     // Identity verification through the provider, as onboarding does it.
-    await expectOk('POST', '/me/verification', actor.token, { method: 'NIN', identifier: freshNin() });
+    await expectOk('POST', '/me/verification', actor.token, { method: 'NIN', identifier: freshNin(), consent: true });
     return actor;
   }
 

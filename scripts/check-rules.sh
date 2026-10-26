@@ -205,6 +205,26 @@ else
   fi
 fi
 
+# ── Snapshots, never live config, in money math — docs/07 §4, issue #41 ──────
+# Versioned config achieves nothing if payout math reads the CURRENT value: the
+# terms a client acknowledged would stop being the terms that execute. The
+# resolvers may be called from exactly three places — the booking snapshot, the
+# admin configuration screens, and their own modules.
+SRC="apps/backend/src"
+if [ ! -d "$SRC" ]; then
+  skip "Live configuration is read only by the snapshot and the admin screens" "$SRC not present yet"
+else
+  hits="$(grep -rnE '\b(resolveCommissionRate|resolveCommissionBps|resolveTierSet|tierSetOrNull)\(' "$SRC" 2>/dev/null \
+          | grep -vE '(services/bookingService|routes/admin|services/commissionService|services/cancellationTierService)\.(js|ts):' \
+          | grep -vE '^[^:]*:[0-9]+:[[:space:]]*(//|/\*|\*|#)' || true)"
+  if [ -z "$hits" ]; then
+    pass "Live configuration is read only by the snapshot and the admin screens"
+  else
+    fail "Live configuration is read only by the snapshot and the admin screens" \
+         "Money math reads the booking's frozen snapshot, never live config. docs/07-ADMIN-CONFIG.md §4." "$hits"
+  fi
+fi
+
 # ── Check-in code visibility — docs/02 §5, docs/04 §1, issue #22 ────────────
 # The code is the only evidence the two parties were physically together, and
 # that rests entirely on the artist being unable to obtain it except from the

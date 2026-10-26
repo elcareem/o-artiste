@@ -122,6 +122,27 @@ router.get('/artists', async (req: Req, res: Res, next: Next) => {
 });
 
 /**
+ * GET /artists/banks
+ *
+ * REGISTERED BEFORE `/artists/:id`, and it must stay there. Express matches
+ * routes in order, and `/artists/:id` matches `/artists/banks` with
+ * `id = "banks"` — so for as long as this sat below it, every caller got
+ * "Artist not found." and no artist could load the list of banks for their
+ * payout account. Found by #41's permission sweep.
+ *
+ * The banks a payout account can be registered against, read from the provider
+ * rather than hardcoded — a stale bank list is a payout that silently goes
+ * nowhere.
+ */
+router.get('/artists/banks', requireAuth, requireRole('ARTIST'), async (req: Req, res: Res, next: Next) => {
+  try {
+    res.json({ banks: await payoutService.banks() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /artists/:id — public detail.
  *
  * A non-listable artist returns 404 rather than 403. Distinguishing them would
@@ -181,20 +202,6 @@ router.put('/artists/:id', requireAuth, requireRole('ARTIST'), async (req: Authe
   }
 });
 
-/**
- * GET /artists/banks
- *
- * The banks a payout account can be registered against, read from the provider
- * rather than hardcoded — a stale bank list is a payout that silently goes
- * nowhere.
- */
-router.get('/artists/banks', requireAuth, requireRole('ARTIST'), async (req: Req, res: Res, next: Next) => {
-  try {
-    res.json({ banks: await payoutService.banks() });
-  } catch (err) {
-    next(err);
-  }
-});
 
 /**
  * GET /artists/me/payout-account

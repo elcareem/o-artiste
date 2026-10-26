@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { canCheckIn, codeProblem, whyNotYet } from './check-in.ts';
+import { CODE_LENGTH, canCheckIn, codeProblem, normaliseCode, whyNotYet } from './check-in.ts';
 import { isPresentable } from './error-messages.ts';
 
 const STATES = [
@@ -64,20 +64,61 @@ test('an already-checked-in booking reads differently from a disputed one', () =
   assert.match(whyNotYet('DISPUTED'), /held/);
 });
 
+test('a correct code is accepted in every form the client might read it out', () => {
+  // The client is shown ABCD-EFGH. An artist may type it with the hyphen, with
+  // a space, without either, or in lower case — the backend accepts all of them.
+  //
+  // THIS TEST DID NOT EXIST WHEN #39 SHIPPED, and the form then rejected every
+  // one of these: it counted raw characters against a length of 6. No artist
+  // could check in through the web app.
+  for (const typed of ['ABCD-EFGH', 'ABCDEFGH', 'abcd-efgh', 'ABCD EFGH', '  ABCD-EFGH  ', 'abcd efgh']) {
+    assert.equal(codeProblem(typed), null, `rejected a correct code typed as "${typed}"`);
+  }
+});
+
+test('normalising matches the backend: upper case, separators gone', () => {
+  assert.equal(normaliseCode('abcd-efgh'), 'ABCDEFGH');
+  assert.equal(normaliseCode(' AB CD-EF GH '), 'ABCDEFGH');
+});
+
 test('a code of the wrong length is caught before a round trip', () => {
-  assert.equal(codeProblem('ABC123'), null);
   assert.match(codeProblem('') as string, /needed/);
-  assert.match(codeProblem('ABC') as string, /6 characters/);
-  assert.match(codeProblem('ABC1234') as string, /6 characters/);
-  // Whitespace is trimmed — a code read aloud and typed often arrives padded.
-  assert.equal(codeProblem('  ABC123  '), null);
+  assert.match(codeProblem('---') as string, /needed/, 'separators alone are not a code');
+  assert.match(codeProblem('ABCD-EFG') as string, /8 characters/);
+  assert.match(codeProblem('ABCD-EFGHJ') as string, /8 characters/);
+  // And it says what a code looks like, because "wrong length" alone does not
+  // help someone holding a phone at a venue door.
+  assert.match(codeProblem('ABC') as string, /ABCD-EFGH/);
 });
 
 test('the client check does not guess at the alphabet', () => {
   // The backend's ALPHABET excludes characters people confuse. A client-side
   // character check that guessed at it would reject a valid code typed
   // correctly, which is worse than a round trip.
-  assert.equal(codeProblem('0OI1L5'), null);
+  assert.equal(codeProblem('0OI1-L5QU'), null);
+});
+
+/** Reads a constant or a pattern out of the backend's check-in service. */
+function backendCheckInSource(): string {
+  return fs.readFileSync(
+    path.resolve(import.meta.dirname, '../../../backend/src/services/checkInService.ts'),
+    'utf8'
+  );
+}
+
+test('CODE_LENGTH matches the backend exactly', () => {
+  // The mirror that was missing. A hard-coded length on this side and a
+  // different one on the other is precisely the bug #41 found.
+  const match = backendCheckInSource().match(/const CODE_LENGTH\s*=\s*(\d+)/);
+  assert.ok(match, 'could not find CODE_LENGTH in checkInService — has it been renamed?');
+  assert.equal(CODE_LENGTH, Number(match![1]));
+});
+
+test('normaliseCode strips exactly what the backend strips', () => {
+  const source = backendCheckInSource();
+  const body = source.slice(source.indexOf('function normaliseCode'));
+  assert.ok(body.includes('.toUpperCase()'), 'the backend no longer upper-cases');
+  assert.ok(body.includes('/[^0-9A-Z]/g'), 'the backend strips a different set of characters now');
 });
 
 /**

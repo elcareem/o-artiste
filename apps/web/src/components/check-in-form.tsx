@@ -3,7 +3,7 @@
 import { useState } from 'react';
 
 import { statusCopy } from '@/lib/booking-status';
-import { codeProblem } from '@/lib/check-in';
+import { codeProblem, normaliseCode } from '@/lib/check-in';
 import { NOTHING, failureMessage, thrownMessage } from '@/lib/error-messages';
 
 /**
@@ -18,7 +18,7 @@ import { NOTHING, failureMessage, thrownMessage } from '@/lib/error-messages';
  * failure #39 exists to fix. The backend already words each one; the only wrong
  * thing this component could do is paraphrase.
  *
- * A FAILURE NEVER CLEARS THE FORM. Retyping a six-character code because the
+ * A FAILURE NEVER CLEARS THE FORM. Retyping an eight-character code because the
  * first attempt was outside the window is the sort of thing that makes someone
  * give up and ask the client to pay them directly.
  *
@@ -100,7 +100,7 @@ export function CheckInForm({
       const res = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}/check-in`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code.trim(), ...(reading ?? {}) }),
+        body: JSON.stringify({ code: normaliseCode(code), ...(reading ?? {}) }),
       });
       const payload = await res.json().catch(() => null);
 
@@ -144,7 +144,7 @@ export function CheckInForm({
     <section className="mt-6">
       <h2 className="text-sm font-semibold">Check in</h2>
       <p className="mt-1 text-sm text-[var(--color-muted)]">
-        Ask {clientName} for their six-character code and enter it here. This booking is{' '}
+        Ask {clientName} for their check-in code — two groups of four, like ABCD-EFGH — and enter it here. This booking is{' '}
         {statusCopy(state).label.toLowerCase()}.
       </p>
 
