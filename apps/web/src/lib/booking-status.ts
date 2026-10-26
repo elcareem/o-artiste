@@ -190,6 +190,13 @@ export type Booking = {
   eventDate: string;
   eventLocation: string | null;
   escrowReference: string;
+  // For what can be done after the event (#47).
+  eventEndAt: string | null;
+  clientConfirmedAt: string | null;
+  artistConfirmedAt: string | null;
+  autoReleaseAt: string | null;
+  checkedInAt: string | null;
+  openDisputeId: string | null;
 };
 
 /**

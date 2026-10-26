@@ -13,6 +13,7 @@ import {
 } from '@/lib/booking-status';
 import { Copyable } from './copyable';
 import { CancelBooking } from './cancel-booking';
+import { AfterEvent } from './after-event';
 import { isPresentable, unreachable } from '@/lib/error-messages';
 import { formatLagos } from '@/lib/dates';
 
@@ -194,6 +195,9 @@ export function BookingStatusView({
         {booking.eventLocation && <Row label="Location" value={booking.eventLocation} />}
         <Row label="Reference" value={booking.escrowReference} />
       </dl>
+
+      {/* After the event: confirm, report a no-show, or dispute (#47). */}
+      <AfterEvent booking={booking} party={party} />
 
       {/* Only while there is something to cancel. A terminal booking has no
           decision left to make, and offering one would be a dead end. */}
